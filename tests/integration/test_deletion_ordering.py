@@ -371,7 +371,7 @@ async def test_a_deletion_missed_while_offline_is_repaired_by_reconciliation(
     # called here with an id and nothing else, so a channel that depended on
     # the caller naming it would never be re-formed -- and the neighbours
     # would stay withdrawn along with the window they shared.
-    assert [c for c, _ in await store.dirty_channels()] == [CH]
+    assert [d.channel for d in await store.dirty_channels()] == [CH]
 
     await settle(service, store)
     await assert_unreachable(clean, store)

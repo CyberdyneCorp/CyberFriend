@@ -62,9 +62,25 @@ async def clean(engine: AsyncEngine) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE conversation_window_message, conversation_window, "
-                "message_mention, message, ingest_cursor, channel, "
-                "person_platform_id, person RESTART IDENTITY CASCADE"
+                # Derived from the catalog rather than listed by hand. The
+                # hand-written list covered 8 of 19 tables and silently
+                # stopped covering each new one, so state leaked between
+                # tests and surfaced as an unrelated unique-violation in
+                # whichever test happened to run second.
+                """
+                DO $$
+                DECLARE tables text;
+                BEGIN
+                    SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
+                      INTO tables
+                      FROM pg_tables
+                     WHERE schemaname = 'public'
+                       AND tablename <> 'alembic_version';
+                    IF tables IS NOT NULL THEN
+                        EXECUTE 'TRUNCATE ' || tables || ' RESTART IDENTITY CASCADE';
+                    END IF;
+                END $$;
+                """
             )
         )
     yield engine

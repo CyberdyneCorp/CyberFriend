@@ -295,7 +295,7 @@ async def test_a_purge_schedules_the_survivors_to_be_rewindowed(
     await PostgresRetentionStore(clean).purge_corpus_before(CUTOFF)
 
     dirty = await store.dirty_channels()
-    assert [c for c, _ in dirty] == [CHANNEL]
+    assert [d.channel for d in dirty] == [CHANNEL]
 
 
 # --- opt-out -----------------------------------------------------------
