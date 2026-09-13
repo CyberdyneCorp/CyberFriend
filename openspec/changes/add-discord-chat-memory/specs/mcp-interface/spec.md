@@ -21,6 +21,24 @@ Every tool that returns message content SHALL require the identity of the person
 - WHEN a client supplies a viewer identity
 - THEN the results SHALL reflect that viewer's permissions only, and SHALL NOT be broadened by any other parameter of the call
 
+### Requirement: Viewer identity is authenticated, not asserted
+
+The system SHALL establish the viewer's identity from an authenticated credential presented by the caller, and SHALL NOT accept an identity that the caller merely states.
+
+#### Scenario: Caller asserts an identity it cannot prove
+- WHEN a caller supplies a viewer identity without a credential establishing that it may act as that person
+- THEN the system SHALL refuse the call
+- AND SHALL NOT return message content
+
+#### Scenario: Caller authorised for one person requests another
+- GIVEN a caller authenticated as acting for one person
+- WHEN it requests content as a different person
+- THEN the system SHALL refuse the call
+
+#### Scenario: Credential absent
+- WHEN a call arrives with no credential
+- THEN the system SHALL refuse it, regardless of the network it arrived from
+
 ### Requirement: Message search tool
 
 The interface SHALL provide a tool that searches the corpus on behalf of a viewer, optionally constrained by channel and time range.

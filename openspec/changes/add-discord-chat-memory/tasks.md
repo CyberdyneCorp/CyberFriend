@@ -76,10 +76,14 @@
 
 - [ ] 8.1 Implement the MCP server exposing `search_messages`, `thread_context`, and `list_channels`
 - [ ] 8.2 Require viewer identity on every content-returning tool; error without it
-- [ ] 8.3 Make a channel the viewer cannot read indistinguishable from a channel that does not exist
-- [ ] 8.4 Distinguish empty results from failures in the tool response shape
-- [ ] 8.5 Test each tool's permission behaviour through the MCP layer, not only the repository layer
-- [ ] 8.6 Document the `.mcp.json` stanza for connecting a Claude Code session to the server
+- [ ] 8.3 **Authenticate the caller and derive viewer identity from the credential** — a client-supplied `viewer` parameter is an assertion, and trusting it over a network turns the whole ACL into an honour system
+- [ ] 8.3a Implement tokens as a `token -> person` table: the bearer token *determines* the viewer and the request cannot name one. A leaked token then exposes one person's view, not everyone's
+- [ ] 8.3b Store token hashes, never the tokens; support revoking and rotating a single person's token without disturbing others
+- [ ] 8.4 Test: a caller authenticated for one person cannot retrieve as another
+- [ ] 8.5 Make a channel the viewer cannot read indistinguishable from a channel that does not exist
+- [ ] 8.6 Distinguish empty results from failures in the tool response shape
+- [ ] 8.7 Test each tool's permission behaviour through the MCP layer, not only the repository layer
+- [ ] 8.8 Document the `.mcp.json` stanza for connecting a Claude Code session to the server
 
 ## 9. Operations and governance
 
@@ -96,3 +100,18 @@
 - [ ] 10.3 Confirm from a non-member viewer that the private channel is entirely invisible across all three tools
 - [ ] 10.4 Delete a source message and confirm it disappears from results
 - [ ] 10.5 Record backfill throughput and embedding cost per 10k messages to size a real deployment
+
+## 11. Coolify deployment (Cyberdyne)
+
+- [ ] 11.1 Write the production `Dockerfile` (uv, Python 3.11-slim, non-root user, no build secrets baked in)
+- [ ] 11.2 Write `docker-compose.yml` for the Coolify `dockercompose` build pack with two services off one image: `ingest` (gateway + workers) and `mcp` (HTTP)
+- [ ] 11.3 **Pin `ingest` to exactly one replica.** Two containers on one bot token both identify to the gateway and double-ingest every message; Discord will not error, the corpus just silently doubles
+- [ ] 11.4 Add an HTTP health endpoint to *both* services — Coolify health checks are HTTP and the gateway process has no port of its own otherwise
+- [ ] 11.5 Report gateway connectivity, backfill lag, and embedding backlog through the health endpoint so a crash-looping or silently-disconnected bot is visible
+- [ ] 11.6 Run migrations as a deterministic pre-start step, idempotent across restarts and safe when two containers start together
+- [ ] 11.7 Provision the Coolify-managed **pgvector** Postgres (not the stock `postgres:16` image, which lacks the extension) and enable scheduled backups
+- [ ] 11.8 Set runtime env vars in Coolify: Discord token, database URL, OpenAI key, MCP bearer tokens — runtime scope, never build scope
+- [ ] 11.9 Expose only the `mcp` service via FQDN; `ingest` gets no domain
+- [ ] 11.10 Confirm the Cyberdyne box reaches `api.openai.com` before first deploy
+- [ ] 11.11 Verify after deploy: gateway connected, a message posted in a scratch channel appears in the corpus, and an MCP query over HTTPS returns it with a working citation link
+- [ ] 11.12 Verify a second `ingest` replica is genuinely prevented, not merely un-configured
