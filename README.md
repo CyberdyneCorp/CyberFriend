@@ -71,3 +71,14 @@ error, the corpus just silently doubles.
 ```bash
 ruff check . && mypy && pytest
 ```
+
+Integration tests need a live pgvector database:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+alembic upgrade head
+pytest tests/integration
+```
+
+They skip rather than fail when no database is reachable, so a missing
+database is never reported as a defect in the code.

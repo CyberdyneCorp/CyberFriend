@@ -185,7 +185,7 @@ class HybridSearch:
             vector_hits: list[SearchHit] = []
             embedded = (await self._embeddings.embed([query.text]))[0]
             vector = await conn.execute(
-                sql.VECTOR_SEARCH, {**params, "embedding": list(embedded)}
+                sql.VECTOR_SEARCH, {**params, "embedding": sql.vector_literal(embedded)}
             )
             vector_hits = [
                 self._hit(r, RelevanceSource.VECTOR) for r in vector.mappings()

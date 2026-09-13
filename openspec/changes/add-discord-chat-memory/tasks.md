@@ -26,8 +26,8 @@
 - [x] 3.4 Add the `vector` column (dimension from config) and its ANN index
 - [x] 3.5 Implement the Postgres `Store` adapter with idempotent upserts keyed on **platform message ID + edit timestamp only** — never a content hash compared across parsed/raw domains
 - [x] 3.6 Denormalise `channel_id` and timestamp onto `window` rows so the permission predicate constrains the index scan rather than filtering its output
-- [ ] 3.7 Set `hnsw.iterative_scan = relaxed_order` on the session/connection; it defaults to `off` and guarantees under-return with a selective filter
-- [ ] 3.8 Test: ingesting the same message twice produces exactly one row
+- [x] 3.7 Set `hnsw.iterative_scan = relaxed_order` on the session/connection; it defaults to `off` and guarantees under-return with a selective filter
+- [x] 3.8 Test: ingesting the same message twice produces exactly one row
 
 ## 4. Discord ingestion
 
@@ -67,7 +67,7 @@
 - [x] 7.4 Tag every score with the method that produced it (`relevance_source`); RRF's 0.016 means *first place*, and any consumer applying a threshold must check provenance first
 - [x] 7.5 Implement citation construction producing resolvable Discord message links
 - [ ] 7.6 Implement `thread_context` retrieval around a cited message, viewer-filtered
-- [ ] 7.7 **Test the core invariant at the repository layer**: a viewer who cannot read a channel gets zero rows from it even when the query terms match it exactly
+- [x] 7.7 **Test the core invariant at the repository layer**: a viewer who cannot read a channel gets zero rows from it even when the query terms match it exactly
 - [ ] 7.8 Test: a time-bounded query returns nothing rather than substituting out-of-range results
 - [x] 7.9 **Test under-return**: a viewer restricted to a small channel subset requesting N results receives N — assert the *count*, since a membership-only assertion passes while the system silently under-returns
 - [ ] 7.10 Build a golden set of ~20 questions over a seeded corpus and score recall@10 as the tuning harness for window size and RRF weights
@@ -95,7 +95,7 @@
 
 ## 10. Verification
 
-- [ ] 10.1 `docker compose up`, run ingestion against a scratch guild containing a private channel
+- [x] 10.1 `docker compose up`, run ingestion against a scratch guild containing a private channel
 - [ ] 10.2 Connect a Claude Code session over MCP and confirm channel questions answer with working citation links
 - [ ] 10.3 Confirm from a non-member viewer that the private channel is entirely invisible across all three tools
 - [ ] 10.4 Delete a source message and confirm it disappears from results

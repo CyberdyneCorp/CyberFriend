@@ -12,6 +12,16 @@ from collections.abc import Sequence
 from sqlalchemy import text
 from sqlalchemy.sql.elements import TextClause
 
+
+def vector_literal(values: Sequence[float]) -> str:
+    """Render an embedding for a `vector` bind parameter.
+
+    asyncpg has no native pgvector codec, so the value is passed as text and
+    cast in the statement. Passing a Python list instead fails at execution
+    with a type error that names the parameter, not the cause.
+    """
+    return "[" + ",".join(repr(float(v)) for v in values) + "]"
+
 # pgvector's iterative scan defaults to `off`. With a selective filter and
 # iterative scan off, an approximate scan returns its k best rows *before*
 # the filter is applied, so a restricted viewer receives fewer results than
@@ -42,13 +52,13 @@ UPDATE message SET deleted_at = :at WHERE id = :id AND deleted_at IS NULL
 """)
 
 TOMBSTONE_WINDOWS_FOR_MESSAGE = text("""
-UPDATE window SET deleted_at = :at
-WHERE id IN (SELECT window_id FROM window_message WHERE message_id = :id)
+UPDATE conversation_window SET deleted_at = :at
+WHERE id IN (SELECT window_id FROM conversation_window_message WHERE message_id = :id)
   AND deleted_at IS NULL
 """)
 
 PURGE_CHANNEL = text("""
-WITH w AS (DELETE FROM window WHERE channel_id = :channel_id RETURNING id)
+WITH w AS (DELETE FROM conversation_window WHERE channel_id = :channel_id RETURNING id)
 DELETE FROM message WHERE channel_id = :channel_id
 """)
 
@@ -61,31 +71,31 @@ DELETE FROM message WHERE channel_id = :channel_id
 LEXICAL_SEARCH = text("""
 SELECT w.id, w.channel_id, w.text, w.starts_at, w.ends_at,
        ts_rank_cd(w.search_tsv, plainto_tsquery('english', :q)) AS score
-FROM window w
+FROM conversation_window w
 WHERE w.deleted_at IS NULL
   AND w.channel_id = ANY(:channel_ids)
   AND w.search_tsv @@ plainto_tsquery('english', :q)
-  AND (:since IS NULL OR w.ends_at >= :since)
-  AND (:until IS NULL OR w.starts_at <= :until)
+  AND (CAST(:since AS timestamptz) IS NULL OR w.ends_at >= CAST(:since AS timestamptz))
+  AND (CAST(:until AS timestamptz) IS NULL OR w.starts_at <= CAST(:until AS timestamptz))
 ORDER BY score DESC
 LIMIT :limit
 """)
 
 VECTOR_SEARCH = text("""
 SELECT w.id, w.channel_id, w.text, w.starts_at, w.ends_at,
-       1 - (w.embedding <=> :embedding) AS score
-FROM window w
+       1 - (w.embedding <=> CAST(:embedding AS vector)) AS score
+FROM conversation_window w
 WHERE w.deleted_at IS NULL
   AND w.embedding IS NOT NULL
   AND w.channel_id = ANY(:channel_ids)
-  AND (:since IS NULL OR w.ends_at >= :since)
-  AND (:until IS NULL OR w.starts_at <= :until)
-ORDER BY w.embedding <=> :embedding
+  AND (CAST(:since AS timestamptz) IS NULL OR w.ends_at >= CAST(:since AS timestamptz))
+  AND (CAST(:until AS timestamptz) IS NULL OR w.starts_at <= CAST(:until AS timestamptz))
+ORDER BY w.embedding <=> CAST(:embedding AS vector)
 LIMIT :limit
 """)
 
 WINDOW_MESSAGE_IDS = text("""
-SELECT window_id, message_id FROM window_message
+SELECT window_id, message_id FROM conversation_window_message
 WHERE window_id = ANY(:window_ids) ORDER BY window_id, position
 """)
 

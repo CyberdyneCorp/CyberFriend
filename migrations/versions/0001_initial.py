@@ -93,8 +93,12 @@ def upgrade() -> None:
     # Powers "who asked me" without scanning message text.
     op.create_index("ix_mention_person", "message_mention", ["person_id"])
 
+    # Named conversation_window, not window: WINDOW is a reserved word in
+    # Postgres. SQLAlchemy quotes identifiers so a table called "window"
+    # creates fine, but every hand-written statement referencing it
+    # unquoted fails with a syntax error far from the cause.
     op.create_table(
-        "window",
+        "conversation_window",
         sa.Column("id", sa.BigInteger, primary_key=True),
         # Denormalised so the permission predicate constrains the index scan
         # rather than filtering its output. Post-filtering an approximate scan
@@ -110,31 +114,33 @@ def upgrade() -> None:
     )
     op.create_index(
         "ix_window_channel_time",
-        "window",
+        "conversation_window",
         ["channel_id", "starts_at"],
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
     op.create_index(
         "ix_window_tsv",
-        "window",
+        "conversation_window",
         ["search_tsv"],
         postgresql_using="gin",
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
     op.execute(
-        "CREATE INDEX ix_window_embedding ON window "
+        "CREATE INDEX ix_window_embedding ON conversation_window "
         "USING hnsw (embedding vector_cosine_ops) WHERE deleted_at IS NULL"
     )
 
     op.create_table(
-        "window_message",
-        sa.Column("window_id", sa.BigInteger, sa.ForeignKey("window.id", ondelete="CASCADE"),
+        "conversation_window_message",
+        sa.Column("window_id", sa.BigInteger, sa.ForeignKey("conversation_window.id", ondelete="CASCADE"),
                   nullable=False),
         sa.Column("message_id", sa.BigInteger, sa.ForeignKey("message.id"), nullable=False),
         sa.Column("position", sa.Integer, nullable=False),
         sa.PrimaryKeyConstraint("window_id", "message_id"),
     )
-    op.create_index("ix_window_message_message", "window_message", ["message_id"])
+    op.create_index(
+        "ix_window_message_message", "conversation_window_message", ["message_id"]
+    )
 
     op.create_table(
         "ingest_cursor",
@@ -148,7 +154,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for table in (
-        "ingest_cursor", "window_message", "window", "message_mention",
-        "message", "channel", "person_platform_id", "person",
+        "ingest_cursor", "conversation_window_message", "conversation_window",
+        "message_mention", "message", "channel", "person_platform_id", "person",
     ):
         op.drop_table(table)
