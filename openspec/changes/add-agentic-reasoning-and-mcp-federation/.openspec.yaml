@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-09-12
+goal: Answer multi-step questions by planning and iterating over retrieval, and
+  by calling external MCP tools, without letting indexed message content ever
+  become privileged instruction
