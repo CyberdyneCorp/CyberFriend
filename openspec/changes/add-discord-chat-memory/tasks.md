@@ -31,13 +31,13 @@
 
 ## 4. Discord ingestion
 
-- [ ] 4.1 Implement the gateway client with the `MESSAGE_CONTENT` intent and live `on_message` capture
-- [ ] 4.2 Implement canonical identity resolution — create-or-attach a person per platform account
-- [ ] 4.3 Implement mention capture into `message_mention`
+- [x] 4.1 Implement the gateway client with the `MESSAGE_CONTENT` intent and live `on_message` capture
+- [x] 4.2 Implement canonical identity resolution — create-or-attach a person per platform account
+- [x] 4.3 Implement mention capture into `message_mention`
 - [x] 4.4 Implement edit handling so stored content becomes the edited text
 - [x] 4.5 Implement delete handling, writing tombstones to the message and its windows
 - [x] 4.6 Implement paginated backfill, newest-first, with per-channel watermarks
-- [ ] 4.7 Handle 429s by honouring the platform's retry interval without losing backfill position
+- [x] 4.7 Handle 429s by honouring the platform's retry interval without losing backfill position
 - [ ] 4.8 Implement the periodic reconciliation pass that catches edits and deletes missed while offline
 - [x] 4.9 Enforce indexing scope: skip non-indexed channels, and purge a channel's content when it leaves scope
 - [x] 4.10 Test: interrupt a backfill mid-channel, restart, assert no gaps and no duplicates
@@ -49,15 +49,15 @@
 - [x] 5.2 Implement incremental rebuild so an edited or deleted message re-forms only its affected windows
 - [x] 5.3 Implement the OpenAI-compatible `EmbeddingClient` against the configured `base_url`, with batching and retry
 - [x] 5.4 Implement the embedding backlog worker over windows lacking a current embedding
-- [ ] 5.5 Test: a window containing a deleted message excludes that message's text once rebuilt
+- [x] 5.5 Test: a window containing a deleted message excludes that message's text once rebuilt
 
 ## 6. ACL resolution
 
 - [x] 6.1 Implement the Discord `AclResolver` using `channel.permissions_for(member)`, requiring **both** `view_channel` and `read_message_history`
 - [x] 6.2 Handle the non-member / unresolvable-viewer case by returning an empty visible set
-- [ ] 6.3 Add short-TTL caching of resolved sets, invalidated on member and channel update events
+- [x] 6.3 Add short-TTL caching of resolved sets, invalidated on member and channel update events
 - [x] 6.4 Test: member with `view_channel` but not `read_message_history` is denied — the easiest case to get wrong
-- [ ] 6.5 Test: revoking a role removes the channel from the next query with no reindexing
+- [x] 6.5 Test: revoking a role removes the channel from the next query with no reindexing
 
 ## 7. Retrieval
 
@@ -74,16 +74,16 @@
 
 ## 8. MCP server
 
-- [ ] 8.1 Implement the MCP server exposing `search_messages`, `thread_context`, and `list_channels`
-- [ ] 8.2 Require viewer identity on every content-returning tool; error without it
-- [ ] 8.3 **Authenticate the caller and derive viewer identity from the credential** — a client-supplied `viewer` parameter is an assertion, and trusting it over a network turns the whole ACL into an honour system
-- [ ] 8.3a Implement tokens as a `token -> person` table: the bearer token *determines* the viewer and the request cannot name one. A leaked token then exposes one person's view, not everyone's
-- [ ] 8.3b Store token hashes, never the tokens; support revoking and rotating a single person's token without disturbing others
-- [ ] 8.4 Test: a caller authenticated for one person cannot retrieve as another
-- [ ] 8.5 Make a channel the viewer cannot read indistinguishable from a channel that does not exist
-- [ ] 8.6 Distinguish empty results from failures in the tool response shape
-- [ ] 8.7 Test each tool's permission behaviour through the MCP layer, not only the repository layer
-- [ ] 8.8 Document the `.mcp.json` stanza for connecting a Claude Code session to the server
+- [x] 8.1 Implement the MCP server exposing `search_messages`, `thread_context`, and `list_channels`
+- [x] 8.2 Require viewer identity on every content-returning tool; error without it
+- [x] 8.3 **Authenticate the caller and derive viewer identity from the credential** — a client-supplied `viewer` parameter is an assertion, and trusting it over a network turns the whole ACL into an honour system
+- [x] 8.3a Implement tokens as a `token -> person` table: the bearer token *determines* the viewer and the request cannot name one. A leaked token then exposes one person's view, not everyone's
+- [x] 8.3b Store token hashes, never the tokens; support revoking and rotating a single person's token without disturbing others
+- [x] 8.4 Test: a caller authenticated for one person cannot retrieve as another
+- [x] 8.5 Make a channel the viewer cannot read indistinguishable from a channel that does not exist
+- [x] 8.6 Distinguish empty results from failures in the tool response shape
+- [x] 8.7 Test each tool's permission behaviour through the MCP layer, not only the repository layer
+- [x] 8.8 Document the `.mcp.json` stanza for connecting a Claude Code session to the server
 
 ## 9. Operations and governance
 
