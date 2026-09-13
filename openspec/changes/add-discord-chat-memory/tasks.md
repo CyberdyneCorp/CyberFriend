@@ -1,31 +1,31 @@
 ## 1. Project scaffolding
 
-- [ ] 1.1 Initialise the Python project with `uv` (Python 3.11+), `pyproject.toml`, and the `src/chatmemory` package layout
-- [ ] 1.2 Add dependencies: `discord.py`, `asyncpg`/`sqlalchemy`, `pgvector`, `openai`, `mcp`, `pydantic-settings`, `pytest`, `pytest-asyncio`
-- [ ] 1.3 Add `docker-compose.yml` running Postgres with the `pgvector` extension, and a `.env.example` documenting every setting
-- [ ] 1.4 Add config loading: Discord token, database URL, LLM `base_url`/API key/embedding model + dimensionality, indexed-channel scope
-- [ ] 1.5 Add `.gitignore`, `README.md`, and lint/type/test commands (`ruff`, `mypy`, `pytest`)
+- [x] 1.1 Initialise the Python project with `uv` (Python 3.11+), `pyproject.toml`, and the `src/chatmemory` package layout
+- [x] 1.2 Add dependencies: `discord.py`, `asyncpg`/`sqlalchemy`, `pgvector`, `openai`, `mcp`, `pydantic-settings`, `pytest`, `pytest-asyncio`
+- [x] 1.3 Add `docker-compose.yml` running Postgres with the `pgvector` extension, and a `.env.example` documenting every setting
+- [x] 1.4 Add config loading: Discord token, database URL, LLM `base_url`/API key/embedding model + dimensionality, indexed-channel scope
+- [x] 1.5 Add `.gitignore`, `README.md`, and lint/type/test commands (`ruff`, `mypy`, `pytest`)
 
 ## 2. Domain and ports
 
-- [ ] 2.1 Define domain models: `Person`, `Channel`, `Message`, `Window`, `Viewer`, `SearchResult`, `Citation`
-- [ ] 2.2 Define the `Store` port (persistence and idempotent upsert by platform message ID)
-- [ ] 2.3 Define the `AclResolver` port returning a viewer's visible channel set
-- [ ] 2.4 Define the `SearchBackend` port — **`viewer` is a required parameter on every content-returning method**, so unfiltered retrieval cannot be expressed
-- [ ] 2.5 Define `SearchQuery` to carry **intent only** (terms, time range, author, channel preference); the readable-channel predicate must NOT be a field on it, so a future query-rewriting loop cannot reach it
-- [ ] 2.6 Make `viewer` **required with no default** on the retrieval context — a context constructed without one must fail to construct, not default to empty
-- [ ] 2.7 Test: assert by reflection that no rewritable query type exposes a channel-permission field
-- [ ] 2.8 Define the `ChatSource` and `EmbeddingClient` ports
-- [ ] 2.9 Assert in tests that no module under `domain/` or `ports/` imports `discord` or `openai`
+- [x] 2.1 Define domain models: `Person`, `Channel`, `Message`, `Window`, `Viewer`, `SearchResult`, `Citation`
+- [x] 2.2 Define the `Store` port (persistence and idempotent upsert by platform message ID)
+- [x] 2.3 Define the `AclResolver` port returning a viewer's visible channel set
+- [x] 2.4 Define the `SearchBackend` port — **`viewer` is a required parameter on every content-returning method**, so unfiltered retrieval cannot be expressed
+- [x] 2.5 Define `SearchQuery` to carry **intent only** (terms, time range, author, channel preference); the readable-channel predicate must NOT be a field on it, so a future query-rewriting loop cannot reach it
+- [x] 2.6 Make `viewer` **required with no default** on the retrieval context — a context constructed without one must fail to construct, not default to empty
+- [x] 2.7 Test: assert by reflection that no rewritable query type exposes a channel-permission field
+- [x] 2.8 Define the `ChatSource` and `EmbeddingClient` ports
+- [x] 2.9 Assert in tests that no module under `domain/` or `ports/` imports `discord` or `openai`
 
 ## 3. Storage schema
 
-- [ ] 3.1 Write the initial migration: `person`, `person_platform_id`, `channel`, `message`, `message_mention`, `window`, `window_message`, `ingest_cursor`
-- [ ] 3.2 Add `deleted_at` tombstone columns and partial indexes excluding tombstoned rows
-- [ ] 3.3 Add the `tsvector` column and GIN index for lexical search
-- [ ] 3.4 Add the `vector` column (dimension from config) and its ANN index
+- [x] 3.1 Write the initial migration: `person`, `person_platform_id`, `channel`, `message`, `message_mention`, `window`, `window_message`, `ingest_cursor`
+- [x] 3.2 Add `deleted_at` tombstone columns and partial indexes excluding tombstoned rows
+- [x] 3.3 Add the `tsvector` column and GIN index for lexical search
+- [x] 3.4 Add the `vector` column (dimension from config) and its ANN index
 - [ ] 3.5 Implement the Postgres `Store` adapter with idempotent upserts keyed on **platform message ID + edit timestamp only** — never a content hash compared across parsed/raw domains
-- [ ] 3.6 Denormalise `channel_id` and timestamp onto `window` rows so the permission predicate constrains the index scan rather than filtering its output
+- [x] 3.6 Denormalise `channel_id` and timestamp onto `window` rows so the permission predicate constrains the index scan rather than filtering its output
 - [ ] 3.7 Set `hnsw.iterative_scan = relaxed_order` on the session/connection; it defaults to `off` and guarantees under-return with a selective filter
 - [ ] 3.8 Test: ingesting the same message twice produces exactly one row
 
@@ -45,26 +45,26 @@
 
 ## 5. Windowing and embeddings
 
-- [ ] 5.1 Implement window construction — thread-aware, with a configurable message span and silence-gap split, sized in **tokens using the embedding model's tokenizer** (not characters)
+- [x] 5.1 Implement window construction — thread-aware, with a configurable message span and silence-gap split, sized in **tokens using the embedding model's tokenizer** (not characters)
 - [ ] 5.2 Implement incremental rebuild so an edited or deleted message re-forms only its affected windows
-- [ ] 5.3 Implement the OpenAI-compatible `EmbeddingClient` against the configured `base_url`, with batching and retry
+- [x] 5.3 Implement the OpenAI-compatible `EmbeddingClient` against the configured `base_url`, with batching and retry
 - [ ] 5.4 Implement the embedding backlog worker over windows lacking a current embedding
 - [ ] 5.5 Test: a window containing a deleted message excludes that message's text once rebuilt
 
 ## 6. ACL resolution
 
-- [ ] 6.1 Implement the Discord `AclResolver` using `channel.permissions_for(member)`, requiring **both** `view_channel` and `read_message_history`
-- [ ] 6.2 Handle the non-member / unresolvable-viewer case by returning an empty visible set
+- [x] 6.1 Implement the Discord `AclResolver` using `channel.permissions_for(member)`, requiring **both** `view_channel` and `read_message_history`
+- [x] 6.2 Handle the non-member / unresolvable-viewer case by returning an empty visible set
 - [ ] 6.3 Add short-TTL caching of resolved sets, invalidated on member and channel update events
-- [ ] 6.4 Test: member with `view_channel` but not `read_message_history` is denied — the easiest case to get wrong
+- [x] 6.4 Test: member with `view_channel` but not `read_message_history` is denied — the easiest case to get wrong
 - [ ] 6.5 Test: revoking a role removes the channel from the next query with no reindexing
 
 ## 7. Retrieval
 
 - [ ] 7.1 Implement lexical search over the `tsvector` index, viewer- and time-filtered in the same query
 - [ ] 7.2 Implement vector search over window embeddings, viewer- and time-filtered in the same query
-- [ ] 7.3 Implement Reciprocal Rank Fusion over both result sets
-- [ ] 7.4 Tag every score with the method that produced it (`relevance_source`); RRF's 0.016 means *first place*, and any consumer applying a threshold must check provenance first
+- [x] 7.3 Implement Reciprocal Rank Fusion over both result sets
+- [x] 7.4 Tag every score with the method that produced it (`relevance_source`); RRF's 0.016 means *first place*, and any consumer applying a threshold must check provenance first
 - [ ] 7.5 Implement citation construction producing resolvable Discord message links
 - [ ] 7.6 Implement `thread_context` retrieval around a cited message, viewer-filtered
 - [ ] 7.7 **Test the core invariant at the repository layer**: a viewer who cannot read a channel gets zero rows from it even when the query terms match it exactly
