@@ -51,6 +51,7 @@ class FakeStore:
         self.messages: dict[int, Message] = {}
         self.windows: dict[ChannelRef, list[Window]] = {}
         self.fail_next = False
+        self.dirty: dict[ChannelRef, datetime] = {}
 
     async def upsert_messages(self, messages: Sequence[Message]) -> int:
         if self.fail_next:
@@ -67,6 +68,18 @@ class FakeStore:
     async def replace_windows(self, channel: ChannelRef, windows: Sequence[Window]) -> int:
         self.windows[channel] = list(windows)
         return len(windows)
+
+    async def mark_windows_dirty(self, channel: ChannelRef, at: datetime) -> None:
+        current = self.dirty.get(channel)
+        self.dirty[channel] = at if current is None else min(current, at)
+
+    async def dirty_channels(self, limit: int = 20) -> Sequence[tuple[ChannelRef, datetime]]:
+        return sorted(self.dirty.items(), key=lambda kv: kv[1])[:limit]
+
+    async def clear_windows_dirty(self, channel: ChannelRef, up_to: datetime) -> None:
+        at = self.dirty.get(channel)
+        if at is not None and at <= up_to:
+            del self.dirty[channel]
 
 
 class FakeSource:

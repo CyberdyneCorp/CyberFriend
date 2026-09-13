@@ -37,6 +37,7 @@ class FakeStore:
         self.windows: dict[int, list[Window]] = {}
         self.embeddings: dict[int, Sequence[float]] = {}
         self.pending_windows: list[Window] = []
+        self.dirty: dict[ChannelRef, datetime] = {}
 
     async def upsert_messages(self, messages: Sequence[Message]) -> int:
         written = 0
@@ -80,6 +81,18 @@ class FakeStore:
 
     async def store_embedding(self, window_id: int, embedding: Sequence[float]) -> None:
         self.embeddings[window_id] = embedding
+
+    async def mark_windows_dirty(self, channel: ChannelRef, at: datetime) -> None:
+        current = self.dirty.get(channel)
+        self.dirty[channel] = at if current is None else min(current, at)
+
+    async def dirty_channels(self, limit: int = 20) -> Sequence[tuple[ChannelRef, datetime]]:
+        return sorted(self.dirty.items(), key=lambda kv: kv[1])[:limit]
+
+    async def clear_windows_dirty(self, channel: ChannelRef, up_to: datetime) -> None:
+        at = self.dirty.get(channel)
+        if at is not None and at <= up_to:
+            del self.dirty[channel]
 
 
 class FakeSource:

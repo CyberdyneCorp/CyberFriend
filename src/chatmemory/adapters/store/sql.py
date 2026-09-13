@@ -239,3 +239,81 @@ ORDER BY name
 def statements() -> Sequence[TextClause]:
     """Every content-returning statement, for the test that audits them."""
     return (LEXICAL_SEARCH, VECTOR_SEARCH, THREAD_CONTEXT, LIST_CHANNELS)
+
+
+# --- window rebuild scheduling -----------------------------------------
+#
+# A channel is marked dirty from the moment its content changed; the rebuild
+# re-forms every window from there. Keyed on the EARLIEST pending change, so
+# a later edit cannot move the watermark forward past work not yet done.
+
+MARK_WINDOWS_DIRTY = text("""
+INSERT INTO ingest_cursor (channel_id, windows_dirty_from)
+VALUES (:channel_id, CAST(:at AS timestamptz))
+ON CONFLICT (channel_id) DO UPDATE SET
+    windows_dirty_from = LEAST(
+        COALESCE(ingest_cursor.windows_dirty_from, CAST(:at AS timestamptz)),
+        CAST(:at AS timestamptz)
+    ),
+    updated_at = now()
+""")
+
+DIRTY_CHANNELS = text("""
+SELECT channel_id, windows_dirty_from
+FROM ingest_cursor
+WHERE windows_dirty_from IS NOT NULL
+ORDER BY windows_dirty_from
+LIMIT :limit
+""")
+
+CLEAR_WINDOWS_DIRTY = text("""
+UPDATE ingest_cursor SET windows_dirty_from = NULL, updated_at = now()
+WHERE channel_id = :channel_id
+  AND windows_dirty_from IS NOT NULL
+  AND windows_dirty_from <= CAST(:up_to AS timestamptz)
+""")
+
+MESSAGES_FOR_REWINDOW = text("""
+SELECT m.id, m.channel_id, m.content, m.created_at, m.edited_at,
+       m.reply_to_id, m.thread_id,
+       COALESCE((
+           SELECT p.platform_user_id FROM person_platform_id p
+           WHERE p.person_id = m.author_person_id AND p.platform = :platform
+           ORDER BY p.platform_user_id LIMIT 1
+       ), m.author_person_id) AS platform_user_id
+FROM message m
+WHERE m.deleted_at IS NULL
+  AND m.channel_id = :channel_id
+  AND m.created_at >= CAST(:since AS timestamptz)
+ORDER BY m.created_at, m.id
+LIMIT :limit
+""")
+
+DELETE_WINDOWS_FROM = text("""
+DELETE FROM conversation_window
+WHERE channel_id = :channel_id AND ends_at >= CAST(:since AS timestamptz)
+""")
+
+# Closes the delete-during-rebuild race. A deletion landing between reading a
+# channel's messages and writing its windows tombstones nothing, because no
+# window contains the message yet -- and the rebuild then inserts a LIVE
+# window carrying the retracted text. Re-applying tombstones inside the same
+# transaction as the insert means such a window can never be observed live.
+TOMBSTONE_WINDOWS_WITH_DEAD_MESSAGES = text("""
+UPDATE conversation_window SET deleted_at = now()
+WHERE deleted_at IS NULL
+  AND channel_id = :channel_id
+  AND id IN (
+      SELECT wm.window_id FROM conversation_window_message wm
+      JOIN message m ON m.id = wm.message_id
+      WHERE m.deleted_at IS NOT NULL
+  )
+""")
+
+EMBEDDINGS_FROM = text("""
+SELECT text, embedding::text AS embedding
+FROM conversation_window
+WHERE channel_id = :channel_id
+  AND ends_at >= CAST(:since AS timestamptz)
+  AND embedding IS NOT NULL
+""")

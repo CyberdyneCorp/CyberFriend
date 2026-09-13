@@ -126,25 +126,42 @@ async def reconcile_loop(
         await asyncio.sleep(interval)
 
 
+# Re-forming from exactly the dirty watermark would cut the window that
+# straddles it. Reaching back one gap means the preceding conversation is
+# re-formed with it, so a message arriving late still merges into the window
+# it belongs to rather than starting a new one.
+REWINDOW_LOOKBACK = timedelta(minutes=30)
+
+
 async def rebuild_pending_windows(
     service: IngestService, store: Store, batch: int = WINDOW_BATCH
 ) -> int:
-    """Re-form the windows over messages that have none yet.
+    """Re-form the windows of every channel marked dirty.
 
-    Deleted messages travel this path too: `WindowBuilder` drops them, so a
-    window rebuilt after a tombstone no longer contains the retracted text.
+    Driven by a per-channel watermark rather than by "this message has no
+    window". The latter can only fire once per message, which left edited
+    messages holding their pre-edit text forever and made every message its
+    own single-message window -- defeating the reason retrieval embeds
+    windows at all.
     """
-    pending = await store.messages_without_window(batch)
-    if not pending:
-        return 0
-
-    by_channel: dict[ChannelRef, list[Message]] = {}
-    for message in pending:
-        by_channel.setdefault(message.channel, []).append(message)
-
+    dirty = await store.dirty_channels()
     rebuilt = 0
-    for channel, messages in by_channel.items():
-        rebuilt += await service.rebuild_windows(channel, messages)
+    for channel, since in dirty:
+        if not service.is_indexed(channel):
+            await store.clear_windows_dirty(channel, since)
+            continue
+        rebuilt += await service.rewindow(channel, since - REWINDOW_LOOKBACK)
+        await store.clear_windows_dirty(channel, since)
+
+    if rebuilt == 0:
+        # Safety net for rows that predate the watermark, such as a backfill
+        # that landed while an older build was running.
+        pending = await store.messages_without_window(batch)
+        by_channel: dict[ChannelRef, list[Message]] = {}
+        for message in pending:
+            by_channel.setdefault(message.channel, []).append(message)
+        for channel, messages in by_channel.items():
+            rebuilt += await service.rebuild_windows(channel, messages)
     return rebuilt
 
 

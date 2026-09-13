@@ -65,17 +65,42 @@ class IngestService:
         if not self.is_indexed(message.channel):
             return False
         await self._store.upsert_messages([message])
+        await self._mark_dirty(message.channel, message.created_at)
         return True
+
+    async def _mark_dirty(self, channel: ChannelRef, at: datetime) -> None:
+        """Schedule the channel's windows to be re-formed from `at`.
+
+        Anything that changes a channel's content marks it, including edits
+        and deletions. A trigger keyed on "this message has no window" can
+        only fire once per message, so an edited message would keep its
+        pre-edit window forever and consecutive messages could never be
+        merged into one window.
+        """
+        await self._store.mark_windows_dirty(channel, at)
 
     async def handle_edit(self, message: Message) -> None:
         if self.is_indexed(message.channel):
             # Same upsert path: the revision key makes it idempotent, and
             # content changing is exactly what the conflict clause updates.
             await self._store.upsert_messages([message])
+            # The window still holds the pre-edit text until it is re-formed.
+            await self._mark_dirty(message.channel, message.created_at)
 
-    async def handle_delete(self, platform_message_id: int, at: datetime | None = None) -> None:
+    async def handle_delete(
+        self,
+        platform_message_id: int,
+        at: datetime | None = None,
+        channel: ChannelRef | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
         when = at or datetime.now(UTC)
         await self._store.tombstone_message(platform_message_id, when)
+        if channel is not None:
+            # The surviving neighbours must be re-formed without the retracted
+            # text; tombstoning the window alone would take the whole
+            # conversation out of retrieval.
+            await self._mark_dirty(channel, created_at or when)
         if self._documents is not None:
             # A deleted message must take its attachments with it. These live
             # in separate tables, so tombstoning the message alone leaves the
@@ -125,6 +150,19 @@ class IngestService:
     async def rebuild_windows(self, channel: ChannelRef, messages: Sequence[Message]) -> int:
         windows = self._windows.build(channel, messages)
         return await self._store.replace_windows(channel, windows)
+
+    async def rewindow(self, channel: ChannelRef, since: datetime) -> int:
+        """Re-form a channel's windows from `since`, reading and writing atomically.
+
+        The store does the read and the write in one transaction so that a
+        deletion arriving in between cannot end up published inside a freshly
+        built live window.
+        """
+        rewinder = getattr(self._store, "rewindow_channel", None)
+        if rewinder is None:
+            return 0
+        count: int = await rewinder(channel, since, self._windows.build)
+        return count
 
     async def purge_unindexed(self, channels: Sequence[ChannelRef]) -> int:
         """Remove content for channels that have left indexing scope."""

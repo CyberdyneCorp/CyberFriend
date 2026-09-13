@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import cast
 
@@ -21,6 +21,24 @@ from chatmemory.ports.sources import EmbeddingClient
 log = structlog.get_logger()
 
 PLATFORM = "discord"
+
+
+WindowFactory = Callable[[ChannelRef, Sequence[Message]], Sequence[Window]]
+"""Builds windows from messages. Injected so the store stays unaware of the
+windowing rules, which live in the app layer and change independently."""
+
+
+def _message_from_row(row: RowMapping, channel: ChannelRef | None = None) -> Message:
+    return Message(
+        platform_message_id=cast(int, row["id"]),
+        channel=channel or ChannelRef(PLATFORM, cast(int, row["channel_id"])),
+        author=PersonRef(PLATFORM, cast(int, row["platform_user_id"])),
+        content=str(row["content"]),
+        created_at=cast(datetime, row["created_at"]),
+        edited_at=cast("datetime | None", row["edited_at"]),
+        reply_to_id=cast("int | None", row["reply_to_id"]),
+        thread_id=cast("int | None", row["thread_id"]),
+    )
 
 
 def _channel_ids(viewer: Viewer) -> list[int]:
@@ -144,19 +162,7 @@ class PostgresStore:
             rows = await conn.execute(
                 sql.MESSAGES_WITHOUT_WINDOW, {"limit": limit, "platform": PLATFORM}
             )
-            return [
-                Message(
-                    platform_message_id=cast(int, r["id"]),
-                    channel=ChannelRef(PLATFORM, cast(int, r["channel_id"])),
-                    author=PersonRef(PLATFORM, cast(int, r["platform_user_id"])),
-                    content=str(r["content"]),
-                    created_at=cast(datetime, r["created_at"]),
-                    edited_at=cast("datetime | None", r["edited_at"]),
-                    reply_to_id=cast("int | None", r["reply_to_id"]),
-                    thread_id=cast("int | None", r["thread_id"]),
-                )
-                for r in rows.mappings()
-            ]
+            return [_message_from_row(r) for r in rows.mappings()]
 
     async def replace_windows(self, channel: ChannelRef, windows: Sequence[Window]) -> int:
         """Swap in the windows covering one batch of messages, atomically.
@@ -201,7 +207,98 @@ class PostgresStore:
                         "message_ids": list(window.message_ids),
                     },
                 )
+            # A deletion landing between reading these messages and writing
+            # their windows tombstoned nothing, because no window held the
+            # message yet. Re-applying tombstones here, in the same
+            # transaction as the insert, means such a window is never
+            # observable live.
+            await conn.execute(
+                sql.TOMBSTONE_WINDOWS_WITH_DEAD_MESSAGES, {"channel_id": channel_id}
+            )
         return len(windows)
+
+    async def mark_windows_dirty(self, channel: ChannelRef, at: datetime) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                sql.MARK_WINDOWS_DIRTY,
+                {"channel_id": channel.platform_channel_id, "at": at},
+            )
+
+    async def dirty_channels(self, limit: int = 20) -> Sequence[tuple[ChannelRef, datetime]]:
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(sql.DIRTY_CHANNELS, {"limit": limit})
+            return [
+                (ChannelRef(PLATFORM, cast(int, r["channel_id"])),
+                 cast(datetime, r["windows_dirty_from"]))
+                for r in rows.mappings()
+            ]
+
+    async def clear_windows_dirty(self, channel: ChannelRef, up_to: datetime) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                sql.CLEAR_WINDOWS_DIRTY,
+                {"channel_id": channel.platform_channel_id, "up_to": up_to},
+            )
+
+    async def rewindow_channel(
+        self, channel: ChannelRef, since: datetime, builder: WindowFactory, limit: int = 2000
+    ) -> int:
+        """Re-form every window in a channel from `since`, in one transaction.
+
+        Reading the messages and writing the windows must be one transaction:
+        otherwise a deletion landing in the gap tombstones nothing (no window
+        holds the message yet) and the rebuild then publishes the retracted
+        text in a fresh live window.
+        """
+        channel_id = channel.platform_channel_id
+        async with self._engine.begin() as conn:
+            rows = await conn.execute(
+                sql.MESSAGES_FOR_REWINDOW,
+                {
+                    "channel_id": channel_id,
+                    "since": since,
+                    "limit": limit,
+                    "platform": PLATFORM,
+                },
+            )
+            messages = [_message_from_row(r, channel) for r in rows.mappings()]
+            windows = builder(channel, messages)
+
+            kept = await self._embeddings_in_range(conn, channel_id, since)
+            await conn.execute(
+                sql.DELETE_WINDOWS_FROM, {"channel_id": channel_id, "since": since}
+            )
+            for window in windows:
+                created = await conn.execute(
+                    sql.INSERT_WINDOW,
+                    {
+                        "channel_id": channel_id,
+                        "text": window.text,
+                        "starts_at": window.starts_at,
+                        "ends_at": window.ends_at,
+                        "thread_id": window.thread_id,
+                        "embedding": kept.get(window.text),
+                    },
+                )
+                await conn.execute(
+                    sql.INSERT_WINDOW_MESSAGES,
+                    {
+                        "window_id": int(created.scalar_one()),
+                        "message_ids": list(window.message_ids),
+                    },
+                )
+            await conn.execute(
+                sql.TOMBSTONE_WINDOWS_WITH_DEAD_MESSAGES, {"channel_id": channel_id}
+            )
+        return len(windows)
+
+    async def _embeddings_in_range(
+        self, conn: AsyncConnection, channel_id: int, since: datetime
+    ) -> dict[str, str]:
+        rows = await conn.execute(
+            sql.EMBEDDINGS_FROM, {"channel_id": channel_id, "since": since}
+        )
+        return {str(r["text"]): str(r["embedding"]) for r in rows.mappings()}
 
     async def _superseded_embeddings(
         self, conn: AsyncConnection, channel_id: int, message_ids: Sequence[int]
