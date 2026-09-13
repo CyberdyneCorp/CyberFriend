@@ -7,15 +7,23 @@ exposes one person's view rather than the whole corpus.
 
 It also holds a gateway connection, because permissions are resolved at query
 time from discord.py's guild cache rather than denormalised into the corpus.
-That connection registers no message handlers, so it cannot double-ingest
+That connection registers no *message* handlers, so it cannot double-ingest
 alongside the `ingest` service; it exists only to answer "what may this
 person read", and when it is cold every answer is "nothing".
+
+It does register permission handlers, and that distinction is the bug this
+file used to have. "Handler-free" was read as "no listeners at all", so the
+resolved-viewer cache in front of it was never invalidated and a revoked role
+kept reading for a full TTL. Invalidation listeners change nothing about
+double-ingestion -- they touch no corpus -- so there was never a reason to
+leave them off.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 from typing import cast
 
 import discord
@@ -25,8 +33,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from chatmemory import logging as log_setup
-from chatmemory.adapters.discord.acl import DiscordAclResolver, _Guild
-from chatmemory.adapters.discord.gateway import CachingAclResolver
+from chatmemory.adapters.discord.acl import DiscordAclResolver, PermissionCaches, _Guild
+from chatmemory.adapters.discord.gateway import (
+    CachingAclResolver,
+    attach_permission_listeners,
+)
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.config import Settings, get_settings
@@ -39,21 +50,60 @@ log = structlog.get_logger()
 
 
 class AclClient(discord.Client):
-    """A gateway connection kept solely to warm the permission cache.
+    """A gateway connection kept solely to keep permissions current.
 
-    Deliberately handler-free. `permissions_for` reads discord.py's guild
-    cache, and the cache is only populated by an identified connection, so
-    this service needs one -- but registering no `on_message` is what makes a
-    second connection on the same bot token safe rather than a silent
-    doubling of the corpus.
+    Deliberately free of *message* handlers. `permissions_for` reads
+    discord.py's guild cache, and the cache is only populated by an identified
+    connection, so this service needs one -- but registering no `on_message`
+    is what makes a second connection on the same bot token safe rather than a
+    silent doubling of the corpus.
+
+    It does register the permission listeners, and it takes the cache group as
+    a constructor argument so that it cannot be built without them: this
+    client exists to answer "what may this person read", and one that cannot
+    notice that the answer changed is worse than none.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, caches: PermissionCaches) -> None:
         intents = discord.Intents.default()
         # Members, because per-member channel overwrites decide readability
-        # and a role-set comparison gets exactly those cases wrong.
+        # and a role-set comparison gets exactly those cases wrong. It is also
+        # what makes on_member_update arrive at all.
         intents.members = True
         super().__init__(intents=intents)
+        attach_permission_listeners(self, caches)
+
+
+@dataclass(frozen=True, slots=True)
+class AclGraph:
+    """The MCP server's permission path, assembled as one piece.
+
+    The connection, the caches it invalidates and the resolver reading through
+    them are returned together because they are only correct together; the
+    defect this replaces was precisely these three drifting apart in `main`.
+    """
+
+    client: AclClient
+    caches: PermissionCaches
+    resolver: CachingAclResolver
+
+
+def build_acl(settings: Settings) -> AclGraph:
+    """The gateway connection and the viewer cache that connection invalidates."""
+    caches = PermissionCaches()
+    client = AclClient(caches)
+
+    def guild() -> _Guild | None:
+        found = client.get_guild(settings.discord_guild_id)
+        # discord.Guild satisfies `_Guild` in practice but not structurally --
+        # `permissions_for` takes Member | Role rather than any `_Member`. The
+        # cast is the adapter boundary; see bot.py for the same note.
+        return None if found is None else cast(_Guild, found)
+
+    resolver = CachingAclResolver(
+        DiscordAclResolver(guild, settings.indexed_channel_ids), invalidation=caches
+    )
+    return AclGraph(client=client, caches=caches, resolver=resolver)
 
 
 def allowed_hosts() -> list[str]:
@@ -126,19 +176,9 @@ async def main() -> None:
     # query against a table it did not think to create.
     engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
 
-    client = AclClient()
-
-    def guild() -> _Guild | None:
-        found = client.get_guild(settings.discord_guild_id)
-        # discord.Guild satisfies `_Guild` in practice but not structurally --
-        # `permissions_for` takes Member | Role rather than any `_Member`. The
-        # cast is the adapter boundary; see bot.py for the same note.
-        return None if found is None else cast(_Guild, found)
-
-    acl = CachingAclResolver(
-        DiscordAclResolver(guild, settings.indexed_channel_ids)
-    )
-    authenticator = Authenticator(tokens=PostgresTokenStore(engine), acl=acl)
+    graph = build_acl(settings)
+    client = graph.client
+    authenticator = Authenticator(tokens=PostgresTokenStore(engine), acl=graph.resolver)
 
     state = HealthState()
     app = build_app(

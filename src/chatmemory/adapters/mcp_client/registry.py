@@ -18,6 +18,10 @@ nobody provides has two very different explanations:
     questions about Discord.
 
 Collapsing those two into one behaviour gets one of them wrong.
+
+Registration is also where a tool's *effect* is settled, and the same rule
+applies there: what a server says about itself is evidence, not authority.
+Only the operator's allowlist can mark a tool read-only. See `_effect_for`.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ import structlog
 
 from chatmemory.adapters.mcp_client.config import AllowedTool, FederationConfig
 from chatmemory.adapters.mcp_client.session import DiscoveredTool
-from chatmemory.app.authorization import ToolPermit
+from chatmemory.app.authorization import ToolEffect, ToolPermit
 
 log = structlog.get_logger()
 
@@ -146,21 +150,45 @@ def register(config: FederationConfig, discovery: Sequence[ServerDiscovery]) -> 
     )
 
 
+def _effect_for(entry: AllowedTool, advertised: DiscoveredTool) -> ToolEffect:
+    """Decide what a tool is allowed to be, from the operator's declaration.
+
+    The spec's rule is that a tool whose effect cannot be *determined* counts
+    as mutating, and an external party's claim about itself is not a
+    determination -- the MCP specification says as much about its own
+    annotations. So `read_only_hint` can never mark a tool read-only here:
+    only the operator's `effect` can, because only the operator is inside the
+    trust boundary. A compromised or edited server that relabels a write as a
+    read therefore buys itself a confirmation prompt, not a bypass.
+
+    The opposite direction is still honoured. A server saying "this one
+    writes" tightens whatever the operator declared, since believing that
+    claim can only ever cost friction. Silence is not a claim in either
+    direction and tightens nothing.
+    """
+    if advertised.effect is ToolEffect.MUTATING:
+        return ToolEffect.MUTATING
+    if entry.effect is not None:
+        return entry.effect
+    if advertised.effect is ToolEffect.READ_ONLY:
+        # Worth a line in the log: the deployment is paying for a confirmation
+        # the server thinks is unnecessary, and the operator can end that by
+        # declaring the effect themselves.
+        log.info(
+            "federation.read_only_claim_not_honoured",
+            tool=entry.qualified_name,
+            server=entry.server,
+        )
+    return ToolEffect.UNDETERMINED
+
+
 def _register_one(entry: AllowedTool, advertised: DiscoveredTool) -> RegisteredTool:
-    # With no operator declaration the server's own annotation decides, and a
-    # server that annotates nothing lands on UNDETERMINED -- which behaves as
-    # mutating. With a declaration, the stricter of the two wins.
-    effect = (
-        advertised.effect
-        if entry.effect is None
-        else entry.effect.stricter(advertised.effect)
-    )
     return RegisteredTool(
         permit=ToolPermit(
             qualified_name=entry.qualified_name,
             server=entry.server,
             tool=entry.tool,
-            effect=effect,
+            effect=_effect_for(entry, advertised),
             credential=entry.credential,
             mutation_enabled=entry.mutation_enabled,
         ),

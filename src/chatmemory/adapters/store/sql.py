@@ -35,10 +35,16 @@ SESSION_SETUP = ("SET hnsw.iterative_scan = relaxed_order",)
 UPSERT_MESSAGE = text("""
 INSERT INTO message (
     id, channel_id, author_person_id, content, created_at, edited_at,
-    reply_to_id, thread_id, search_tsv
+    reply_to_id, thread_id, search_tsv, deleted_at
 ) VALUES (
     :id, :channel_id, :author_person_id, :content, :created_at, :edited_at,
-    :reply_to_id, :thread_id, to_tsvector('english', :content)
+    :reply_to_id, :thread_id, to_tsvector('english', :content),
+    -- A message is born withdrawn when the ledger already holds a tombstone
+    -- for its id. Live messages are queued and written asynchronously while a
+    -- deletion goes straight to the database, so the delete routinely lands
+    -- first; reading the verdict here is what makes the insert correct for
+    -- either arrival order rather than for the lucky one.
+    (SELECT t.deleted_at FROM message_tombstone t WHERE t.message_id = :id)
 )
 ON CONFLICT (id) DO UPDATE SET
     content = EXCLUDED.content,
@@ -49,6 +55,36 @@ ON CONFLICT (id) DO UPDATE SET
     deleted_at = message.deleted_at
 WHERE message.edited_at IS DISTINCT FROM EXCLUDED.edited_at
    OR message.content IS DISTINCT FROM EXCLUDED.content
+""")
+
+# Taken by both the capture path and the deletion path, for the length of
+# their transaction, keyed on the platform message id.
+#
+# The ledger below fixes arrival order; this fixes overlap. Without it a
+# capture that has not yet committed is invisible to a concurrent deletion's
+# UPDATE, while that deletion is equally invisible to the capture's read of
+# the ledger -- and the message commits live with its own tombstone already
+# recorded. Holding the lock makes one of the two orderings a fact.
+LOCK_MESSAGE = text("SELECT pg_advisory_xact_lock(CAST(:id AS bigint))")
+
+# The deletion ledger: what was withdrawn, keyed on the platform message id
+# alone. Deliberately references no row in `message` -- recording a tombstone
+# for a message the corpus has never seen is the entire point, and an UPDATE
+# matching zero rows is exactly how retracted content used to stay live
+# forever.
+RECORD_TOMBSTONE = text("""
+INSERT INTO message_tombstone (message_id, channel_id, deleted_at)
+VALUES (
+    :id,
+    -- Known only once the message itself has landed; NULL until then.
+    (SELECT m.channel_id FROM message m WHERE m.id = :id),
+    :at
+)
+ON CONFLICT (message_id) DO UPDATE SET
+    channel_id = COALESCE(message_tombstone.channel_id, EXCLUDED.channel_id),
+    -- Earliest wins: a deletion re-reported by a later reconciliation pass
+    -- must not move the withdrawal forward past when it actually happened.
+    deleted_at = LEAST(message_tombstone.deleted_at, EXCLUDED.deleted_at)
 """)
 
 TOMBSTONE_MESSAGE = text("""
@@ -62,7 +98,12 @@ WHERE id IN (SELECT window_id FROM conversation_window_message WHERE message_id 
 """)
 
 PURGE_CHANNEL = text("""
-WITH w AS (DELETE FROM conversation_window WHERE channel_id = :channel_id RETURNING id)
+WITH w AS (DELETE FROM conversation_window WHERE channel_id = :channel_id RETURNING id),
+     -- The ledger goes with the content it describes. Nothing can be
+     -- re-ingested into a de-scoped channel (capture refuses it), and if the
+     -- channel returns to scope its backfill re-reads live history, which no
+     -- longer contains the deleted messages -- so this cannot resurrect one.
+     t AS (DELETE FROM message_tombstone WHERE channel_id = :channel_id RETURNING message_id)
 DELETE FROM message WHERE channel_id = :channel_id
 """)
 
@@ -172,6 +213,28 @@ UPDATE person SET display_name = :display_name
 WHERE id = :person_id AND display_name IS DISTINCT FROM :display_name
 """)
 
+# --- reconciliation ----------------------------------------------------
+#
+# What the corpus holds, as revisions rather than as content. Reconciliation
+# compares this against a re-read of live history: a changed revision is the
+# only evidence of an edit we missed, and absence the only evidence of a
+# deletion, because a gateway event fired while the process was down is never
+# replayed.
+#
+# No viewer is bound, and none can be: this runs for the ingest process, which
+# acts for nobody. It is safe to be the exception because it returns
+# timestamps and ids -- never a word of message text -- so it cannot become a
+# way to read the corpus unfiltered.
+STORED_REVISIONS = text("""
+SELECT m.id, COALESCE(m.edited_at, m.created_at) AS revision
+FROM message m
+WHERE m.channel_id = :channel_id
+  -- Tombstoned messages are already withdrawn. Reporting them would make
+  -- every pass rediscover the same deletion and re-apply it forever.
+  AND m.deleted_at IS NULL
+  AND m.created_at >= CAST(:since AS timestamptz)
+""")
+
 # --- retrieval ---------------------------------------------------------
 #
 # `:channel_ids` is the viewer's readable set. It is bound into the same
@@ -248,18 +311,41 @@ def statements() -> Sequence[TextClause]:
 # a later edit cannot move the watermark forward past work not yet done.
 
 MARK_WINDOWS_DIRTY = text("""
-INSERT INTO ingest_cursor (channel_id, windows_dirty_from)
-VALUES (:channel_id, CAST(:at AS timestamptz))
+INSERT INTO ingest_cursor (channel_id, windows_dirty_from, windows_dirty_seq)
+VALUES (:channel_id, CAST(:at AS timestamptz), 1)
 ON CONFLICT (channel_id) DO UPDATE SET
     windows_dirty_from = LEAST(
         COALESCE(ingest_cursor.windows_dirty_from, CAST(:at AS timestamptz)),
         CAST(:at AS timestamptz)
     ),
+    -- Bumped on every mark. The clear is conditional on it, so a change that
+    -- arrives mid-rebuild is not swallowed by the clear that follows: the
+    -- watermark itself does not move, because marks fold in with LEAST.
+    windows_dirty_seq = ingest_cursor.windows_dirty_seq + 1,
+    updated_at = now()
+""")
+
+# The same watermark, derived from the message rather than passed in. A
+# deletion is a content change like any other: tombstoning the window that
+# held the message withdraws its surviving neighbours too, so the channel has
+# to be re-formed or one deletion quietly takes a whole conversation out of
+# retrieval. Derived here because not every caller knows the channel --
+# reconciliation discovers a deletion by absence from history and holds only
+# an id -- and a rebuild that depends on the caller remembering is a rebuild
+# that will be forgotten.
+MARK_DIRTY_FOR_MESSAGE = text("""
+INSERT INTO ingest_cursor (channel_id, windows_dirty_from)
+SELECT m.channel_id, m.created_at FROM message m WHERE m.id = :id
+ON CONFLICT (channel_id) DO UPDATE SET
+    windows_dirty_from = LEAST(
+        COALESCE(ingest_cursor.windows_dirty_from, EXCLUDED.windows_dirty_from),
+        EXCLUDED.windows_dirty_from
+    ),
     updated_at = now()
 """)
 
 DIRTY_CHANNELS = text("""
-SELECT channel_id, windows_dirty_from
+SELECT channel_id, windows_dirty_from, windows_dirty_seq
 FROM ingest_cursor
 WHERE windows_dirty_from IS NOT NULL
 ORDER BY windows_dirty_from
@@ -270,7 +356,9 @@ CLEAR_WINDOWS_DIRTY = text("""
 UPDATE ingest_cursor SET windows_dirty_from = NULL, updated_at = now()
 WHERE channel_id = :channel_id
   AND windows_dirty_from IS NOT NULL
-  AND windows_dirty_from <= CAST(:up_to AS timestamptz)
+  -- Only when nothing was marked since the rebuild read this row. Otherwise
+  -- a change racing the rebuild is cleared without ever being applied.
+  AND windows_dirty_seq = :seq
 """)
 
 MESSAGES_FOR_REWINDOW = text("""

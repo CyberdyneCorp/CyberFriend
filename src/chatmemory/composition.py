@@ -45,7 +45,11 @@ from chatmemory.app.limits import RateLimiter
 from chatmemory.app.reasoning.capabilities import LOOP_STAGES, ModelCapability, Stage
 from chatmemory.app.reasoning.errors import ConfigurationError
 from chatmemory.app.reasoning.ports import ChatModel, RetrievalTool
-from chatmemory.app.reasoning.retrieval import CorpusRetrieval, discord_urls
+from chatmemory.app.reasoning.retrieval import (
+    CorpusRetrieval,
+    WithheldRetrieval,
+    discord_urls,
+)
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.config import Settings
 from chatmemory.ports.answers import AnswerService
@@ -188,7 +192,10 @@ async def build_answer_stack(settings: Settings) -> AnswerStack:
 
 
 def build_ask_service(
-    settings: Settings, guild: GuildProvider, answers: AnswerService
+    settings: Settings,
+    guild: GuildProvider,
+    answers: AnswerService,
+    search: SearchBackend | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -203,4 +210,9 @@ def build_ask_service(
         answers=answers,
         limiter=RateLimiter(),
         conversations=ConversationStore(),
+        # Without this the withheld-evidence notice is built, tested, and
+        # structurally unable to fire: retrieval is pre-scoped to
+        # asker INTERSECT audience, so nothing is ever dropped later for the
+        # notice to report. The probe is what actually searches the gap.
+        withheld=WithheldRetrieval(search) if search is not None else None,
     )

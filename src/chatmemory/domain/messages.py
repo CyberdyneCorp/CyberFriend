@@ -58,3 +58,18 @@ class Window:
     @property
     def is_empty(self) -> bool:
         return not self.message_ids
+
+
+@dataclass(frozen=True, slots=True)
+class DirtyChannel:
+    """A channel whose windows need re-forming, and the mark's generation.
+
+    The generation exists so the rebuild can clear the mark only if nothing
+    was marked while it ran. Marks fold in with LEAST, so a later change does
+    not move the watermark and would otherwise be cleared without ever being
+    applied.
+    """
+
+    channel: ChannelRef
+    since: datetime
+    generation: int

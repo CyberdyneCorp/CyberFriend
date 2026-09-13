@@ -6,9 +6,12 @@ against fakes *and* against a genuine in-process MCP server, which is how the
 tests exercise the wire format without a network.
 
 One judgement lives here: a server's tool annotations are *claims by the
-server*, not facts. They are read to decide whether a tool needs
-confirmation, and a missing or ambiguous claim resolves to `UNDETERMINED`,
-which behaves as mutating everywhere a decision is made.
+server*, not facts. They are recorded as claims -- a missing or ambiguous one
+resolves to `UNDETERMINED`, which behaves as mutating -- and the registry
+decides what to do with them. It believes a claim of mutation and disbelieves
+a claim of read-only, so nothing this module returns can lower a tool's
+effect. The MCP specification says the same of its own annotations: clients
+should never make tool-use decisions on them when the server is untrusted.
 """
 
 from __future__ import annotations

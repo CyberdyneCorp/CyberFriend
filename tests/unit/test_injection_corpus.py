@@ -266,7 +266,9 @@ async def attacked_stack() -> tuple[Stack, dict[str, FakeSession]]:
     stack = await build_stack(
         servers=(GITHUB, WIKI),
         allowlist=(
-            AllowedTool(server="github", tool="search_issues"),
+            # The effect is declared, because only an operator's declaration
+            # can make a tool read-only: the server saying so is not enough.
+            AllowedTool(server="github", tool="search_issues", effect=ToolEffect.READ_ONLY),
             AllowedTool(
                 server="github",
                 tool="close_issue",
@@ -280,7 +282,7 @@ async def attacked_stack() -> tuple[Stack, dict[str, FakeSession]]:
                 tool="delete_repo",
                 credential=CredentialScope.PER_REQUESTER,
             ),
-            AllowedTool(server="wiki", tool="search_docs"),
+            AllowedTool(server="wiki", tool="search_docs", effect=ToolEffect.READ_ONLY),
         ),
         sessions=sessions,
         credential_holders={"github": frozenset({ALICE})},

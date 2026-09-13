@@ -18,19 +18,23 @@ Three rules earn their place here:
 - **The resolved-viewer cache is invalidated from here.** Permissions are
   resolved at query time precisely so a revoked role takes effect without a
   reindex; a cache that outlives the revocation would reintroduce the stale
-  window the design exists to avoid.
+  window the design exists to avoid. `attach_permission_listeners` is how a
+  client that is not the ingest client -- the bot's, and the MCP server's
+  handler-free ACL connection -- gets the same wiring without inheriting the
+  ingest client's message handlers.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
 import discord
 import structlog
 
+from chatmemory.adapters.discord.acl import CacheInvalidator, PermissionCaches
 from chatmemory.adapters.discord.source import RawMessage, to_message
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message
@@ -69,10 +73,6 @@ class RawBulkDeletePayload(Protocol):
     channel_id: int
 
 
-class CacheInvalidator(Protocol):
-    def invalidate(self, person: PersonRef | None = None) -> None: ...
-
-
 # --- resolved-permission caching ----------------------------------------
 
 
@@ -80,10 +80,16 @@ class CachingAclResolver:
     """Short-TTL cache in front of an `AclResolver`.
 
     Resolution walks every indexed channel's overwrites for the member, which
-    is cheap but not free, and a person asks several questions in a row. The
-    TTL is short and the gateway invalidates on the events that can change an
-    answer, so the cache narrows cost without widening the window in which a
-    revoked permission still reads as granted.
+    is cheap but not free, and a person asks several questions in a row.
+
+    `invalidation` is what makes the cache honest, and the TTL is only a
+    backstop for events missed across a gateway gap. Given a group, entries
+    are served only while that group is bound to a live event source, so a
+    group that was built and never attached degrades this to a pass-through
+    rather than to a stale grant. Omitting it leaves the old TTL-only
+    behaviour, which is correct for a test and not correct for a process:
+    production builds these through `PermissionCaches`, never directly, and
+    `tests/unit/test_acl_cache_invalidation.py` asserts that.
 
     The failure direction matters: on any doubt the entry is dropped, so a
     stale *grant* cannot survive an event we saw.
@@ -92,6 +98,8 @@ class CachingAclResolver:
     def __init__(
         self,
         inner: AclResolver,
+        *,
+        invalidation: PermissionCaches | None = None,
         ttl_seconds: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -99,13 +107,28 @@ class CachingAclResolver:
         self._ttl = ttl_seconds
         self._clock = clock
         self._cache: dict[PersonRef, tuple[float, Viewer]] = {}
+        self._invalidation = invalidation
+        if invalidation is None:
+            log.warning(
+                "acl.cache_without_invalidation",
+                hint="only a TTL bounds staleness; pass invalidation=PermissionCaches()",
+            )
+        else:
+            invalidation.register(self)
+
+    @property
+    def caching(self) -> bool:
+        """Whether entries may be served: only while revocations can reach us."""
+        return self._invalidation is None or self._invalidation.live
 
     async def resolve_viewer(self, person: PersonRef) -> Viewer:
-        cached = self._cache.get(person)
-        if cached is not None and (self._clock() - cached[0]) < self._ttl:
-            return cached[1]
+        if self.caching:
+            cached = self._cache.get(person)
+            if cached is not None and (self._clock() - cached[0]) < self._ttl:
+                return cached[1]
         viewer = await self._inner.resolve_viewer(person)
-        self._cache[person] = (self._clock(), viewer)
+        if self.caching:
+            self._cache[person] = (self._clock(), viewer)
         return viewer
 
     def invalidate(self, person: PersonRef | None = None) -> None:
@@ -122,6 +145,86 @@ class CachingAclResolver:
     @property
     def size(self) -> int:
         return len(self._cache)
+
+
+# --- binding invalidation to a client ------------------------------------
+
+_Listener = Callable[..., Awaitable[None]]
+
+
+def _bind(client: discord.Client, name: str, listener: _Listener) -> None:
+    """Register `listener` for `name`, keeping any handler the class defined.
+
+    discord.py dispatches by looking the handler up on the instance, so this
+    is the registration `@client.event` performs. Chaining rather than
+    overwriting matters because `IngestClient` already defines some of these:
+    replacing its `on_member_update` would trade a stale cache for a lost
+    event, which is the same bug wearing a different hat.
+    """
+    existing = cast("_Listener | None", getattr(client, name, None))
+    if existing is None:
+        setattr(client, name, listener)
+        return
+
+    prior: _Listener = existing
+
+    async def chained(*args: object, **kwargs: object) -> None:
+        await prior(*args, **kwargs)
+        await listener(*args, **kwargs)
+
+    setattr(client, name, chained)
+
+
+def attach_permission_listeners(client: discord.Client, caches: PermissionCaches) -> None:
+    """Make `client` the event source that keeps `caches` honest.
+
+    Every process that answers questions has to call this, because a
+    permission cache only serves entries while its group is attached. The two
+    callers are deliberately unlike each other -- the bot's client and the MCP
+    server's handler-free ACL connection -- and sharing one wiring is what
+    stops the second from quietly having none, which is exactly what happened.
+
+    Which events, and why these. Membership and role changes move one known
+    person, so they invalidate that person. Channel updates carry
+    permission-overwrite edits and move an unknown set of people, so they
+    invalidate everything. Role deletion counts as a permission change because
+    deleting a role revokes what it granted. Creation events are absent on
+    purpose: a role nobody holds and a channel nobody is in cannot widen
+    anybody's view, and the first update that changes that is dispatched.
+    """
+
+    async def on_member_join(member: discord.Member) -> None:
+        caches.member_changed(PersonRef(PLATFORM, member.id))
+
+    async def on_member_remove(member: discord.Member) -> None:
+        caches.member_changed(PersonRef(PLATFORM, member.id))
+
+    async def on_member_update(_before: discord.Member, after: discord.Member) -> None:
+        caches.member_changed(PersonRef(PLATFORM, after.id))
+
+    async def on_guild_role_update(_before: discord.Role, _after: discord.Role) -> None:
+        caches.permissions_changed()
+
+    async def on_guild_role_delete(_role: discord.Role) -> None:
+        caches.permissions_changed()
+
+    async def on_guild_channel_update(
+        _before: discord.abc.GuildChannel, _after: discord.abc.GuildChannel
+    ) -> None:
+        caches.permissions_changed()
+
+    listeners: tuple[_Listener, ...] = (
+        on_member_join,
+        on_member_remove,
+        on_member_update,
+        on_guild_role_update,
+        on_guild_role_delete,
+        on_guild_channel_update,
+    )
+    for listener in listeners:
+        _bind(client, listener.__name__, listener)
+
+    caches.attach(type(client).__name__)
 
 
 # --- event handling -----------------------------------------------------

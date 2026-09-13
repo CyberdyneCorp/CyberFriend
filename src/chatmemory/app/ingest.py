@@ -95,11 +95,16 @@ class IngestService:
         created_at: datetime | None = None,
     ) -> None:
         when = at or datetime.now(UTC)
+        # Valid for an id we have never stored: the delete-before-insert case
+        # is the store's to make durable, not this layer's to detect.
         await self._store.tombstone_message(platform_message_id, when)
         if channel is not None:
             # The surviving neighbours must be re-formed without the retracted
             # text; tombstoning the window alone would take the whole
-            # conversation out of retrieval.
+            # conversation out of retrieval. The store marks this too, from
+            # the message row -- which is what covers the callers that have no
+            # channel to give, reconciliation above all. Marking here as well
+            # costs nothing: the watermark keeps the earliest of the two.
             await self._mark_dirty(channel, created_at or when)
         if self._documents is not None:
             # A deleted message must take its attachments with it. These live

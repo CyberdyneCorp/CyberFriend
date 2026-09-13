@@ -178,17 +178,6 @@ class ToolEffect(StrEnum):
         """A tool whose effect cannot be determined counts as mutating."""
         return self is not ToolEffect.READ_ONLY
 
-    def stricter(self, other: ToolEffect) -> ToolEffect:
-        """The more restrictive of two claims about the same tool.
-
-        An operator's declaration and a server's own annotation are combined
-        this way rather than one overriding the other: a server may tighten
-        its tools, but nothing an external server says can make a tool the
-        operator called mutating behave as read-only.
-        """
-        rank = {ToolEffect.READ_ONLY: 0, ToolEffect.UNDETERMINED: 1, ToolEffect.MUTATING: 2}
-        return self if rank[self] >= rank[other] else other
-
 
 class CredentialScope(StrEnum):
     """Whose authority a federated call carries.

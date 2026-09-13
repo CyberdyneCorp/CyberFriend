@@ -67,10 +67,13 @@ class ServerConfig:
 class AllowedTool:
     """One tool an operator has explicitly made available.
 
-    `effect` is the operator's own declaration. It is combined with whatever
-    the server claims by taking the *stricter* of the two, so a server can
-    tighten its own tools but never loosen the operator's judgement -- the
-    same union-never-substitute rule the corrective policy follows.
+    `effect` is the operator's own declaration, and the only thing that can
+    mark a tool read-only. Left unset it means "undetermined", which behaves
+    as mutating: a server's `readOnlyHint` is a claim an external party makes
+    about itself, and a claim is not a determination. The claim is still read,
+    but only in the tightening direction -- a server saying "this one writes"
+    is believed, because believing it costs a confirmation prompt and nothing
+    else.
     """
 
     server: str

@@ -170,9 +170,26 @@ def test_a_server_may_tighten_but_not_loosen_the_operators_declaration() -> None
     assert peek.permit.effect is ToolEffect.MUTATING
 
 
-def test_operator_silence_defers_to_the_servers_annotation() -> None:
+def test_operator_silence_is_not_a_determination_whatever_the_server_claims() -> None:
+    """A server's `readOnlyHint` is a claim about itself, not a finding.
+
+    With nothing declared in the allowlist the effect is undetermined, and
+    undetermined behaves as mutating -- so a server that relabels a write as a
+    read buys a confirmation prompt rather than a bypass.
+    """
     registration = register(
         config(AllowedTool(server="github", tool="search")),
+        [ServerDiscovery("github", (read_tool("search"),))],
+    )
+    tool = registration.get("github:search")
+    assert tool is not None
+    assert tool.permit.effect is ToolEffect.UNDETERMINED
+    assert tool.permit.effect.mutates
+
+
+def test_only_the_operator_can_mark_a_tool_read_only() -> None:
+    registration = register(
+        config(AllowedTool(server="github", tool="search", effect=ToolEffect.READ_ONLY)),
         [ServerDiscovery("github", (read_tool("search"),))],
     )
     tool = registration.get("github:search")

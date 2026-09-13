@@ -9,12 +9,35 @@ the check is cheap. Nothing reaches Discord without passing through here.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Protocol
 
 import structlog
 
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.identity import ChannelRef, Viewer
 from chatmemory.ports.answers import Answer
+
+
+class WithheldEvidenceProbe(Protocol):
+    """Reports what scoping an answer to its audience cost this asker.
+
+    Retrieval is pre-scoped to asker INTERSECT audience, so by the time an
+    answer exists the evidence the audience may not read was never gathered
+    and nothing downstream can tell that anything was missed. Something has
+    to look, and this is the only thing that does.
+
+    It returns channel identities and nothing else. What it inspects is by
+    definition what the audience may not receive, and the answer it informs
+    is delivered to that audience: returning evidence here would put a single
+    misplaced assignment between private content and a public reply.
+    """
+
+    async def withheld_channels(
+        self, asker: Viewer, audience: Audience, text: str
+    ) -> frozenset[ChannelRef]:
+        """Channels the asker may read, the audience may not, that hold
+        content relevant to `text`. Empty when there is nothing to tell."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,22 +57,37 @@ class ScopedAnswer:
         return bool(self.withheld_from_audience)
 
 
-def enforce_audience(answer: Answer, audience: Audience, asker: Viewer) -> ScopedAnswer:
+def enforce_audience(
+    answer: Answer,
+    audience: Audience,
+    asker: Viewer,
+    *,
+    withheld_by_scoping: frozenset[ChannelRef] = frozenset(),
+) -> ScopedAnswer:
     """Drop any citation the audience may not read, and report what was dropped.
 
     The returned answer is safe to deliver to `audience`. The withheld set is
     intersected with the asker's own visibility, so the notice never reveals
     the existence of content the asker also cannot read.
+
+    `withheld_by_scoping` is what never reached the answer at all, because
+    retrieval was scoped to the audience before it ran. Without it the
+    withheld set could only ever contain what this guard itself had to drop
+    -- which, when the service scopes correctly, is nothing.
     """
     permitted = tuple(c for c in answer.citations if audience.permits(c.channel))
     dropped = frozenset(
         c.channel for c in answer.citations if not audience.permits(c.channel)
     )
 
-    # Evidence the service already knew it had withheld, plus anything this
-    # guard caught. Restricted to what the asker may read: a notice about
-    # content the asker cannot see is itself a disclosure.
-    withheld = (dropped | answer.withheld_channels) & asker.visible_channels
+    # Three sources: what retrieval never gathered, what the service knew it
+    # had withheld, and what this guard caught. Restricted to what the asker
+    # may read, because a notice about content the asker cannot see is itself
+    # a disclosure -- and to what the audience may not, because a channel the
+    # room can read was not withheld from it and saying so would be a lie.
+    withheld = (
+        (dropped | answer.withheld_channels | withheld_by_scoping) & asker.visible_channels
+    ) - audience.readable_channels
 
     text = answer.text
     if dropped:
@@ -73,6 +111,10 @@ def enforce_audience(answer: Answer, audience: Audience, asker: Viewer) -> Scope
         citations=() if dropped else permitted,
         # The public answer must give no sign anything was withheld.
         withheld_channels=frozenset(),
+        # Deliberately keyed on `dropped` alone. `withheld_by_scoping` must
+        # leave the delivered answer byte-identical to the one a restricted
+        # asker would have got: any field that varies with it is a channel
+        # through which the room learns that private content exists.
         partial=answer.partial or bool(dropped),
     )
     return ScopedAnswer(answer=cleared, withheld_from_audience=withheld)

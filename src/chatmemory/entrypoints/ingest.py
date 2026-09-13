@@ -35,7 +35,6 @@ from chatmemory.adapters.discord.source import (
     DiscordHistoryReader,
     HistoryChannel,
     Reconciler,
-    RevisionLedger,
     reconcile_window,
 )
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
@@ -146,12 +145,14 @@ async def rebuild_pending_windows(
     """
     dirty = await store.dirty_channels()
     rebuilt = 0
-    for channel, since in dirty:
-        if not service.is_indexed(channel):
-            await store.clear_windows_dirty(channel, since)
+    for entry in dirty:
+        if not service.is_indexed(entry.channel):
+            await store.clear_windows_dirty(entry.channel, entry.generation)
             continue
-        rebuilt += await service.rewindow(channel, since - REWINDOW_LOOKBACK)
-        await store.clear_windows_dirty(channel, since)
+        rebuilt += await service.rewindow(entry.channel, entry.since - REWINDOW_LOOKBACK)
+        # Conditional on the generation read above: a change that arrived
+        # while the rebuild ran leaves the mark in place for the next pass.
+        await store.clear_windows_dirty(entry.channel, entry.generation)
 
     if rebuilt == 0:
         # Safety net for rows that predate the watermark, such as a backfill
@@ -182,17 +183,6 @@ async def window_loop(
 
 
 # --- wiring -------------------------------------------------------------
-
-
-def _supports(store: object, *names: str) -> bool:
-    """Whether the store also satisfies a port it is not typed as.
-
-    Only `RevisionLedger` is probed this way, because reconciliation is
-    optional: without it edits and deletes missed during an outage go
-    unrepaired, which is a degraded corpus rather than an unreadable one.
-    Windowing and embedding are not optional and are not probed.
-    """
-    return all(callable(getattr(store, name, None)) for name in names)
 
 
 async def main() -> None:
@@ -254,21 +244,21 @@ async def main() -> None:
         tasks.create_task(live_loop(source, service, state))
         tasks.create_task(backfill_loop(service, channels, state))
 
-        if _supports(store, "stored_revisions"):
-            reconciler = Reconciler(
-                source=source, ledger=cast(RevisionLedger, store), sink=service
-            )
-            tasks.create_task(reconcile_loop(reconciler, channels))
-        else:
-            log.error(
-                "ingest.reconcile_unavailable",
-                hint="store lacks stored_revisions; edits and deletes missed "
-                "while offline will not be repaired",
-            )
+        # Unconditional, like windowing and embedding below, and for the same
+        # reason. This used to start only if the store was probed and found to
+        # carry `stored_revisions`; no store did, so the probe failed, one
+        # line was logged at boot and the process ran for good without ever
+        # reconciling. Edits and deletions missed during a deploy were never
+        # repaired -- a message deleted while the process was down stayed
+        # retrievable indefinitely, with every health check green. `Store`
+        # now declares the method, so the type checker proves at the wiring
+        # site what the probe used to discover at runtime and discard.
+        reconciler = Reconciler(source=source, ledger=store, sink=service)
+        tasks.create_task(reconcile_loop(reconciler, channels))
 
-        # Unconditional. Retrieval exists only if these two run, so a store
-        # that cannot serve them must stop the process rather than let it
-        # capture into a corpus nothing can ever read back.
+        # Retrieval exists only if these two run, so a store that cannot serve
+        # them must stop the process rather than let it capture into a corpus
+        # nothing can ever read back.
         tasks.create_task(window_loop(service, store))
 
         worker = EmbeddingWorker(

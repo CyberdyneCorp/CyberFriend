@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from typing import cast
 
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from chatmemory.adapters.store import sql
 from chatmemory.app.fusion import reciprocal_rank_fusion
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
-from chatmemory.domain.messages import Message, Window
+from chatmemory.domain.messages import DirtyChannel, Message, Window
 from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
 from chatmemory.ports.sources import EmbeddingClient
 
@@ -60,7 +61,14 @@ class PostgresStore:
             return 0
         async with self._engine.begin() as conn:
             written = 0
-            for m in messages:
+            # Sorted by id so that two batches overlapping on the same message
+            # take the per-message locks below in the same order and cannot
+            # deadlock against each other.
+            for m in sorted(messages, key=lambda message: message.platform_message_id):
+                # Serialises this write against a deletion of the same id: the
+                # statement below reads the deletion ledger, and a read is only
+                # as good as the ordering around it.
+                await conn.execute(sql.LOCK_MESSAGE, {"id": m.platform_message_id})
                 person_id = await self._person_id(conn, m.author)
                 result = await conn.execute(
                     sql.UPSERT_MESSAGE,
@@ -123,7 +131,22 @@ class PostgresStore:
             )
 
     async def tombstone_message(self, platform_message_id: int, at: datetime) -> None:
+        """Withdraw a message, whether or not the corpus has ever seen it.
+
+        The ledger write comes first and is unconditional. Live messages are
+        published to a queue and written later while deletions go straight to
+        the database, so a deletion routinely arrives before the insert it
+        retracts: the UPDATE below then matched nothing, the insert landed
+        afterwards, and the retracted content stayed retrievable forever.
+        Recording the tombstone against the bare id makes the withdrawal
+        durable in either order -- the insert reads the ledger and is born
+        dead -- rather than durable only when the timing happens to co-operate.
+        """
         async with self._engine.begin() as conn:
+            await conn.execute(sql.LOCK_MESSAGE, {"id": platform_message_id})
+            await conn.execute(
+                sql.RECORD_TOMBSTONE, {"id": platform_message_id, "at": at}
+            )
             await conn.execute(
                 sql.TOMBSTONE_MESSAGE, {"id": platform_message_id, "at": at}
             )
@@ -132,6 +155,12 @@ class PostgresStore:
             await conn.execute(
                 sql.TOMBSTONE_WINDOWS_FOR_MESSAGE,
                 {"id": platform_message_id, "at": at},
+            )
+            # And the neighbours it was windowed with must come back. Derived
+            # from the row here so that every deletion path gets it, including
+            # reconciliation, which knows only an id.
+            await conn.execute(
+                sql.MARK_DIRTY_FOR_MESSAGE, {"id": platform_message_id}
             )
 
     async def purge_channel(self, channel: ChannelRef) -> int:
@@ -224,20 +253,24 @@ class PostgresStore:
                 {"channel_id": channel.platform_channel_id, "at": at},
             )
 
-    async def dirty_channels(self, limit: int = 20) -> Sequence[tuple[ChannelRef, datetime]]:
+    async def dirty_channels(self, limit: int = 20) -> Sequence[DirtyChannel]:
         async with self._engine.connect() as conn:
             rows = await conn.execute(sql.DIRTY_CHANNELS, {"limit": limit})
             return [
-                (ChannelRef(PLATFORM, cast(int, r["channel_id"])),
-                 cast(datetime, r["windows_dirty_from"]))
+                DirtyChannel(
+                    channel=ChannelRef(PLATFORM, cast(int, r["channel_id"])),
+                    since=cast(datetime, r["windows_dirty_from"]),
+                    generation=cast(int, r["windows_dirty_seq"]),
+                )
                 for r in rows.mappings()
             ]
 
-    async def clear_windows_dirty(self, channel: ChannelRef, up_to: datetime) -> None:
+    async def clear_windows_dirty(self, channel: ChannelRef, generation: int) -> None:
+        """Clear the mark only if nothing was marked since it was read."""
         async with self._engine.begin() as conn:
             await conn.execute(
                 sql.CLEAR_WINDOWS_DIRTY,
-                {"channel_id": channel.platform_channel_id, "up_to": up_to},
+                {"channel_id": channel.platform_channel_id, "seq": generation},
             )
 
     async def rewindow_channel(
@@ -357,6 +390,26 @@ class PostgresStore:
                 {"c": channel.platform_channel_id, "m": oldest_message_id},
             )
 
+    # --- reconciliation --------------------------------------------------
+
+    async def stored_revisions(
+        self, channel: ChannelRef, since: datetime
+    ) -> Mapping[int, datetime]:
+        """Message id -> revision, for messages stored since `since`.
+
+        Satisfies `RevisionLedger`. It returns no content and therefore binds
+        no viewer -- see `sql.STORED_REVISIONS` for why that is safe here and
+        nowhere else.
+        """
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                sql.STORED_REVISIONS,
+                {"channel_id": channel.platform_channel_id, "since": since},
+            )
+            return {
+                int(r["id"]): cast(datetime, r["revision"]) for r in rows.mappings()
+            }
+
 
 class HybridSearch:
     """Lexical and vector retrieval, fused.
@@ -404,7 +457,34 @@ class HybridSearch:
                 self._hit(r, RelevanceSource.VECTOR) for r in vector.mappings()
             ]
 
-        return reciprocal_rank_fusion([lexical_hits, vector_hits], limit=query.limit)
+            fused = reciprocal_rank_fusion([lexical_hits, vector_hits], limit=query.limit)
+            # Hydrated here, inside the search's own connection, because a
+            # window without its message ids can only be cited as a link to
+            # the channel -- which asks a reader to go and find the claim
+            # themselves, and a citation nobody can check is not a citation.
+            # Only the fused survivors are resolved, so the cost is one
+            # statement per search rather than one per overfetched candidate.
+            return await self._with_message_ids(conn, fused)
+
+    async def _with_message_ids(
+        self, conn: AsyncConnection, hits: Sequence[SearchHit]
+    ) -> Sequence[SearchHit]:
+        """Attach each window's messages, in the order they were said."""
+        if not hits:
+            return hits
+        rows = await conn.execute(
+            sql.WINDOW_MESSAGE_IDS, {"window_ids": [h.window_id for h in hits]}
+        )
+        # The statement orders by (window_id, position), so appending in row
+        # order reconstructs each window's own sequence.
+        by_window: dict[int, list[int]] = {}
+        for r in rows.mappings():
+            by_window.setdefault(cast(int, r["window_id"]), []).append(
+                cast(int, r["message_id"])
+            )
+        return [
+            replace(hit, message_ids=tuple(by_window.get(hit.window_id, ()))) for hit in hits
+        ]
 
     def _hit(self, row: RowMapping, source: RelevanceSource) -> SearchHit:
         return SearchHit(
