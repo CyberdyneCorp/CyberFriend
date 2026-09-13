@@ -15,3 +15,7 @@ venv/
 
 # OS
 .DS_Store
+
+# Never commit key material
+*openai_key.env
+*.key

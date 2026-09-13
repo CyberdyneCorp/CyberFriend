@@ -8,12 +8,35 @@ database is an environment problem, not a defect in the code under test.
 from __future__ import annotations
 
 import os
+import pathlib
 from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+# Optional: a key file outside the repo, so the secret is never copied in.
+# Point OPENAI_KEY_FILE elsewhere, or just export OPENAI_API_KEY.
+_KEY_FILE = os.environ.get(
+    "OPENAI_KEY_FILE",
+    "/Users/leonardoaraujo/work/ingestion-knowledge-graph/openai_key.env",
+)
+
+
+def _load_key_file() -> None:
+    if os.environ.get("OPENAI_API_KEY"):
+        return
+    try:
+        for line in pathlib.Path(_KEY_FILE).read_text().splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "OPENAI_API_KEY" and value.strip():
+                os.environ["OPENAI_API_KEY"] = value.strip().strip("\"'")
+    except OSError:
+        pass
+
+
+_load_key_file()
 
 DB_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -45,3 +68,12 @@ async def clean(engine: AsyncEngine) -> AsyncIterator[AsyncEngine]:
             )
         )
     yield engine
+
+
+@pytest.fixture
+def openai_key() -> str:
+    """Skip tests that would spend money when no key is configured."""
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        pytest.skip("no OPENAI_API_KEY configured")
+    return key
