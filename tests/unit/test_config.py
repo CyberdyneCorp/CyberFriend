@@ -37,3 +37,51 @@ def test_secrets_are_not_stringified() -> None:
     assert SECRET not in str(s.discord_token)
     assert SECRET not in repr(s)
     assert s.discord_token.get_secret_value() == SECRET
+
+
+def test_channel_ids_parse_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The path that actually runs in production.
+
+    Loading via init kwargs bypasses pydantic-settings' env decoding, so an
+    init-only test passes while the deployed process fails to start.
+    """
+    for key, value in {
+        "DISCORD_TOKEN": SECRET,
+        "DISCORD_GUILD_ID": "1",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@h/d",
+        "LLM_API_KEY": "k",
+        "INDEXED_CHANNEL_IDS": "100 200",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    assert Settings(_env_file=None).indexed_channel_ids == {100, 200}  # type: ignore[call-arg]
+
+
+def test_comma_separated_channel_ids_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key, value in {
+        "DISCORD_TOKEN": SECRET,
+        "DISCORD_GUILD_ID": "1",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@h/d",
+        "LLM_API_KEY": "k",
+        "INDEXED_CHANNEL_IDS": "100,200,300",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    assert Settings(_env_file=None).indexed_channel_ids == {100, 200, 300}  # type: ignore[call-arg]
+
+
+def test_missing_channel_ids_from_the_environment_indexes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key, value in {
+        "DISCORD_TOKEN": SECRET,
+        "DISCORD_GUILD_ID": "1",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@h/d",
+        "LLM_API_KEY": "k",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("INDEXED_CHANNEL_IDS", raising=False)
+
+    assert Settings(_env_file=None).indexed_channel_ids == frozenset()  # type: ignore[call-arg]

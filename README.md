@@ -40,10 +40,20 @@ alembic upgrade head
 python -m chatmemory.entrypoints.ingest
 ```
 
-Discord requires the **MESSAGE_CONTENT** privileged intent for this
-application. Since 2026-06-10 the review threshold is 10,000 reachable users
-rather than 100 servers, so for a single internal guild it is a toggle in the
-Developer Portal rather than an application.
+Discord requires **two** privileged intents for this application:
+
+- **MESSAGE_CONTENT** — to read what people actually said.
+- **SERVER MEMBERS** — to enumerate who can read a channel. This is what makes
+  audience scoping exact. Comparing role sets instead would miss per-member
+  channel overwrites, and a member individually denied a channel is precisely
+  the case that turns a public answer into a disclosure.
+
+Since 2026-06-10 the review threshold is 10,000 reachable users rather than
+100 servers, so for a single internal guild both are toggles in the Developer
+Portal rather than an application.
+
+Without the members intent the bot fails closed: the audience resolves to
+empty and public answers cite nothing, rather than silently citing everything.
 
 ## Deployment
 

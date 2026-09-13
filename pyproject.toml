@@ -43,8 +43,14 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-# The core must not know which platform it is serving. See design.md.
-"discord".msg = "domain/ and ports/ must not import platform adapters"
+# The core must not know which platform it is serving. Platform SDKs belong
+# in adapters/ and entrypoints/ only, which are exempted below.
+"discord".msg = "only adapters/ may import a platform SDK; keep domain, ports and app platform-agnostic"
+
+[tool.ruff.lint.per-file-ignores]
+"src/chatmemory/adapters/discord/*" = ["TID251"]
+"src/chatmemory/entrypoints/*" = ["TID251"]
+"tests/*" = ["TID251"]
 
 [tool.mypy]
 python_version = "3.11"

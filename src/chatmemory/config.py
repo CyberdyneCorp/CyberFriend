@@ -7,9 +7,10 @@ same image runs against OpenAI, a LiteLLM proxy, or a self-hosted gateway.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -24,7 +25,12 @@ class Settings(BaseSettings):
     # Channels to index. Empty means "none": indexing is opt-in, because the
     # corpus is a permanent record of what people said and defaulting it to
     # "everything the bot can see" is not a decision code should make.
-    indexed_channel_ids: frozenset[int] = frozenset()
+    #
+    # NoDecode is required: without it pydantic-settings JSON-decodes complex
+    # types straight from the environment, before any validator runs, so
+    # `INDEXED_CHANNEL_IDS="100 200"` fails to parse rather than reaching the
+    # splitter below.
+    indexed_channel_ids: Annotated[frozenset[int], NoDecode] = frozenset()
 
     # --- Storage -------------------------------------------------------
     database_url: SecretStr

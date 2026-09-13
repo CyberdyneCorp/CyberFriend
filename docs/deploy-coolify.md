@@ -31,7 +31,11 @@ Two services come from one image:
 | Service  | Role                                   | Domain |
 |----------|----------------------------------------|--------|
 | `ingest` | Discord gateway client plus workers    | none   |
+| `bot`    | Conversational surface (mentions, DMs, `/ask`) | none |
 | `mcp`    | HTTP retrieval interface               | FQDN   |
+
+`bot` and `ingest` each hold their own gateway connection and each run one
+replica.
 
 Assign a domain to `mcp` only. `ingest` must not be publicly reachable; it has
 a health port for Coolify's check and nothing else.
@@ -78,9 +82,16 @@ Consequences worth being explicit about:
 
 - Confirm the Cyberdyne server reaches `api.openai.com`. Every indexed message
   is embedded through it, so no reachability means no retrieval.
-- Confirm the MESSAGE_CONTENT intent is enabled in the Discord Developer
-  Portal. Since 2026-06-10 the threshold for review is 10,000 reachable users
-  rather than 100 servers, so for one internal guild this is a toggle.
+- Confirm **both** privileged intents are enabled in the Discord Developer
+  Portal: **MESSAGE_CONTENT** (to read messages) and **SERVER MEMBERS** (to
+  enumerate who can read a channel, which is what makes audience scoping
+  exact rather than an approximation over role sets). Since 2026-06-10 the
+  threshold for review is 10,000 reachable users rather than 100 servers, so
+  for one internal guild both are toggles.
+
+  Without SERVER MEMBERS the bot fails closed rather than leaking: audiences
+  resolve to empty and public answers cite nothing. If the bot answers in a
+  channel but never cites anything, check this first.
 - Invite the bot with `View Channel` and `Read Message History` on the channels
   to be indexed, and nothing more. It never needs to post in them.
 
