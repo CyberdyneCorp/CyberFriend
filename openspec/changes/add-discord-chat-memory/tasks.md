@@ -24,7 +24,7 @@
 - [x] 3.2 Add `deleted_at` tombstone columns and partial indexes excluding tombstoned rows
 - [x] 3.3 Add the `tsvector` column and GIN index for lexical search
 - [x] 3.4 Add the `vector` column (dimension from config) and its ANN index
-- [ ] 3.5 Implement the Postgres `Store` adapter with idempotent upserts keyed on **platform message ID + edit timestamp only** — never a content hash compared across parsed/raw domains
+- [x] 3.5 Implement the Postgres `Store` adapter with idempotent upserts keyed on **platform message ID + edit timestamp only** — never a content hash compared across parsed/raw domains
 - [x] 3.6 Denormalise `channel_id` and timestamp onto `window` rows so the permission predicate constrains the index scan rather than filtering its output
 - [ ] 3.7 Set `hnsw.iterative_scan = relaxed_order` on the session/connection; it defaults to `off` and guarantees under-return with a selective filter
 - [ ] 3.8 Test: ingesting the same message twice produces exactly one row
@@ -34,21 +34,21 @@
 - [ ] 4.1 Implement the gateway client with the `MESSAGE_CONTENT` intent and live `on_message` capture
 - [ ] 4.2 Implement canonical identity resolution — create-or-attach a person per platform account
 - [ ] 4.3 Implement mention capture into `message_mention`
-- [ ] 4.4 Implement edit handling so stored content becomes the edited text
-- [ ] 4.5 Implement delete handling, writing tombstones to the message and its windows
-- [ ] 4.6 Implement paginated backfill, newest-first, with per-channel watermarks
+- [x] 4.4 Implement edit handling so stored content becomes the edited text
+- [x] 4.5 Implement delete handling, writing tombstones to the message and its windows
+- [x] 4.6 Implement paginated backfill, newest-first, with per-channel watermarks
 - [ ] 4.7 Handle 429s by honouring the platform's retry interval without losing backfill position
 - [ ] 4.8 Implement the periodic reconciliation pass that catches edits and deletes missed while offline
-- [ ] 4.9 Enforce indexing scope: skip non-indexed channels, and purge a channel's content when it leaves scope
-- [ ] 4.10 Test: interrupt a backfill mid-channel, restart, assert no gaps and no duplicates
-- [ ] 4.11 Test: delete a message, assert its content is unreachable through every retrieval path
+- [x] 4.9 Enforce indexing scope: skip non-indexed channels, and purge a channel's content when it leaves scope
+- [x] 4.10 Test: interrupt a backfill mid-channel, restart, assert no gaps and no duplicates
+- [x] 4.11 Test: delete a message, assert its content is unreachable through every retrieval path
 
 ## 5. Windowing and embeddings
 
 - [x] 5.1 Implement window construction — thread-aware, with a configurable message span and silence-gap split, sized in **tokens using the embedding model's tokenizer** (not characters)
-- [ ] 5.2 Implement incremental rebuild so an edited or deleted message re-forms only its affected windows
+- [x] 5.2 Implement incremental rebuild so an edited or deleted message re-forms only its affected windows
 - [x] 5.3 Implement the OpenAI-compatible `EmbeddingClient` against the configured `base_url`, with batching and retry
-- [ ] 5.4 Implement the embedding backlog worker over windows lacking a current embedding
+- [x] 5.4 Implement the embedding backlog worker over windows lacking a current embedding
 - [ ] 5.5 Test: a window containing a deleted message excludes that message's text once rebuilt
 
 ## 6. ACL resolution
@@ -61,15 +61,15 @@
 
 ## 7. Retrieval
 
-- [ ] 7.1 Implement lexical search over the `tsvector` index, viewer- and time-filtered in the same query
-- [ ] 7.2 Implement vector search over window embeddings, viewer- and time-filtered in the same query
+- [x] 7.1 Implement lexical search over the `tsvector` index, viewer- and time-filtered in the same query
+- [x] 7.2 Implement vector search over window embeddings, viewer- and time-filtered in the same query
 - [x] 7.3 Implement Reciprocal Rank Fusion over both result sets
 - [x] 7.4 Tag every score with the method that produced it (`relevance_source`); RRF's 0.016 means *first place*, and any consumer applying a threshold must check provenance first
-- [ ] 7.5 Implement citation construction producing resolvable Discord message links
+- [x] 7.5 Implement citation construction producing resolvable Discord message links
 - [ ] 7.6 Implement `thread_context` retrieval around a cited message, viewer-filtered
 - [ ] 7.7 **Test the core invariant at the repository layer**: a viewer who cannot read a channel gets zero rows from it even when the query terms match it exactly
 - [ ] 7.8 Test: a time-bounded query returns nothing rather than substituting out-of-range results
-- [ ] 7.9 **Test under-return**: a viewer restricted to a small channel subset requesting N results receives N — assert the *count*, since a membership-only assertion passes while the system silently under-returns
+- [x] 7.9 **Test under-return**: a viewer restricted to a small channel subset requesting N results receives N — assert the *count*, since a membership-only assertion passes while the system silently under-returns
 - [ ] 7.10 Build a golden set of ~20 questions over a seeded corpus and score recall@10 as the tuning harness for window size and RRF weights
 
 ## 8. MCP server
