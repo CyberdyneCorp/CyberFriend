@@ -54,7 +54,11 @@ class CyberFriendClient(discord.Client):
         # than an approximation over role sets.
         intents.message_content = True
         intents.members = True
-        super().__init__(intents=intents)
+        # Answers quote text written by anyone in the server. Without this,
+        # an excerpt containing @everyone pings the whole server using the
+        # bot's permissions -- the poster needs no mention permission of
+        # their own, only the bot's.
+        super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
         self._asks = asks
         self._guild_id = guild_id
         self.tree = app_commands.CommandTree(self)

@@ -57,8 +57,13 @@ INSERT INTO document_entry (
     CAST(:attachment_id AS bigint), :source_url, :entered_at
 )
 ON CONFLICT (document_id, message_id, source_url) DO UPDATE SET
-    -- Re-posting a link that was withdrawn is a fresh act of sharing.
-    deleted_at = NULL,
+    -- deleted_at is deliberately NOT reset. The conflict key includes
+    -- message_id, so this is the SAME share being re-recorded, not a new
+    -- one -- re-capture after a backfill or reconciliation pass would
+    -- otherwise un-withdraw a document whose message was deleted, putting
+    -- retracted content back into search. A genuinely fresh share arrives
+    -- with a different message_id and inserts its own live row.
+    deleted_at = document_entry.deleted_at,
     entered_at = EXCLUDED.entered_at
 """)
 

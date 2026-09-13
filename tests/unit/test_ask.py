@@ -69,13 +69,20 @@ def build(answers: object | None = None) -> tuple[AskService, RecordingAnswerSer
 
 
 async def test_public_answer_drops_evidence_the_room_cannot_read() -> None:
-    """A lead asking in #general must not surface #leadership there."""
+    """A lead asking in #general must not surface #leadership there.
+
+    The recording service here deliberately cites from the asker's channels
+    rather than the audience's, simulating an upstream scoping failure. The
+    delivery guard must then suppress the answer entirely -- no citation from
+    #leadership, and no prose derived from it either.
+    """
     asks, _ = build()
     outcome = await asks.ask(
         AskRequest(person(LEAD), "what happened?", ch(GENERAL), location_id=GENERAL)
     )
     assert outcome.scoped is not None
-    assert outcome.scoped.answer.source_channels == {ch(GENERAL)}
+    assert ch(LEADERSHIP) not in outcome.scoped.answer.source_channels
+    assert outcome.scoped.answer.source_channels == frozenset()
     assert outcome.scoped.should_notify_asker
     assert outcome.scoped.withheld_from_audience == {ch(LEADERSHIP)}
 

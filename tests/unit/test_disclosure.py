@@ -30,14 +30,22 @@ def viewer(readable: frozenset[ChannelRef]) -> Viewer:
     return Viewer(person=ASKER, visible_channels=readable)
 
 
-def test_citations_outside_the_audience_are_dropped() -> None:
+def test_out_of_audience_evidence_suppresses_the_whole_answer() -> None:
+    """Dropping the citation alone is not enough.
+
+    `text` was synthesized from evidence that included the dropped source, so
+    trimming citations would ship a paraphrase of private content with its
+    audit trail removed. The service is meant to scope at source; this guard
+    firing means it did not, so the answer is suppressed rather than trimmed.
+    """
     answer = Answer("...", citations=(cite(GENERAL, 1), cite(LEADERSHIP, 2)))
     scoped = enforce_audience(
         answer,
         public_audience(frozenset({GENERAL})),
         viewer(frozenset({GENERAL, LEADERSHIP})),
     )
-    assert scoped.answer.source_channels == {GENERAL}
+    assert scoped.answer.source_channels == frozenset()
+    assert scoped.answer.text != "..."
 
 
 def test_asker_is_notified_about_evidence_they_could_have_seen() -> None:

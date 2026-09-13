@@ -146,6 +146,8 @@ class GatewayEventHandler:
         if raw.author.bot:
             return
         message = to_message(raw)
+        if message is None:
+            return
         if not self._sink.is_indexed(message.channel):
             # Out of scope: never buffered, never stored. Indexing is opt-in
             # because the corpus is a permanent record of what people said.
@@ -156,6 +158,8 @@ class GatewayEventHandler:
         if after.author.bot:
             return
         message = to_message(after)
+        if message is None:
+            return
         if not self._sink.is_indexed(message.channel):
             return
         await self._sink.handle_edit(message)

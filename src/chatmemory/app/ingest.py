@@ -9,6 +9,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Protocol
 
 import structlog
 
@@ -19,6 +20,17 @@ from chatmemory.ports.sources import ChatSource, EmbeddingClient
 from chatmemory.ports.store import Store
 
 log = structlog.get_logger()
+
+
+class DocumentSink(Protocol):
+    """The document corpus's view of a deletion.
+
+    Documents live in their own tables, so tombstoning a message does not
+    withdraw the attachment it carried. Without this the message disappears
+    while its uploaded PDF stays searchable.
+    """
+
+    async def handle_message_deleted(self, message_id: int, at: datetime | None = None) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,12 +48,14 @@ class IngestService:
         windows: WindowBuilder,
         indexed_channels: frozenset[int],
         page_size: int = 100,
+        documents: DocumentSink | None = None,
     ) -> None:
         self._source = source
         self._store = store
         self._windows = windows
         self._indexed = indexed_channels
         self._page_size = page_size
+        self._documents = documents
 
     def is_indexed(self, channel: ChannelRef) -> bool:
         return channel.platform_channel_id in self._indexed
@@ -60,7 +74,16 @@ class IngestService:
             await self._store.upsert_messages([message])
 
     async def handle_delete(self, platform_message_id: int, at: datetime | None = None) -> None:
-        await self._store.tombstone_message(platform_message_id, at or datetime.now(UTC))
+        when = at or datetime.now(UTC)
+        await self._store.tombstone_message(platform_message_id, when)
+        if self._documents is not None:
+            # A deleted message must take its attachments with it. These live
+            # in separate tables, so tombstoning the message alone leaves the
+            # uploaded document fully searchable.
+            withdrawn = await self._documents.handle_message_deleted(platform_message_id, when)
+            if withdrawn:
+                log.info("ingest.documents_withdrawn", message_id=platform_message_id,
+                         count=withdrawn)
 
     async def backfill_page(self, channel: ChannelRef) -> BackfillReport:
         """Import one page of history, oldest-ward from the cursor.

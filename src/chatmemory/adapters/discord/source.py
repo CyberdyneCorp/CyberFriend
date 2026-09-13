@@ -75,24 +75,63 @@ class RawMessage(Protocol):
     reference: RawReference | None
 
 
-def channel_of(raw: RawMessage) -> tuple[ChannelRef, int | None]:
+# Discord channel type ids for threads. A private thread is readable only by
+# members explicitly added to it, regardless of who can read its parent.
+PRIVATE_THREAD_TYPE = 12
+
+
+def is_private_thread(channel: RawChannel) -> bool:
+    """Whether this channel's membership is narrower than its parent's.
+
+    Checked three ways because discord.py exposes it differently depending on
+    the object: `Thread.is_private()`, a `type` enum with value 12, or an
+    `invitable`/`locked` pair on partials. Any signal of privacy counts --
+    the cost of a false positive is one un-indexed thread; the cost of a
+    false negative is disclosing a private conversation to everyone who can
+    read the parent channel.
+    """
+    is_private = getattr(channel, "is_private", None)
+    if callable(is_private):
+        try:
+            if bool(is_private()):
+                return True
+        except Exception:  # noqa: BLE001 - a partial object may not support it
+            return True
+    channel_type = getattr(channel, "type", None)
+    type_value = getattr(channel_type, "value", channel_type)
+    return type_value == PRIVATE_THREAD_TYPE
+
+
+def channel_of(raw: RawMessage) -> tuple[ChannelRef | None, int | None]:
     """The channel a message is indexed under, and the thread it sits in.
 
-    A message posted in a thread reports the thread as its channel. It is
-    indexed under the thread's *parent* instead, because both indexing scope
-    and read permission are defined on the parent -- indexing by thread id
-    would silently drop every threaded message from a channel in scope, and
-    would make the permission predicate check a channel nobody configured.
+    A message posted in a *public* thread is indexed under the thread's
+    parent, because scope and read permission are both defined there -- and
+    indexing by thread id would silently drop every threaded message from a
+    channel that is in scope.
+
+    A message in a *private* thread returns None and is not indexed at all.
+    Its readers are the people added to that thread, which is a strictly
+    narrower set than the parent's readers, so filing it under the parent
+    would make it retrievable by everyone who can read the parent. Indexing
+    it under its own id is not a fix either: the permission resolver derives
+    visibility from channel overwrites, which do not describe thread
+    membership, so it would still resolve to the parent's audience.
     """
     channel = raw.channel
     parent_id = cast("int | None", getattr(channel, "parent_id", None))
     if parent_id is not None:
+        if is_private_thread(channel):
+            return None, channel.id
         return ChannelRef(PLATFORM, parent_id), channel.id
     return ChannelRef(PLATFORM, channel.id), None
 
 
-def to_message(raw: RawMessage) -> Message:
+def to_message(raw: RawMessage) -> Message | None:
+    """Convert a platform message, or None when it must not be indexed."""
     channel, thread_id = channel_of(raw)
+    if channel is None:
+        return None
     reference = raw.reference
     return Message(
         platform_message_id=raw.id,
@@ -115,7 +154,7 @@ def is_ingestable(raw: RawMessage) -> bool:
     Our own answers quote the corpus; ingesting them feeds retrieval its own
     output, which compounds every time someone asks a similar question.
     """
-    return not raw.author.bot
+    return not raw.author.bot and channel_of(raw)[0] is not None
 
 
 def retry_after(error: BaseException) -> float | None:
@@ -220,7 +259,8 @@ class DiscordChatSource:
                 )
                 await self._sleep(wait)
                 continue
-            return [to_message(raw) for raw in page if is_ingestable(raw)]
+            converted = (to_message(raw) for raw in page if is_ingestable(raw))
+            return [m for m in converted if m is not None]
 
     def publish(self, message: Message) -> None:
         """Hand a live message to the stream. Called from the gateway handler."""
