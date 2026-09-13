@@ -40,7 +40,7 @@ from chatmemory.config import Settings
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.entrypoints.bot import build_bot
-from chatmemory.entrypoints.mcp_server import AclClient, build_acl
+from chatmemory.entrypoints.mcp_server import AclClient, GatewayLiveness, build_acl
 from chatmemory.ports.answers import Answer, Question
 from tests.unit.fakes import FakeChannel, FakeGuild, FakeMember
 
@@ -111,6 +111,9 @@ async def test_mcp_revocation_lands_on_the_next_query() -> None:
     """
     guild = FakeGuild(members=[FakeMember(1, INFRA_ROLE)], text_channels=channels())
     graph = build_acl(settings())
+    # The gateway refuses its retained cache until connected, so a test
+    # exercising invalidation has to say the connection is up.
+    graph.liveness.mark_live()
     graph.client.get_guild = lambda _id: guild  # type: ignore[assignment,method-assign,return-value]
 
     assert graph.caches.live, "the ACL connection must be an invalidation source"
@@ -132,6 +135,9 @@ async def test_mcp_overwrite_change_lands_on_the_next_query() -> None:
     """A channel edit moves an unknown set of people, so everything goes."""
     guild = FakeGuild(members=[FakeMember(1, INFRA_ROLE)], text_channels=channels())
     graph = build_acl(settings())
+    # The gateway refuses its retained cache until connected, so a test
+    # exercising invalidation has to say the connection is up.
+    graph.liveness.mark_live()
     graph.client.get_guild = lambda _id: guild  # type: ignore[assignment,method-assign,return-value]
 
     assert ch(INFRA) in (await graph.resolver.resolve_viewer(person(1))).visible_channels
@@ -284,7 +290,7 @@ async def test_every_permission_event_reaches_the_registered_caches() -> None:
     cache = RecordingCache()
     caches = PermissionCaches()
     caches.register(cache)
-    client = AclClient(caches)
+    client = AclClient(caches, GatewayLiveness())
 
     await client.on_member_join(FakeMember(1))  # type: ignore[attr-defined]
     await client.on_member_remove(FakeMember(2))  # type: ignore[arg-type]
@@ -353,7 +359,7 @@ def test_both_answering_entrypoints_bind_their_caches_to_their_client() -> None:
     """A process that answers questions must be an invalidation source."""
     for entrypoint, expected in (
         ("bot.py", ("LiveGuild(", "attach_permission_listeners(")),
-        ("mcp_server.py", ("PermissionCaches()", "AclClient(caches)")),
+        ("mcp_server.py", ("PermissionCaches()", "AclClient(caches, liveness)")),
     ):
         source = (SRC / "entrypoints" / entrypoint).read_text()
         for fragment in expected:

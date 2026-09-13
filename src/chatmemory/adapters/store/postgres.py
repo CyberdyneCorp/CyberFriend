@@ -124,8 +124,20 @@ class PostgresStore:
             person_id = await self._person_id(conn, mentioned)
             await conn.execute(
                 text(
+                    # Conditional on the message actually existing. The
+                    # opt-out trigger drops an excluded author's row by
+                    # returning NULL -- silently, by design, so one opted-out
+                    # person cannot fail a whole backfill page. An
+                    # unconditional insert here then violated the foreign key
+                    # and aborted the transaction; because reconciliation
+                    # applies edits before deletions, that abort permanently
+                    # killed deletion repair for the channel. Guarding on
+                    # existence covers every reason the row may be absent,
+                    # rather than just this one.
                     "INSERT INTO message_mention (message_id, person_id) "
-                    "VALUES (:m, :p) ON CONFLICT DO NOTHING"
+                    "SELECT :m, :p WHERE EXISTS "
+                    "(SELECT 1 FROM message WHERE id = :m) "
+                    "ON CONFLICT DO NOTHING"
                 ),
                 {"m": message.platform_message_id, "p": person_id},
             )

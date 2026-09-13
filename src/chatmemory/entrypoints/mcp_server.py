@@ -64,14 +64,24 @@ class AclClient(discord.Client):
     notice that the answer changed is worse than none.
     """
 
-    def __init__(self, caches: PermissionCaches) -> None:
+    def __init__(self, caches: PermissionCaches, liveness: GatewayLiveness) -> None:
         intents = discord.Intents.default()
         # Members, because per-member channel overwrites decide readability
         # and a role-set comparison gets exactly those cases wrong. It is also
         # what makes on_member_update arrive at all.
         intents.members = True
         super().__init__(intents=intents)
+        self._liveness = liveness
         attach_permission_listeners(self, caches)
+
+    async def on_ready(self) -> None:
+        self._liveness.mark_live()
+
+    async def on_disconnect(self) -> None:
+        # Resumable blips land here too. The cost of treating one as stale is
+        # a few refused queries; the cost of not is serving a revoked
+        # permission from a cache that stopped updating.
+        self._liveness.mark_dead("disconnected")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,14 +96,47 @@ class AclGraph:
     client: AclClient
     caches: PermissionCaches
     resolver: CachingAclResolver
+    liveness: GatewayLiveness
+
+
+class GatewayLiveness:
+    """Whether the permission source is currently authoritative.
+
+    discord.py keeps its guild cache after the connection dies, so
+    `get_guild` goes on returning a fully populated guild whose permissions
+    stopped updating at the moment of the failure. Reading it is therefore
+    not the fail-closed direction it looks like: a role revoked after the
+    gateway died would be served as still granted, indefinitely.
+    """
+
+    def __init__(self) -> None:
+        self._live = False
+
+    @property
+    def live(self) -> bool:
+        return self._live
+
+    def mark_live(self) -> None:
+        self._live = True
+
+    def mark_dead(self, reason: str) -> None:
+        if self._live:
+            log.error("mcp.permissions_stale", reason=reason)
+        self._live = False
 
 
 def build_acl(settings: Settings) -> AclGraph:
     """The gateway connection and the viewer cache that connection invalidates."""
     caches = PermissionCaches()
-    client = AclClient(caches)
+    liveness = GatewayLiveness()
+    client = AclClient(caches, liveness)
 
     def guild() -> _Guild | None:
+        if not liveness.live:
+            # Refuse the stale cache rather than serving it. Every viewer
+            # resolves to an empty channel set, which is the direction this
+            # is allowed to fail in.
+            return None
         found = client.get_guild(settings.discord_guild_id)
         # discord.Guild satisfies `_Guild` in practice but not structurally --
         # `permissions_for` takes Member | Role rather than any `_Member`. The
@@ -103,7 +146,7 @@ def build_acl(settings: Settings) -> AclGraph:
     resolver = CachingAclResolver(
         DiscordAclResolver(guild, settings.indexed_channel_ids), invalidation=caches
     )
-    return AclGraph(client=client, caches=caches, resolver=resolver)
+    return AclGraph(client=client, caches=caches, resolver=resolver, liveness=liveness)
 
 
 def allowed_hosts() -> list[str]:
@@ -118,7 +161,7 @@ def allowed_hosts() -> list[str]:
 
 
 def build_readiness(
-    engine: AsyncEngine, client: discord.Client, state: HealthState
+    engine: AsyncEngine, liveness: GatewayLiveness, state: HealthState
 ) -> ReadinessCheck:
     """Ready means: the corpus is reachable and permissions are resolvable.
 
@@ -136,7 +179,10 @@ def build_readiness(
             log.warning("mcp.database_unreachable", error=type(exc).__name__)
             database_ok = False
 
-        guild_ok = bool(client.guilds)
+        # Deliberately NOT `bool(client.guilds)`: discord.py retains its
+        # guild cache after the connection dies, so that stays true forever
+        # and the probe reported healthy while permissions were frozen.
+        guild_ok = liveness.live
         state.gateway_connected = guild_ok
         state.details["database_reachable"] = database_ok
         return database_ok and guild_ok
@@ -154,17 +200,33 @@ def _search_backend(settings: Settings, engine: AsyncEngine) -> SearchBackend:
     return HybridSearch(engine, embeddings)
 
 
-async def _run_gateway(client: discord.Client, token: str) -> None:
-    """Keep the permission cache warm without being able to take the API down.
+GATEWAY_RETRY_SECONDS = 5.0
+GATEWAY_RETRY_MAX = 300.0
 
-    A gateway failure degrades every viewer to an empty channel set, which is
-    the fail-closed direction. Crashing the HTTP service instead would turn a
-    Discord outage into an outage of the readiness probe as well.
+
+async def _run_gateway(
+    client: discord.Client, token: str, liveness: GatewayLiveness
+) -> None:
+    """Keep the permission source current, and reconnect when it fails.
+
+    Returning after one failure left the endpoint serving queries against a
+    permanently frozen permission snapshot while reporting itself healthy.
+    Crashing instead would turn a Discord blip into an outage, so it retries
+    with backoff -- and marks permissions stale for as long as it is down, so
+    resolution fails closed rather than answering from the retained cache.
     """
-    try:
-        await client.start(token)
-    except Exception:
-        log.exception("mcp.gateway_failed")
+    delay = GATEWAY_RETRY_SECONDS
+    while True:
+        try:
+            await client.start(token)
+            liveness.mark_dead("gateway returned")
+        except Exception as exc:  # noqa: BLE001 - any failure means stale
+            liveness.mark_dead(type(exc).__name__)
+            log.exception("mcp.gateway_failed", retry_in=delay)
+        if not client.is_closed():
+            await client.close()
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, GATEWAY_RETRY_MAX)
 
 
 async def main() -> None:
@@ -186,7 +248,7 @@ async def main() -> None:
         authenticator=authenticator,
         guild_id=settings.discord_guild_id,
         state=state,
-        readiness=build_readiness(engine, client, state),
+        readiness=build_readiness(engine, graph.liveness, state),
         allowed_hosts=allowed_hosts(),
     )
 
@@ -205,7 +267,7 @@ async def main() -> None:
         app, host="0.0.0.0", port=settings.mcp_port, log_level="warning"
     )
     await asyncio.gather(
-        _run_gateway(client, settings.discord_token.get_secret_value()),
+        _run_gateway(client, settings.discord_token.get_secret_value(), graph.liveness),
         uvicorn.Server(config).serve(),
     )
 

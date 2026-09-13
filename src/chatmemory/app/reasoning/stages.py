@@ -59,6 +59,23 @@ def neutralise_fence(text: str) -> str:
     return _FENCE_LIKE.sub(_FENCE_REPLACEMENT, text)
 
 
+MAX_SUGGESTION_CHARS = 300
+
+
+def as_untrusted(text: str, limit: int = MAX_EVIDENCE_CHARS) -> str:
+    """Defang a string that is about to be interpolated outside the fence.
+
+    The fence protects evidence bodies, but everything rendered *around* it --
+    the question, the query, a model-suggested reformulation -- lands in the
+    prompt raw. From the second corrective round onward the query is itself
+    content-derived: the critic reads attacker-controlled evidence and
+    returns `suggested_query`, which becomes the next round's query text. So
+    a payload can be laundered out of the fenced body, through the schema
+    field, and back in above the fence header where nothing neutralises it.
+    """
+    return neutralise_fence(text[:limit])
+
+
 def open_delimiter(item: Evidence, fence_id: str) -> str:
     return (
         f"<<<EVIDENCE window_id={item.window_id} fence={fence_id} "
@@ -179,11 +196,18 @@ class ModelCritic:
     ) -> Assessment:
         completion = await self._model.complete_json(
             CRITIC_SYSTEM,
-            f"Question: {question}\nQuery issued: {query.text}\n\n{fence(evidence)}",
+            f"Question: {as_untrusted(question)}\n"
+            f"Query issued: {as_untrusted(query.text, MAX_SUGGESTION_CHARS)}\n\n"
+            f"{fence(evidence)}",
             CRITIC_SCHEMA,
             "evidence_verdict",
         )
-        suggestion = _as_str(completion.data, "suggested_query").strip()
+        # Neutralised and capped at the boundary it crosses, not at the one
+        # it is later rendered into: this value leaves a model that has read
+        # untrusted evidence, so it is untrusted from here on.
+        suggestion = as_untrusted(
+            _as_str(completion.data, "suggested_query").strip(), MAX_SUGGESTION_CHARS
+        )
         return Assessment(
             verdict=_as_verdict(completion.data),
             score=_as_score(completion.data, "score"),
@@ -223,7 +247,7 @@ class ModelSynthesizer:
     async def synthesize(self, question: str, evidence: Sequence[Evidence]) -> Grounded:
         completion = await self._model.complete_json(
             SYNTHESIS_SYSTEM,
-            f"Question: {question}\n\n{fence(evidence)}",
+            f"Question: {as_untrusted(question)}\n\n{fence(evidence)}",
             SYNTHESIS_SCHEMA,
             "grounded_answer",
         )
