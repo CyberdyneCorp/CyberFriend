@@ -18,7 +18,7 @@ import pytest
 
 import chatmemory
 from chatmemory.domain import search as search_module
-from chatmemory.ports.store import SearchBackend
+from chatmemory.ports.store import SearchBackend, Store
 
 SRC = Path(chatmemory.__file__).parent
 PLATFORM_PACKAGES = {"discord", "openai", "asyncpg", "sqlalchemy", "mcp"}
@@ -111,3 +111,34 @@ def test_every_module_is_importable() -> None:
     """Catches a broken module that no test happens to import."""
     for info in pkgutil.walk_packages(chatmemory.__path__, "chatmemory."):
         __import__(info.name)
+
+
+def test_the_postgres_store_satisfies_the_whole_store_port() -> None:
+    """A partially implemented store is silent, not loud.
+
+    The entrypoint probed for the window methods, did not find them, logged
+    once and started anyway: messages were captured, nothing was ever
+    windowed or embedded, retrieval returned nothing forever, and every
+    health check stayed green. mypy enforces this at the wiring site; this
+    states it where the reason is written down.
+    """
+    from chatmemory.adapters.store.postgres import PostgresStore
+
+    required = {
+        name
+        for name, member in inspect.getmembers(Store, inspect.isfunction)
+        if not name.startswith("_")
+    }
+    missing = {n for n in required if not callable(getattr(PostgresStore, n, None))}
+    assert not missing, f"PostgresStore does not implement its own port: {sorted(missing)}"
+
+
+def test_the_ingest_entrypoint_starts_windowing_unconditionally() -> None:
+    """A process that silently does not embed is worse than one that fails."""
+    source = (SRC / "entrypoints" / "ingest.py").read_text()
+    for job in ("window_loop(", "EmbeddingWorker("):
+        assert job in source
+    for probe in ('"messages_without_window"', '"windows_missing_embeddings"'):
+        assert probe not in source, (
+            "windowing and embedding must not be conditional on a runtime probe"
+        )

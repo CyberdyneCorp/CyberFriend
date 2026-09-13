@@ -31,7 +31,7 @@ from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.config import Settings, get_settings
 from chatmemory.health import HealthState, ReadinessCheck
-from chatmemory.mcp.auth import Authenticator, PostgresTokenStore, ensure_token_schema
+from chatmemory.mcp.auth import Authenticator, PostgresTokenStore
 from chatmemory.mcp.server import build_app
 from chatmemory.ports.store import SearchBackend
 
@@ -121,8 +121,10 @@ async def main() -> None:
     log_setup.configure()
     settings = get_settings()
 
+    # No schema creation here: `mcp_token` is migration 0005's, and a service
+    # that creates its own tables hides an unmigrated database until the first
+    # query against a table it did not think to create.
     engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
-    await ensure_token_schema(engine)
 
     client = AclClient()
 

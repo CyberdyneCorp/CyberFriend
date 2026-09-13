@@ -35,6 +35,7 @@ from chatmemory.app.reasoning.gate import Calibration, RelevanceGate
 from chatmemory.app.reasoning.loop import ReasoningLoop
 from chatmemory.app.reasoning.policy import Action, CorrectivePolicy, PolicyConfig, action_for
 from chatmemory.app.reasoning.ports import RetrievalResult, RetrievalTool
+from chatmemory.app.reasoning.retrieval import CorpusRetrieval, discord_urls
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.verdicts import Assessment, Verdict
 
@@ -46,6 +47,7 @@ __all__ = [
     "BudgetLedger",
     "Calibration",
     "ConfigurationError",
+    "CorpusRetrieval",
     "CorrectiveDriver",
     "CorrectivePolicy",
     "Decision",
@@ -68,4 +70,5 @@ __all__ = [
     "Verdict",
     "action_for",
     "build_answer_service",
+    "discord_urls",
 ]

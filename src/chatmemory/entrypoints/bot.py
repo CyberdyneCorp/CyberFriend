@@ -2,6 +2,12 @@
 
 Runs the conversational surface. Ingestion is a separate process; this one
 only answers questions.
+
+Nothing is wired here: the object graph comes from `composition`, which is
+also where the two checks that can refuse the deployment live. That ordering
+matters -- a model that cannot honour a response schema, or an embedding
+model whose vectors are the wrong width, stops this process before it
+identifies to the gateway rather than after people start asking it things.
 """
 
 from __future__ import annotations
@@ -12,15 +18,9 @@ from typing import cast
 import structlog
 
 from chatmemory import logging as log_setup
-from chatmemory.adapters.discord.acl import (
-    DiscordAclResolver,
-    DiscordAudienceResolver,
-    _Guild,
-)
+from chatmemory.adapters.discord.acl import _Guild
 from chatmemory.adapters.discord.bot import CyberFriendClient
-from chatmemory.app.ask import AskService, StubAnswerService
-from chatmemory.app.conversation import ConversationStore
-from chatmemory.app.limits import RateLimiter
+from chatmemory.composition import build_answer_stack, build_ask_service
 from chatmemory.config import get_settings
 from chatmemory.health import HealthState, spawn
 
@@ -48,14 +48,8 @@ async def main() -> None:
         # against fakes, not to re-describe discord.py's type hierarchy.
         return cast(_Guild | None, client.get_guild(settings.discord_guild_id))
 
-    indexed = settings.indexed_channel_ids
-    asks = AskService(
-        acl=DiscordAclResolver(guild, indexed),
-        audiences=DiscordAudienceResolver(guild, indexed),
-        answers=StubAnswerService(),
-        limiter=RateLimiter(),
-        conversations=ConversationStore(),
-    )
+    stack = await build_answer_stack(settings)
+    asks = build_ask_service(settings, guild, stack.answers)
 
     client = CyberFriendClient(asks, settings.discord_guild_id)
 
@@ -67,6 +61,7 @@ async def main() -> None:
 
     client.on_ready = on_ready  # type: ignore[method-assign]
 
+    indexed = settings.indexed_channel_ids
     log.info("bot.starting", guild_id=settings.discord_guild_id, indexed=len(indexed))
     if not indexed:
         log.warning("bot.no_indexed_channels", hint="set INDEXED_CHANNEL_IDS")

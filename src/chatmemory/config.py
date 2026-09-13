@@ -42,6 +42,25 @@ class Settings(BaseSettings):
     # Recorded here and in the schema: changing it is a reindex, not a swap.
     embedding_dimensions: int = 1536
 
+    # --- Reasoning -----------------------------------------------------
+    # The answering model: it judges evidence, plans and writes, so it is the
+    # one that has to honour a response schema. What it provides is checked
+    # against the stages the bot enables before the process serves anyone.
+    chat_model: str = "gpt-4o"
+    # The cheap handle on the same provider. Extraction and per-candidate
+    # scoring run over traffic rather than over questions, so a frontier
+    # model there is a standing bill nobody asked for.
+    extraction_model: str = "gpt-4o-mini"
+    # What the endpoint behind LLM_BASE_URL actually does, space- or
+    # comma-separated. Empty means "whatever is known about this model name",
+    # which for an unrecognised name is chat and nothing else: a self-hosted
+    # stack must declare its own capabilities, because a model of the same
+    # name served elsewhere may not behave the same way.
+    #
+    # NoDecode for the same reason as indexed_channel_ids: without it
+    # pydantic-settings JSON-decodes the value before any validator runs.
+    chat_model_capabilities: Annotated[frozenset[str], NoDecode] = frozenset()
+
     # --- Windowing -----------------------------------------------------
     # Guesses until measured against a real corpus; see design.md.
     window_max_messages: int = 10
@@ -57,6 +76,13 @@ class Settings(BaseSettings):
     def _split_channel_ids(cls, v: object) -> object:
         if isinstance(v, str):
             return frozenset(int(p) for p in v.replace(",", " ").split())
+        return v
+
+    @field_validator("chat_model_capabilities", mode="before")
+    @classmethod
+    def _split_capabilities(cls, v: object) -> object:
+        if isinstance(v, str):
+            return frozenset(p for p in v.replace(",", " ").split())
         return v
 
     @field_validator("embedding_dimensions")

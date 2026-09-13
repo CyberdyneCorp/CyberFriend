@@ -168,6 +168,13 @@ async def window_loop(
 
 
 def _supports(store: object, *names: str) -> bool:
+    """Whether the store also satisfies a port it is not typed as.
+
+    Only `RevisionLedger` is probed this way, because reconciliation is
+    optional: without it edits and deletes missed during an outage go
+    unrepaired, which is a degraded corpus rather than an unreadable one.
+    Windowing and embedding are not optional and are not probed.
+    """
     return all(callable(getattr(store, name, None)) for name in names)
 
 
@@ -191,11 +198,12 @@ async def main() -> None:
         log.warning("ingest.no_indexed_channels", hint="set INDEXED_CHANNEL_IDS")
 
     engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
-    # The adapter boundary. PostgresStore implements the capture half of the
-    # port; the window-persistence half is still landing, so the jobs that
-    # need it are started only once the methods exist rather than crash-looping
-    # a process that is otherwise capturing messages correctly.
-    store = cast(Store, PostgresStore(engine))
+    # The adapter boundary, annotated rather than cast: the type checker is
+    # what proves PostgresStore still satisfies every method the jobs below
+    # call. A cast here once hid a store missing window persistence, and the
+    # process started anyway -- capturing messages that nothing ever windowed,
+    # embedded or retrieved, with every health check green.
+    store: Store = PostgresStore(engine)
 
     client: IngestClient | None = None
 
@@ -241,24 +249,21 @@ async def main() -> None:
                 "while offline will not be repaired",
             )
 
-        if _supports(store, "messages_without_window", "replace_windows"):
-            tasks.create_task(window_loop(service, store))
-        else:
-            log.error("ingest.windowing_unavailable", hint="store lacks window persistence")
+        # Unconditional. Retrieval exists only if these two run, so a store
+        # that cannot serve them must stop the process rather than let it
+        # capture into a corpus nothing can ever read back.
+        tasks.create_task(window_loop(service, store))
 
-        if _supports(store, "windows_missing_embeddings", "store_embedding"):
-            worker = EmbeddingWorker(
-                store,
-                OpenAICompatibleEmbeddings(
-                    api_key=settings.llm_api_key.get_secret_value(),
-                    base_url=settings.llm_base_url,
-                    model=settings.embedding_model,
-                    dimensions=settings.embedding_dimensions,
-                ),
-            )
-            tasks.create_task(worker.run_forever(IDLE_SECONDS))
-        else:
-            log.error("ingest.embedding_unavailable", hint="store lacks embedding persistence")
+        worker = EmbeddingWorker(
+            store,
+            OpenAICompatibleEmbeddings(
+                api_key=settings.llm_api_key.get_secret_value(),
+                base_url=settings.llm_base_url,
+                model=settings.embedding_model,
+                dimensions=settings.embedding_dimensions,
+            ),
+        )
+        tasks.create_task(worker.run_forever(IDLE_SECONDS))
 
 
 if __name__ == "__main__":

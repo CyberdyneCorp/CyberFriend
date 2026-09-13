@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from chatmemory.adapters.store import sql
 from chatmemory.app.fusion import reciprocal_rank_fusion
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
-from chatmemory.domain.messages import Message
+from chatmemory.domain.messages import Message, Window
 from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
 from chatmemory.ports.sources import EmbeddingClient
 
@@ -122,6 +122,122 @@ class PostgresStore:
                 sql.PURGE_CHANNEL, {"channel_id": channel.platform_channel_id}
             )
             return result.rowcount or 0
+
+    async def resolve_person(self, person: PersonRef, display_name: str) -> int:
+        async with self._engine.begin() as conn:
+            person_id = await self._person_id(conn, person)
+            if display_name:
+                # `_person_id` seeds the name from the account id, because the
+                # capture path has no name to hand. This path does, so it is
+                # written through -- a person row named after a snowflake is
+                # unreadable in every operator query that touches it.
+                await conn.execute(
+                    sql.SET_DISPLAY_NAME,
+                    {"person_id": person_id, "display_name": display_name},
+                )
+            return person_id
+
+    # --- window maintenance --------------------------------------------
+
+    async def messages_without_window(self, limit: int) -> Sequence[Message]:
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                sql.MESSAGES_WITHOUT_WINDOW, {"limit": limit, "platform": PLATFORM}
+            )
+            return [
+                Message(
+                    platform_message_id=cast(int, r["id"]),
+                    channel=ChannelRef(PLATFORM, cast(int, r["channel_id"])),
+                    author=PersonRef(PLATFORM, cast(int, r["platform_user_id"])),
+                    content=str(r["content"]),
+                    created_at=cast(datetime, r["created_at"]),
+                    edited_at=cast("datetime | None", r["edited_at"]),
+                    reply_to_id=cast("int | None", r["reply_to_id"]),
+                    thread_id=cast("int | None", r["thread_id"]),
+                )
+                for r in rows.mappings()
+            ]
+
+    async def replace_windows(self, channel: ChannelRef, windows: Sequence[Window]) -> int:
+        """Swap in the windows covering one batch of messages, atomically.
+
+        Re-runnable: the incoming windows supersede exactly the stored windows
+        holding the same messages, so running it twice leaves the same rows
+        rather than a second copy. One transaction, so a crash mid-rebuild
+        leaves the channel with its old windows rather than none.
+        """
+        if not windows:
+            return 0
+
+        channel_id = channel.platform_channel_id
+        message_ids = sorted({mid for w in windows for mid in w.message_ids})
+
+        async with self._engine.begin() as conn:
+            kept = await self._superseded_embeddings(conn, channel_id, message_ids)
+            await conn.execute(
+                sql.DELETE_WINDOWS_FOR_MESSAGES,
+                {"channel_id": channel_id, "message_ids": message_ids},
+            )
+            for window in windows:
+                created = await conn.execute(
+                    sql.INSERT_WINDOW,
+                    {
+                        "channel_id": channel_id,
+                        "text": window.text,
+                        "starts_at": window.starts_at,
+                        "ends_at": window.ends_at,
+                        "thread_id": window.thread_id,
+                        # Carried over when the text is byte-identical. The
+                        # rebuild loop re-forms a window whenever any of its
+                        # messages changes, so without this a single edit
+                        # re-embeds the whole conversation around it.
+                        "embedding": kept.get(window.text),
+                    },
+                )
+                await conn.execute(
+                    sql.INSERT_WINDOW_MESSAGES,
+                    {
+                        "window_id": int(created.scalar_one()),
+                        "message_ids": list(window.message_ids),
+                    },
+                )
+        return len(windows)
+
+    async def _superseded_embeddings(
+        self, conn: AsyncConnection, channel_id: int, message_ids: Sequence[int]
+    ) -> dict[str, str]:
+        """Vectors of the windows about to be replaced, keyed by their text."""
+        rows = await conn.execute(
+            sql.SUPERSEDED_EMBEDDINGS,
+            {"channel_id": channel_id, "message_ids": list(message_ids)},
+        )
+        return {str(r["text"]): str(r["embedding"]) for r in rows.mappings()}
+
+    async def windows_missing_embeddings(self, limit: int) -> Sequence[Window]:
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(sql.WINDOWS_MISSING_EMBEDDINGS, {"limit": limit})
+            return [
+                Window(
+                    channel=ChannelRef(PLATFORM, cast(int, r["channel_id"])),
+                    message_ids=tuple(cast("list[int]", r["message_ids"])),
+                    text=str(r["text"]),
+                    starts_at=cast(datetime, r["starts_at"]),
+                    ends_at=cast(datetime, r["ends_at"]),
+                    thread_id=cast("int | None", r["thread_id"]),
+                    # Populated so the worker can write the result back; a
+                    # window read for embedding and returned without its id is
+                    # one the worker silently drops.
+                    window_id=cast(int, r["id"]),
+                )
+                for r in rows.mappings()
+            ]
+
+    async def store_embedding(self, window_id: int, embedding: Sequence[float]) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                sql.STORE_EMBEDDING,
+                {"window_id": window_id, "embedding": sql.vector_literal(embedding)},
+            )
 
     async def get_cursor(self, channel: ChannelRef) -> int | None:
         async with self._engine.connect() as conn:

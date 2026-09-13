@@ -3,6 +3,10 @@
 Every content-returning statement takes the viewer's channel set and binds it
 into the WHERE clause. Nothing here can produce an unfiltered read, because
 nothing here builds a query without that bind parameter.
+
+The one exception is the windowing and embedding maintenance section, which
+runs for the ingestion process rather than for a person; it is marked as such
+and is unreachable from any read path.
 """
 
 from __future__ import annotations
@@ -60,6 +64,112 @@ WHERE id IN (SELECT window_id FROM conversation_window_message WHERE message_id 
 PURGE_CHANNEL = text("""
 WITH w AS (DELETE FROM conversation_window WHERE channel_id = :channel_id RETURNING id)
 DELETE FROM message WHERE channel_id = :channel_id
+""")
+
+# --- windowing and embedding maintenance --------------------------------
+#
+# These run for the ingestion process, which acts for nobody: there is no
+# viewer to bind, and rebuilding a window over only the channels some person
+# may read would leave the rest of the corpus permanently unwindowed. They are
+# deliberately absent from `statements()` for that reason -- none of them is
+# reachable from a read path, and the audit there covers the statements that
+# are. Every one still excludes tombstones, because withdrawn content must not
+# re-enter a window or a vector either.
+
+MESSAGES_WITHOUT_WINDOW = text("""
+SELECT m.id, m.channel_id, m.content, m.created_at, m.edited_at,
+       m.reply_to_id, m.thread_id,
+       -- The corpus stores the canonical person; windowing renders the
+       -- platform account, so it is resolved here. A person may carry more
+       -- than one account on a platform, so this is a scalar subquery and
+       -- not a join: a join would emit the message once per alias.
+       COALESCE((
+           SELECT p.platform_user_id FROM person_platform_id p
+           WHERE p.person_id = m.author_person_id AND p.platform = :platform
+           ORDER BY p.platform_user_id LIMIT 1
+       ), m.author_person_id) AS platform_user_id
+FROM message m
+WHERE m.deleted_at IS NULL
+  -- Not "has no membership row" but "is in no *live* window". Tombstoning a
+  -- message withdraws the whole window containing it, and its surviving
+  -- neighbours must come back through here to be re-formed -- otherwise one
+  -- deletion silently takes its whole conversation out of retrieval.
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_window_message wm
+      JOIN conversation_window w ON w.id = wm.window_id
+      WHERE wm.message_id = m.id AND w.deleted_at IS NULL
+  )
+ORDER BY m.created_at, m.id
+LIMIT :limit
+""")
+
+# Read before the delete below, so a rebuild that changes nothing keeps its
+# vectors: re-embedding text that did not change is the dominant cost here.
+SUPERSEDED_EMBEDDINGS = text("""
+SELECT w.text, CAST(w.embedding AS text) AS embedding
+FROM conversation_window w
+WHERE w.channel_id = :channel_id
+  AND w.embedding IS NOT NULL
+  AND EXISTS (
+      SELECT 1 FROM conversation_window_message wm
+      WHERE wm.window_id = w.id AND wm.message_id = ANY(:message_ids)
+  )
+""")
+
+# Scoped to the windows covering the messages being rebuilt, never to the
+# whole channel: the caller re-windows a batch at a time, so clearing the
+# channel would orphan every message outside the batch and put it straight
+# back on the pending list -- a loop that re-embeds the channel forever.
+DELETE_WINDOWS_FOR_MESSAGES = text("""
+DELETE FROM conversation_window w
+WHERE w.channel_id = :channel_id
+  AND EXISTS (
+      SELECT 1 FROM conversation_window_message wm
+      WHERE wm.window_id = w.id AND wm.message_id = ANY(:message_ids)
+  )
+""")
+
+INSERT_WINDOW = text("""
+INSERT INTO conversation_window (
+    channel_id, text, starts_at, ends_at, thread_id, embedding, search_tsv
+) VALUES (
+    :channel_id, :text, :starts_at, :ends_at, CAST(:thread_id AS bigint),
+    CAST(:embedding AS vector), to_tsvector('english', :text)
+)
+RETURNING id
+""")
+
+# WITH ORDINALITY carries the window's message order, so membership costs one
+# statement per window rather than one per message.
+INSERT_WINDOW_MESSAGES = text("""
+INSERT INTO conversation_window_message (window_id, message_id, position)
+SELECT :window_id, m.id, m.ord - 1
+FROM unnest(CAST(:message_ids AS bigint[])) WITH ORDINALITY AS m(id, ord)
+ON CONFLICT (window_id, message_id) DO NOTHING
+""")
+
+# Newest first: recent conversation is what people ask about, so a backlog
+# that is still draining should make the newest windows searchable first.
+WINDOWS_MISSING_EMBEDDINGS = text("""
+SELECT w.id, w.channel_id, w.text, w.starts_at, w.ends_at, w.thread_id,
+       ARRAY(
+           SELECT wm.message_id FROM conversation_window_message wm
+           WHERE wm.window_id = w.id ORDER BY wm.position
+       ) AS message_ids
+FROM conversation_window w
+WHERE w.deleted_at IS NULL AND w.embedding IS NULL
+ORDER BY w.starts_at DESC, w.id DESC
+LIMIT :limit
+""")
+
+STORE_EMBEDDING = text("""
+UPDATE conversation_window SET embedding = CAST(:embedding AS vector)
+WHERE id = :window_id AND deleted_at IS NULL
+""")
+
+SET_DISPLAY_NAME = text("""
+UPDATE person SET display_name = :display_name
+WHERE id = :person_id AND display_name IS DISTINCT FROM :display_name
 """)
 
 # --- retrieval ---------------------------------------------------------

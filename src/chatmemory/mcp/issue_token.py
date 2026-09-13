@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from chatmemory.config import get_settings
 from chatmemory.domain.identity import PersonRef
-from chatmemory.mcp.auth import PLATFORM, PostgresTokenStore, ensure_token_schema
+from chatmemory.mcp.auth import PLATFORM, PostgresTokenStore
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -37,8 +37,10 @@ def _parser() -> argparse.ArgumentParser:
 
 async def run(args: argparse.Namespace) -> None:
     settings = get_settings()
+    # Migration 0005 owns `mcp_token`. Failing here against an unmigrated
+    # database is the point: an operator sees it immediately, where a table
+    # quietly created by this CLI would drift from the schema unnoticed.
     engine = create_async_engine(settings.database_url.get_secret_value())
-    await ensure_token_schema(engine)
     store = PostgresTokenStore(engine)
     try:
         if args.command == "list":

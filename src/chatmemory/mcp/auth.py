@@ -79,9 +79,11 @@ def unbind_viewer(handle: Token[Viewer | None]) -> None:
 
 # --- storage -----------------------------------------------------------
 #
-# The token table is owned by this surface rather than by the ingestion
-# schema, and is created idempotently at start-up so deploying the MCP
-# service needs no migration coordination with the ingest process.
+# The token table belongs to migration 0005. Schema created at run time
+# drifts from what alembic believes exists and is absent from a restore, so
+# the services depend on the migration having run rather than on this.
+# `ensure_token_schema` survives for tests and for a scratch database, and is
+# a no-op once the migration has been applied.
 
 TOKEN_SCHEMA = (
     """
@@ -123,7 +125,13 @@ FROM mcp_token WHERE revoked_at IS NULL ORDER BY issued_at
 
 
 async def ensure_token_schema(engine: AsyncEngine) -> None:
-    """Create the token table if it is absent. Safe to run concurrently."""
+    """Create the token table if it is absent.
+
+    Idempotent, concurrency-safe, and harmless against a migrated database:
+    every statement is `IF NOT EXISTS`, and the shape it creates is the one
+    migration 0005 creates. Production runs the migration instead; this is for
+    tests and scratch databases.
+    """
     async with engine.begin() as conn:
         for statement in TOKEN_SCHEMA:
             await conn.execute(text(statement))

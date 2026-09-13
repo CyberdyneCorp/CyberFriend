@@ -8,7 +8,7 @@
 
 ## 2. Answer scoping and delivery
 
-- [ ] 2.1 Scope retrieval for an answer by its destination audience, applied as the same storage-layer filter used for asker scoping
+- [x] 2.1 Scope retrieval for an answer by its destination audience, applied as the same storage-layer filter used for asker scoping
 - [x] 2.2 Implement the private notice when audience scoping removed evidence the asker could themselves have seen
 - [x] 2.3 Ensure the public answer gives no indication that anything was withheld
 - [ ] 2.4 Re-scope or refuse an answer whose delivery destination changes after it was produced
