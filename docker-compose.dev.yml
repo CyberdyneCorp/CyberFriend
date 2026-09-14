@@ -1,0 +1,21 @@
+# Local development only. Production runs on Coolify with a Coolify-managed
+# pgvector database; see docker-compose.yml.
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: chatmemory
+      POSTGRES_PASSWORD: chatmemory
+      POSTGRES_DB: chatmemory
+    ports:
+      - "5432:5432"
+    volumes:
+      - devdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatmemory"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  devdata:

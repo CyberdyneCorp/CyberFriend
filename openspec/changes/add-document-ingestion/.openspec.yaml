@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-13
+goal: Answer questions whose evidence lives in a document rather than a message,
+  without bridging two permission systems unsafely
