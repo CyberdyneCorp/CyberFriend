@@ -61,6 +61,11 @@ STATEMENTS = discover()
 # of other people's conversations to whoever asks" is hard to do by accident.
 UNSCOPED: dict[str, str] = {
     # --- sql: writes -----------------------------------------------------
+    "sql.ENSURE_CHANNEL": (
+        "write; registers the channel a message belongs to. Returns no row, "
+        "and cannot be viewer-scoped: it runs during ingestion, where there "
+        "is no viewer, and the channel it names is the one being ingested"
+    ),
     "sql.UPSERT_MESSAGE": "write; stores one message and returns no row",
     "sql.LOCK_MESSAGE": "advisory lock; reads no table",
     "sql.RECORD_TOMBSTONE": "write; the deletion ledger",

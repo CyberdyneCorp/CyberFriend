@@ -405,3 +405,15 @@ WHERE channel_id = :channel_id
   AND ends_at >= CAST(:since AS timestamptz)
   AND embedding IS NOT NULL
 """)
+
+# A message carries a foreign key to its channel, and nothing else creates
+# that row: the channel is discovered by ingesting from it, not configured
+# in advance. Every integration test inserted one by hand, which is exactly
+# why this went unnoticed until a real deploy.
+ENSURE_CHANNEL = text("""
+INSERT INTO channel (id, platform, name, is_indexed)
+VALUES (:id, :platform, :name, TRUE)
+ON CONFLICT (id) DO UPDATE SET
+    -- Keep a name once we learn one, but never overwrite it with a blank.
+    name = COALESCE(NULLIF(EXCLUDED.name, ''), channel.name)
+""")

@@ -123,7 +123,12 @@ async def reconcile_loop(
     channels: Sequence[ChannelRef],
     interval: float = RECONCILE_INTERVAL_SECONDS,
     lookback: timedelta = RECONCILE_LOOKBACK,
+    ready: asyncio.Event | None = None,
 ) -> None:
+    # Reads history through the same channel cache backfill does, so it waits
+    # for the same signal; starting first only produces unavailability.
+    if ready is not None:
+        await ready.wait()
     # Runs before its first sleep: the moment a process starts is exactly when
     # the events it missed are waiting to be discovered.
     while True:
@@ -269,7 +274,7 @@ async def main() -> None:
         # now declares the method, so the type checker proves at the wiring
         # site what the probe used to discover at runtime and discard.
         reconciler = Reconciler(source=source, ledger=store, sink=service)
-        tasks.create_task(reconcile_loop(reconciler, channels))
+        tasks.create_task(reconcile_loop(reconciler, channels, ready=gateway_ready))
 
         # Retrieval exists only if these two run, so a store that cannot serve
         # them must stop the process rather than let it capture into a corpus
