@@ -143,3 +143,62 @@ def test_suppression_still_notifies_the_asker_privately() -> None:
     )
     assert scoped.should_notify_asker
     assert scoped.answer.withheld_channels == frozenset()
+
+
+# --- citation rendering ------------------------------------------------
+
+
+def test_a_citation_never_renders_an_empty_link_label() -> None:
+    """`[](url)` renders as a bare URL in Discord, which reads as a bug.
+
+    A window spans several people, so no single author name is right even
+    when one is known -- the label has to work without it.
+    """
+    from chatmemory.adapters.discord.bot import _render
+    from chatmemory.app.disclosure import ScopedAnswer
+
+    answer = Answer(
+        "Thursday.",
+        citations=(Citation(GENERAL, 1, "", "the espresso machine is broken",
+                            "https://discord.com/channels/1/2/3"),),
+    )
+    rendered = _render(ScopedAnswer(answer=answer, withheld_from_audience=frozenset()))
+    assert "[]" not in rendered
+    assert "jump to message" in rendered
+
+
+def test_a_known_author_is_used_as_the_label() -> None:
+    from chatmemory.adapters.discord.bot import _render
+    from chatmemory.app.disclosure import ScopedAnswer
+
+    answer = Answer(
+        "Thursday.",
+        citations=(Citation(GENERAL, 1, "leonardoaraujos", "broken",
+                            "https://discord.com/channels/1/2/3"),),
+    )
+    rendered = _render(ScopedAnswer(answer=answer, withheld_from_audience=frozenset()))
+    assert "[leonardoaraujos]" in rendered
+
+
+def test_window_text_uses_a_name_not_an_account_id() -> None:
+    """The window text is what gets embedded.
+
+    A raw snowflake is noise in that vector and surfaces verbatim in the
+    citation excerpt, where it reads as a bug.
+    """
+    from datetime import UTC, datetime
+
+    from chatmemory.app.windowing import WindowBuilder
+    from chatmemory.domain.messages import Message
+
+    msg = Message(
+        platform_message_id=1,
+        channel=GENERAL,
+        author=PersonRef("discord", 713763086305329162),
+        content="the espresso machine is broken",
+        created_at=datetime(2026, 9, 15, tzinfo=UTC),
+        author_display="leonardoaraujos",
+    )
+    window = WindowBuilder().build(GENERAL, [msg])[0]
+    assert "leonardoaraujos:" in window.text
+    assert "713763086305329162" not in window.text

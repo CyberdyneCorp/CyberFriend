@@ -81,7 +81,12 @@ class PostgresStore:
                 # statement below reads the deletion ledger, and a read is only
                 # as good as the ordering around it.
                 await conn.execute(sql.LOCK_MESSAGE, {"id": m.platform_message_id})
-                person_id = await self._person_id(conn, m.author)
+                person_id = await self._person_id(conn, m.author, m.author_display)
+                if m.author_display:
+                    # Keep the latest name the platform gave us, so a rename
+                    # does not leave every past citation showing the old one.
+                    await conn.execute(sql.UPDATE_PERSON_DISPLAY,
+                                       {"id": person_id, "n": m.author_display})
                 result = await conn.execute(
                     sql.UPSERT_MESSAGE,
                     {
@@ -99,7 +104,9 @@ class PostgresStore:
                 await self._replace_mentions(conn, m, person_id)
             return written
 
-    async def _person_id(self, conn: AsyncConnection, person: PersonRef) -> int:
+    async def _person_id(
+        self, conn: AsyncConnection, person: PersonRef, display: str = ""
+    ) -> int:
         row = await conn.execute(
             text(
                 "SELECT person_id FROM person_platform_id "
@@ -113,7 +120,9 @@ class PostgresStore:
 
         created = await conn.execute(
             text("INSERT INTO person (display_name) VALUES (:n) RETURNING id"),
-            {"n": str(person.platform_user_id)},
+            # The account id only as a last resort: it is what a reader sees
+            # in a citation when nothing better is known.
+            {"n": display or str(person.platform_user_id)},
         )
         person_id = int(created.scalar_one())
         await conn.execute(

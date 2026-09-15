@@ -61,6 +61,7 @@ STATEMENTS = discover()
 # of other people's conversations to whoever asks" is hard to do by accident.
 UNSCOPED: dict[str, str] = {
     # --- sql: writes -----------------------------------------------------
+    "sql.UPDATE_PERSON_DISPLAY": "write; keeps a person's shown name current",
     "sql.ENSURE_CHANNEL": (
         "write; registers the channel a message belongs to. Returns no row, "
         "and cannot be viewer-scoped: it runs during ingestion, where there "
