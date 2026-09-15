@@ -19,7 +19,20 @@ RUN mkdir -p src/chatmemory \
 COPY src/ ./src/
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
-RUN uv pip install --system --no-cache --no-deps .
+# --reinstall-package is load-bearing. The project version does not change
+# between the stub install above and this one, so without it uv considers
+# chatmemory already satisfied and skips the install -- leaving the empty
+# stub in site-packages and shipping an image whose package contains
+# nothing but __init__.py.
+RUN uv pip install --system --no-cache --no-deps --reinstall-package chatmemory .
+
+# Fail the build rather than the deployment. The stub is indistinguishable
+# from the real package until something imports a submodule, which first
+# happens in a container that then crash-loops with an error that reads like
+# an application fault.
+RUN python -c "import chatmemory.entrypoints.ingest, chatmemory.entrypoints.bot, \
+    chatmemory.entrypoints.mcp_server, chatmemory.entrypoints.migrate" \
+ && python -c "import chatmemory.composition, chatmemory.adapters.store.postgres"
 
 # No secrets are baked in; all configuration arrives as runtime environment.
 RUN useradd --create-home --uid 10001 app
