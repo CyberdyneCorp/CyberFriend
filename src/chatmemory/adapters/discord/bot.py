@@ -42,7 +42,12 @@ def _render(scoped: ScopedAnswer) -> str:
         return body
     lines = [body, ""]
     for n, c in enumerate(answer.citations[:5], start=1):
-        lines.append(f"{n}. [{c.author_display}]({c.url}) — {c.excerpt[:120]}")
+        # Never an empty label: markdown renders `[]( url )` as a bare URL,
+        # and a window spans several people, so naming one author is wrong
+        # even when a name is known.
+        label = c.author_display.strip() or "jump to message"
+        excerpt = " ".join(c.excerpt.split())[:140]
+        lines.append(f"{n}. [{label}]({c.url}) — {excerpt}")
     return "\n".join(lines)
 
 

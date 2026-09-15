@@ -128,6 +128,21 @@ def channel_of(raw: RawMessage) -> tuple[ChannelRef | None, int | None]:
     return ChannelRef(PLATFORM, channel.id), None
 
 
+def _display_name(author: RawUser) -> str:
+    """The best name the platform gives us for this author.
+
+    Tried in the order a reader would recognise: the chosen display name,
+    then the per-server nickname, then the account name. Falls back to the
+    empty string rather than the numeric id, so a caller can tell "unknown"
+    from "called 713763086305329162".
+    """
+    for attribute in ("global_name", "display_name", "name"):
+        value = getattr(author, attribute, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def to_message(raw: RawMessage) -> Message | None:
     """Convert a platform message, or None when it must not be indexed."""
     channel, thread_id = channel_of(raw)
@@ -138,6 +153,7 @@ def to_message(raw: RawMessage) -> Message | None:
         platform_message_id=raw.id,
         channel=channel,
         author=PersonRef(PLATFORM, raw.author.id),
+        author_display=_display_name(raw.author),
         content=raw.content,
         created_at=raw.created_at,
         edited_at=raw.edited_at,

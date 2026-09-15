@@ -417,3 +417,8 @@ ON CONFLICT (id) DO UPDATE SET
     -- Keep a name once we learn one, but never overwrite it with a blank.
     name = COALESCE(NULLIF(EXCLUDED.name, ''), channel.name)
 """)
+
+UPDATE_PERSON_DISPLAY = text("""
+UPDATE person SET display_name = :n
+WHERE id = :id AND display_name IS DISTINCT FROM :n
+""")

@@ -26,6 +26,10 @@ class Message:
     reply_to_id: int | None = None
     thread_id: int | None = None
     mentions: frozenset[PersonRef] = field(default_factory=frozenset)
+    # How the author should be shown to a reader. Carried on the message
+    # because it is what the platform said at the time; the canonical person
+    # keeps the latest one it has seen.
+    author_display: str = ""
 
     @property
     def is_visible(self) -> bool:

@@ -32,7 +32,15 @@ def approximate_tokens(text: str) -> int:
 
 
 def _render(message: Message) -> str:
-    return f"{message.author.platform_user_id}: {message.content}"
+    """One message as it appears inside a window.
+
+    Named by display name rather than by account id. The window text is what
+    gets embedded, and a raw snowflake is noise in that vector -- it carries
+    no meaning a query could match on, and it surfaces verbatim in citation
+    excerpts, where it reads as a bug.
+    """
+    who = message.author_display or str(message.author.platform_user_id)
+    return f"{who}: {message.content}"
 
 
 class WindowBuilder:
