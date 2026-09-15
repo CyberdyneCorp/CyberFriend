@@ -13,6 +13,7 @@ takes no lock of its own, so that race is real rather than theoretical.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
 import structlog
@@ -22,12 +23,27 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from chatmemory import logging as log_setup
-from chatmemory.config import get_settings
 
 log = structlog.get_logger()
 
 CONNECT_ATTEMPTS = 30
 CONNECT_DELAY_SECONDS = 2.0
+
+
+def database_url() -> str:
+    """Read DATABASE_URL directly, not through Settings.
+
+    Settings validates every field, including the Discord credentials --
+    which a schema migration has no use for. Loading it here coupled
+    migrating the database to having a bot token: on a first deploy, where
+    the token is not yet configured, the migrate job died on a validation
+    error about `discord_guild_id` and took the whole deployment with it.
+    A job should require what it uses and nothing else.
+    """
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise SystemExit("DATABASE_URL is not set; nothing to migrate against")
+    return url
 
 
 async def wait_for_database(url: str) -> None:
@@ -56,8 +72,7 @@ async def wait_for_database(url: str) -> None:
 
 def main() -> int:
     log_setup.configure()
-    settings = get_settings()
-    url = settings.database_url.get_secret_value()
+    url = database_url()
 
     asyncio.run(wait_for_database(url))
 

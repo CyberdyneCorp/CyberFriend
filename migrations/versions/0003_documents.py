@@ -5,12 +5,12 @@ Revises: 0002
 """
 from __future__ import annotations
 
+import os
+
 import sqlalchemy as sa
 from alembic import op
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects import postgresql
-
-from chatmemory.config import get_settings
 
 revision = "0003"
 down_revision = "0002"
@@ -19,7 +19,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    dims = get_settings().embedding_dimensions
+    # Read straight from the environment, not through Settings: that
+    # validates every field, including the Discord credentials, which a
+    # migration has no use for. Going through it made the schema
+    # un-migratable until a bot token existed.
+    dims = int(os.environ.get("EMBEDDING_DIMENSIONS", "1536"))
 
     op.create_table(
         "document",

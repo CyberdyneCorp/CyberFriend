@@ -16,10 +16,9 @@ services:
     command: ["python", "-m", "chatmemory.entrypoints.migrate"]
     restart: "no"
     environment:
+      # Only the database. A migration needs no Discord token and no model
+      # key; passing them would let their absence fail the deploy.
       - DATABASE_URL=${DATABASE_URL}
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
-      - LLM_API_KEY=${LLM_API_KEY}
 
   ingest:
     build: .

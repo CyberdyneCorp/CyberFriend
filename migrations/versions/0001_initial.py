@@ -5,12 +5,12 @@ Revises:
 """
 from __future__ import annotations
 
+import os
+
 import sqlalchemy as sa
 from alembic import op
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects import postgresql
-
-from chatmemory.config import get_settings
 
 revision = "0001"
 down_revision = None
@@ -22,7 +22,11 @@ def upgrade() -> None:
     # Requires an image carrying pgvector. Coolify's "PostgreSQL with pgvector"
     # type has it; the stock postgres image does not.
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    dims = get_settings().embedding_dimensions
+    # Read straight from the environment, not through Settings: that
+    # validates every field, including the Discord credentials, which a
+    # migration has no use for. Going through it made the schema
+    # un-migratable until a bot token existed.
+    dims = int(os.environ.get("EMBEDDING_DIMENSIONS", "1536"))
 
     op.create_table(
         "person",
@@ -132,8 +136,12 @@ def upgrade() -> None:
 
     op.create_table(
         "conversation_window_message",
-        sa.Column("window_id", sa.BigInteger, sa.ForeignKey("conversation_window.id", ondelete="CASCADE"),
-                  nullable=False),
+        sa.Column(
+            "window_id",
+            sa.BigInteger,
+            sa.ForeignKey("conversation_window.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("message_id", sa.BigInteger, sa.ForeignKey("message.id"), nullable=False),
         sa.Column("position", sa.Integer, nullable=False),
         sa.PrimaryKeyConstraint("window_id", "message_id"),
