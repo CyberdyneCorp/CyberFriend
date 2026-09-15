@@ -100,6 +100,10 @@ Consequences worth being explicit about:
 
 ## 4. Before the first deploy
 
+If you do not yet have a bot token, server ID and channel IDs, work through
+[discord-setup.md](discord-setup.md) first — the deploy cannot be verified
+without them.
+
 - Confirm the Cyberdyne server reaches `api.openai.com`. Every indexed message
   is embedded through it, so no reachability means no retrieval.
 - Confirm **both** privileged intents are enabled in the Discord Developer
