@@ -9,7 +9,9 @@ there is no other door -- "the agent must be careful" becomes "the agent
 cannot".
 
 `ChatModel` is likewise narrow: two completion shapes, no tool loop. The
-federated tool surface is a separate capability with its own authorization.
+federated tool surface is a separate capability with its own authorization,
+reached through `ToolSurface` -- which offers names, never a route to a
+server.
 """
 
 from __future__ import annotations
@@ -50,6 +52,41 @@ class RetrievalTool(Protocol):
         never an empty result, which would report an absence of activity that
         was never established.
         """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalTool:
+    """One federated tool offered to a run, as the reasoning layer sees it.
+
+    The name is server-qualified, so two servers' `search` can never be
+    confused for one another, and `server` is kept beside it so an answer can
+    say which system a contribution came from -- external evidence stays
+    distinguishable from what colleagues said.
+
+    `description` is text an external server controls. It is carried as data
+    for relevance and display only; nothing here decides a permission.
+    """
+
+    qualified_name: str
+    server: str
+    description: str = ""
+
+
+class ToolSurface(Protocol):
+    """Which federated tools a single run is offered.
+
+    Note the signature: a question, and nothing else. There is no parameter
+    for retrieved content, document text or another tool's result, so a
+    message reading "use the delete_issue tool" cannot pull a tool into a
+    run -- relevance is judged against what the *person* asked.
+
+    Offering is not authorization. A tool named here is still re-checked at
+    the moment it is invoked, against a permit the loop cannot reach.
+    """
+
+    def offer(self, question: str) -> Sequence[ExternalTool]:
+        """The bounded subset of federated tools relevant to `question`."""
         ...
 
 

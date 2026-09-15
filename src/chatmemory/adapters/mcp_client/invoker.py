@@ -30,6 +30,14 @@ from chatmemory.app.authorization import (
     InvocationRequest,
     Refusal,
 )
+from chatmemory.app.egress import (
+    EgressGuard,
+    EgressRefused,
+    EgressRequest,
+    ProvenancedQuery,
+    QueryOrigin,
+    authorized,
+)
 
 log = structlog.get_logger()
 
@@ -85,11 +93,13 @@ class GuardedInvoker:
         authorizer: Authorizer,
         audit: AuditTrail,
         confirmations: ConfirmationLedger,
+        egress: EgressGuard | None = None,
     ) -> None:
         self._federation = federation
         self._authorizer = authorizer
         self._audit = audit
         self._confirmations = confirmations
+        self._egress = egress or EgressGuard()
 
     async def invoke(
         self,
@@ -111,7 +121,32 @@ class GuardedInvoker:
             # allowed against. Raising beats an assert, which -O would remove
             # from exactly the code path that must never run unchecked.
             raise RuntimeError(f"authorized {request.qualified_name} with no permit")
-        result = await self._federation.call(permit, request.arguments)
+        # Clearance is minted here, from the question on the request, and
+        # made current only for the length of this dispatch. This is the one
+        # place that knows both the asking person's words and the provider
+        # about to be called; a provider reached any other way finds no
+        # clearance and refuses, which is what keeps the boundary unskippable
+        # rather than merely documented.
+        try:
+            clearance = self._egress.authorize(
+                EgressRequest(
+                    asker=request.requester,
+                    query=_query_for(request),
+                    provider=permit.server,
+                )
+            )
+        except EgressRefused as refused:
+            log.warning(
+                "federation.egress_refused",
+                tool=request.qualified_name,
+                requester=str(request.requester),
+                reason=str(refused.reason),
+            )
+            entry = self._audit.append(request, decision, AuditOutcome.REFUSED, now=now)
+            return InvocationOutcome(decision=decision, entry=entry)
+
+        with authorized(clearance):
+            result = await self._federation.call(permit, request.arguments)
 
         if result.ok:
             # One approval authorises one call: a second invocation with the
@@ -152,3 +187,20 @@ class GuardedInvoker:
         if decision.refusal not in _NEEDS_CONFIRMATION or decision.permit is None:
             return None
         return self._confirmations.propose(request, decision.permit, now=now)
+
+
+def _query_for(request: InvocationRequest) -> ProvenancedQuery:
+    """The query this call would send, with where its text came from.
+
+    A tool's arguments are written by the model, so the text it proposes is
+    a reformulation at best: it is admitted only if every word is one the
+    asker wrote. The question is taken from the request rather than from the
+    arguments, because the arguments are the thing being checked.
+    """
+    proposed = request.arguments.get("query")
+    text = proposed if isinstance(proposed, str) and proposed.strip() else request.question
+    return ProvenancedQuery(
+        text=text,
+        origin=QueryOrigin.ASKER if text == request.question else QueryOrigin.MODEL_REFORMULATION,
+        question=request.question,
+    )

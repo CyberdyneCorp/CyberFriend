@@ -21,6 +21,21 @@ class Citation:
     author_display: str
     excerpt: str
     url: str
+    # Where this came from. Defaults to the corpus, so any citation that has
+    # not thought about provenance is treated as channel-scoped -- the
+    # conservative direction.
+    source_system: str = "discord"
+
+    @property
+    def is_corpus(self) -> bool:
+        """Whether channel permissions decide who may see this.
+
+        Only corpus evidence is channel-scoped. A web result belongs to no
+        channel, so judging it by channel membership refuses it always --
+        and because a dropped citation suppresses the whole answer, a single
+        correctly-labelled web citation would silence every reply.
+        """
+        return self.source_system == "discord"
 
 
 @dataclass(frozen=True, slots=True)
