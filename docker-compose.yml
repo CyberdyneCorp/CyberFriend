@@ -7,10 +7,27 @@
 # The database is NOT defined here: production uses a Coolify-managed
 # "PostgreSQL with pgvector" resource so that scheduled backups apply.
 services:
+  # Runs once per deploy and exits. Everything else waits on it, so the
+  # schema exists before anything queries it. Only this service migrates:
+  # three long-running containers racing the same DDL on every deploy is a
+  # real race, not a theoretical one -- alembic takes no lock of its own.
+  migrate:
+    build: .
+    command: ["python", "-m", "chatmemory.entrypoints.migrate"]
+    restart: "no"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - LLM_API_KEY=${LLM_API_KEY}
+
   ingest:
     build: .
     command: ["python", "-m", "chatmemory.entrypoints.ingest"]
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     # Exactly one. Two containers sharing a bot token both identify to the
     # Discord gateway and ingest every message twice. Discord does not error;
     # the corpus silently doubles.
@@ -41,6 +58,9 @@ services:
     build: .
     command: ["python", "-m", "chatmemory.entrypoints.bot"]
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     # One replica. A second would answer every question twice.
     deploy:
       replicas: 1
@@ -68,6 +88,9 @@ services:
     build: .
     command: ["python", "-m", "chatmemory.entrypoints.mcp_server"]
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - DISCORD_TOKEN=${DISCORD_TOKEN}
