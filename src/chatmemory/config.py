@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -70,6 +70,30 @@ class Settings(BaseSettings):
     # --- Serving -------------------------------------------------------
     health_port: int = 8080
     mcp_port: int = 8081
+
+    @model_validator(mode="before")
+    @classmethod
+    def _blank_means_unset(cls, data: object) -> object:
+        """Treat an empty environment variable as absent, not as a value.
+
+        A deployment platform that renders every variable its compose file
+        mentions writes a blank for each one nobody filled in, so the process
+        sees WINDOW_MAX_MESSAGES="" rather than no such variable. Pydantic
+        then tries to parse the blank and fails -- which turns every optional
+        setting into a required one the moment it is exposed in a UI, and
+        reports it as a malformed integer rather than as a missing value.
+
+        Declaring a setting in the compose file must not make it mandatory.
+        Required settings still fail, and now say "Field required", which
+        names the actual problem.
+        """
+        if isinstance(data, dict):
+            return {
+                k: v
+                for k, v in data.items()
+                if not (isinstance(v, str) and not v.strip())
+            }
+        return data
 
     @field_validator("indexed_channel_ids", mode="before")
     @classmethod

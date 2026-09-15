@@ -85,3 +85,48 @@ def test_missing_channel_ids_from_the_environment_indexes_nothing(
     monkeypatch.delenv("INDEXED_CHANNEL_IDS", raising=False)
 
     assert Settings(_env_file=None).indexed_channel_ids == frozenset()  # type: ignore[call-arg]
+
+
+def test_a_blank_optional_setting_falls_back_to_its_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A platform that renders every compose variable writes blanks.
+
+    Declaring a setting in docker-compose.yml must not silently make it
+    mandatory: the process sees WINDOW_MAX_MESSAGES="" rather than no such
+    variable, and parsing the blank turned every optional setting into a
+    required one the moment it was exposed in a UI.
+    """
+    for key, value in {
+        "DISCORD_TOKEN": SECRET,
+        "DISCORD_GUILD_ID": "1",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@h/d",
+        "LLM_API_KEY": "k",
+        "WINDOW_MAX_MESSAGES": "",
+        "WINDOW_MAX_TOKENS": "",
+        "WINDOW_GAP_SECONDS": "",
+        "CHAT_MODEL": "",
+        "INDEXED_CHANNEL_IDS": "",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.window_max_messages == 10
+    assert settings.chat_model == "gpt-4o"
+    assert settings.indexed_channel_ids == frozenset()
+
+
+def test_a_blank_required_setting_reports_it_as_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blank must not become 'malformed integer' -- that names the wrong problem."""
+    for key, value in {
+        "DISCORD_TOKEN": SECRET,
+        "DISCORD_GUILD_ID": "",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@h/d",
+        "LLM_API_KEY": "k",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(ValidationError, match="Field required"):
+        Settings(_env_file=None)  # type: ignore[call-arg]
