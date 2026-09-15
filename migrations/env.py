@@ -7,19 +7,29 @@ that one source of configuration serves both the app and its migrations.
 from __future__ import annotations
 
 import asyncio
+import os
 
 from alembic import context
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
-
-from chatmemory.config import get_settings
 
 config = context.config
 target_metadata = None
 
 
 def _url() -> str:
-    return get_settings().database_url.get_secret_value()
+    """The database URL, read straight from the environment.
+
+    Deliberately not via Settings: that validates every field, including the
+    Discord credentials, which a migration has no use for. Going through it
+    meant a first deploy -- where no bot token is configured yet -- failed on
+    a validation error about `discord_guild_id` and took the deployment with
+    it. A migration should need a database and nothing else.
+    """
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise SystemExit("DATABASE_URL is not set; nothing to migrate against")
+    return url
 
 
 def run_migrations_offline() -> None:

@@ -94,3 +94,31 @@ def test_only_one_service_migrates() -> None:
         if "entrypoints.migrate" in service_block(s)
     ]
     assert migrating == ["migrate"], f"more than one service migrates: {migrating}"
+
+
+# --- migrations must not need application credentials ------------------
+
+MIGRATION_SOURCES = [
+    ROOT / "migrations" / "env.py",
+    ROOT / "src" / "chatmemory" / "entrypoints" / "migrate.py",
+    *(ROOT / "migrations" / "versions").glob("*.py"),
+]
+
+
+@pytest.mark.parametrize("path", MIGRATION_SOURCES, ids=lambda p: p.name)
+def test_migrations_do_not_load_application_settings(path: Path) -> None:
+    """A migration needs a database and nothing else.
+
+    Settings validates every field, including the Discord credentials. Loading
+    it from a migration coupled creating the schema to having a bot token, so
+    the first deploy of a new environment -- where no token is configured yet
+    -- failed on a validation error about `discord_guild_id` and took the
+    whole deployment with it. The coupling was three layers deep: the
+    entrypoint, alembic's env.py, and two migrations reading the embedding
+    width.
+    """
+    source = path.read_text()
+    assert "get_settings" not in source, (
+        f"{path.name} loads application settings; migrations must need only "
+        "DATABASE_URL, or a missing unrelated credential blocks the schema"
+    )
