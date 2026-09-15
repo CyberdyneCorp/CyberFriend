@@ -3,10 +3,20 @@
 Identity is free here: Discord authenticates the author of every message, so
 there is no client-supplied viewer parameter to forge. Content claiming to
 come from someone else is disregarded -- only the authenticated author counts.
+
+This is also the last place provenance can be shown to the person who has to
+act on the answer. Once the agent can reach the internet, a reply may rest on
+two very different kinds of evidence, and "what did we decide" answered by
+silently blending a colleague's message with a search result is worse than no
+answer at all: it reads as team knowledge and is not. So citations are
+grouped and labelled by source, always -- including when every source is this
+server, because a reader should never have to infer the common case from the
+absence of a warning.
 """
 
 from __future__ import annotations
 
+from itertools import zip_longest
 from typing import Any
 
 import discord
@@ -15,12 +25,26 @@ from discord import app_commands
 
 from chatmemory.app.ask import AskRequest, AskService
 from chatmemory.app.disclosure import ScopedAnswer, withheld_notice
+from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.domain.identity import ChannelRef, PersonRef
+from chatmemory.ports.answers import Citation
 
 log = structlog.get_logger()
 
 PLATFORM = "discord"
 MAX_REPLY_CHARS = 1900  # Discord's limit is 2000; leave room for citations.
+MAX_CITATIONS = 5
+MAX_EXCERPT_CHARS = 140
+
+SOURCE_HEADINGS = {
+    SOURCE_DISCORD: "**From this server:**",
+    SOURCE_WEB: "**From the web:**",
+}
+
+SOURCE_FALLBACK_LABELS = {
+    SOURCE_DISCORD: "jump to message",
+    SOURCE_WEB: "open result",
+}
 
 CAPABILITIES = (
     "I answer questions about what's been said in the channels you can read.\n"
@@ -35,19 +59,73 @@ def _person(user: discord.User | discord.Member) -> PersonRef:
     return PersonRef(PLATFORM, user.id)
 
 
+def _source_of(citation: Citation) -> str:
+    """Where a citation came from.
+
+    `Citation` is the port and describes a place, not a kind; evidence that
+    came from outside the corpus attaches the kind on the way through. A
+    plain `Citation` is the corpus, which is what every caller that predates
+    egress produces.
+    """
+    return citation.source_system if isinstance(citation, SourcedCitation) else SOURCE_DISCORD
+
+
+def _citation_line(number: int, citation: Citation) -> str:
+    source = _source_of(citation)
+    # Never an empty label: markdown renders `[]( url )` as a bare URL, and a
+    # window spans several people, so naming one author is wrong even when a
+    # name is known.
+    label = citation.author_display.strip() or SOURCE_FALLBACK_LABELS.get(source, source)
+    excerpt = " ".join(citation.excerpt.split())[:MAX_EXCERPT_CHARS]
+    # The heading above already says where this came from; the inline tag
+    # repeats it for every non-corpus line, because a line quoted, screenshot
+    # or read on its own loses the heading and keeps the claim.
+    tag = "" if source == SOURCE_DISCORD else f"({source}) "
+    return f"{number}. {tag}[{label}]({citation.url}) — {excerpt}"
+
+
+def _grouped(citations: tuple[Citation, ...]) -> list[tuple[str, list[Citation]]]:
+    """Citations by source, corpus first, each group in its original order."""
+    groups: dict[str, list[Citation]] = {}
+    for citation in citations:
+        groups.setdefault(_source_of(citation), []).append(citation)
+    corpus = [(s, c) for s, c in groups.items() if s == SOURCE_DISCORD]
+    external = [(s, c) for s, c in groups.items() if s != SOURCE_DISCORD]
+    return corpus + external
+
+
+def _capped(
+    groups: list[tuple[str, list[Citation]]], limit: int
+) -> list[tuple[str, list[Citation]]]:
+    """Trim to `limit` citations by taking a turn from each source in rotation.
+
+    Trimming the flat list instead would let a run with five channel hits and
+    one search result publish a reply that cites only the channel while its
+    prose rests partly on the web -- which is the exact thing the reader must
+    be able to see. A source that contributed to the answer keeps a line.
+    """
+    kept: dict[str, list[Citation]] = {source: [] for source, _ in groups}
+    remaining = limit
+    for row in zip_longest(*(group for _, group in groups)):
+        for (source, _), citation in zip(groups, row, strict=True):
+            if citation is not None and remaining:
+                kept[source].append(citation)
+                remaining -= 1
+    return [(source, kept[source]) for source, _ in groups if kept[source]]
+
+
 def _render(scoped: ScopedAnswer) -> str:
     answer = scoped.answer
     body = answer.text[:MAX_REPLY_CHARS]
     if not answer.citations:
         return body
-    lines = [body, ""]
-    for n, c in enumerate(answer.citations[:5], start=1):
-        # Never an empty label: markdown renders `[]( url )` as a bare URL,
-        # and a window spans several people, so naming one author is wrong
-        # even when a name is known.
-        label = c.author_display.strip() or "jump to message"
-        excerpt = " ".join(c.excerpt.split())[:140]
-        lines.append(f"{n}. [{label}]({c.url}) — {excerpt}")
+    lines = [body]
+    number = 1
+    for source, group in _capped(_grouped(answer.citations), MAX_CITATIONS):
+        lines.extend(["", SOURCE_HEADINGS.get(source, f"**From {source}:**")])
+        for citation in group:
+            lines.append(_citation_line(number, citation))
+            number += 1
     return "\n".join(lines)
 
 

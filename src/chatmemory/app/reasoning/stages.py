@@ -141,11 +141,24 @@ PLANNER_SCHEMA: Mapping[str, object] = {
     "additionalProperties": False,
 }
 
+SOURCE_NOTICE = (
+    "Each evidence block states its origin in its `source=` attribute. "
+    "`source=discord` is something a colleague wrote in this team's own "
+    "channels; anything else came from outside the team, such as a web "
+    "search or an external system. When an answer draws on both, say which "
+    "is which in the answer itself -- a reader who cannot tell what their "
+    "colleagues said from what the internet said can trust neither. Never "
+    "present outside material as something someone here said."
+)
+
 SYNTHESIS_SYSTEM = (
     "You answer a question using only the evidence given. Every claim must "
     "rest on evidence, and you must list the window_id of each piece you "
     "used. If the evidence does not support an answer, say so and cite "
-    "nothing. Never answer from your own knowledge. " + DATA_NOTICE
+    "nothing. Never answer from your own knowledge. "
+    + SOURCE_NOTICE
+    + " "
+    + DATA_NOTICE
 )
 
 SYNTHESIS_SCHEMA: Mapping[str, object] = {

@@ -75,9 +75,15 @@ def enforce_audience(
     withheld set could only ever contain what this guard itself had to drop
     -- which, when the service scopes correctly, is nothing.
     """
-    permitted = tuple(c for c in answer.citations if audience.permits(c.channel))
+    # Channel permissions apply to corpus evidence only. A web result belongs
+    # to no channel, so testing it for channel membership refuses it always.
+    permitted = tuple(
+        c for c in answer.citations if not c.is_corpus or audience.permits(c.channel)
+    )
     dropped = frozenset(
-        c.channel for c in answer.citations if not audience.permits(c.channel)
+        c.channel
+        for c in answer.citations
+        if c.is_corpus and not audience.permits(c.channel)
     )
 
     # Three sources: what retrieval never gathered, what the service knew it

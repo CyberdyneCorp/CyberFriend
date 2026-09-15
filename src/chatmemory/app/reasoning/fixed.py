@@ -126,7 +126,7 @@ class CorrectiveDriver:
             result = await self._retrieval.retrieve(viewer, current)
             spend.charge_tool_call()
             state.access_blocked = state.access_blocked or result.access_blocked
-            net_new = evidence.add(result.items)
+            net_new = evidence.add(result.items, result.source_system)
 
             if state.rounds and not net_new:
                 # A corrective round that returned only what the run already

@@ -61,6 +61,29 @@ class Settings(BaseSettings):
     # pydantic-settings JSON-decodes the value before any validator runs.
     chat_model_capabilities: Annotated[frozenset[str], NoDecode] = frozenset()
 
+    # --- Federation (optional) -----------------------------------------
+    # External MCP servers CyberFriend may reach, as `name=target` entries,
+    # space- or comma-separated: "issues=https://issues.internal/mcp". Empty
+    # means "no federation", which is the correct default -- a deployment
+    # that has not thought about external credentials must not acquire an
+    # outbound channel by accident.
+    #
+    # NoDecode for the same reason as indexed_channel_ids: without it
+    # pydantic-settings JSON-decodes the value before any validator runs.
+    federation_servers: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # The tools an operator has explicitly made available, as `server:tool`,
+    # optionally suffixed `:ro` to declare a tool read-only. Discovery
+    # confers nothing: a server advertising a tool that is not listed here
+    # stays unavailable. Undeclared effect counts as mutating, so a tool
+    # listed without `:ro` needs a confirmation before it can ever be called.
+    federation_tool_allowlist: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # How many federated tools one run may be shown. A cap rather than
+    # "all of them": a tool that was never offered is one the invoke-time
+    # check refuses outright, so this bounds what a steered run can name.
+    federation_max_tools_per_run: int = 5
+
     # --- Windowing -----------------------------------------------------
     # Guesses until measured against a real corpus; see design.md.
     window_max_messages: int = 10
@@ -107,6 +130,19 @@ class Settings(BaseSettings):
     def _split_capabilities(cls, v: object) -> object:
         if isinstance(v, str):
             return frozenset(p for p in v.replace(",", " ").split())
+        return v
+
+    @field_validator("federation_servers", "federation_tool_allowlist", mode="before")
+    @classmethod
+    def _split_federation_entries(cls, v: object) -> object:
+        """Split on whitespace or commas, keeping the operator's order.
+
+        Order is kept so startup logs list servers the way the operator wrote
+        them; a set would reorder the one output they read to check their
+        configuration took effect.
+        """
+        if isinstance(v, str):
+            return tuple(p for p in v.replace(",", " ").split())
         return v
 
     @field_validator("embedding_dimensions")

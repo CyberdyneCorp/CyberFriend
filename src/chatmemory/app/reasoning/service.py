@@ -29,6 +29,7 @@ from chatmemory.app.reasoning.ports import (
     Planner,
     RetrievalTool,
     Synthesizer,
+    ToolSurface,
 )
 from chatmemory.app.reasoning.stages import ModelCritic, ModelPlanner, ModelSynthesizer
 from chatmemory.app.routing import Route, RoutingDecision, classify
@@ -88,12 +89,19 @@ def build_answer_service(
     fixed_driver: CorrectiveDriver | None = None,
     loop_driver: CorrectiveDriver | None = None,
     recorder: RunRecorder | None = None,
+    tools: ToolSurface | None = None,
 ) -> ReasoningAnswerService:
     """Wire the default composition.
 
     The two paths get separate drivers because they get separate budgets: the
     loop spends a whole-run allowance across several sub-questions, and giving
     it the fixed path's would leave nothing for correction.
+
+    `tools` reaches the loop only. The fixed path answers a single-goal
+    question from the corpus, where an external system is a second source to
+    reconcile rather than a second sub-goal; leaving it out keeps the path
+    that carries nearly all the traffic on one evidence kind. A deployment
+    with no federation passes None and gets exactly today's behaviour.
     """
     critic = ModelCritic(model)
     writer = synthesizer or ModelSynthesizer(model)
@@ -102,6 +110,7 @@ def build_answer_service(
         loop_driver or CorrectiveDriver(retrieval, critic, budget=LOOP_BUDGET),
         planner or ModelPlanner(model),
         writer,
+        tools=tools,
     )
     return ReasoningAnswerService(fixed, loop, recorder)
 

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-15
+goal: Let an operator change what the agent can reach and index without editing
+  environment variables, with every change attributable and auditable
