@@ -19,3 +19,8 @@ venv/
 # Never commit key material
 *openai_key.env
 *.key
+
+# Per-session Claude Code state. Machine-local: carries a session id and pid,
+# so committing it makes every session's lock conflict with every other's.
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
