@@ -40,6 +40,10 @@ alembic upgrade head
 python -m chatmemory.entrypoints.ingest
 ```
 
+Setting up the Discord side — application, token, intents, invite, and the
+server and channel IDs — is walked through in
+[docs/discord-setup.md](docs/discord-setup.md).
+
 Discord requires **two** privileged intents for this application:
 
 - **MESSAGE_CONTENT** — to read what people actually said.
