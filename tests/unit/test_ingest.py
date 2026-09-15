@@ -9,6 +9,7 @@ from chatmemory.app.ingest import EmbeddingWorker, IngestService
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message, Window
+from chatmemory.ports.sources import SourceUnavailable
 
 INDEXED, UNINDEXED = 100, 999
 CH = ChannelRef("discord", INDEXED)
@@ -244,3 +245,50 @@ async def test_embedding_worker_drains_the_backlog() -> None:
     assert await worker.run_once() == 1
     assert await worker.run_once() == 0
     assert set(store.embeddings) == {1, 2, 3}
+
+
+# --- unavailable is not the same as exhausted --------------------------
+
+
+class UnavailableSource(FakeSource):
+    """A source that cannot answer, as when the gateway cache is cold."""
+
+    async def backfill(
+        self, channel: ChannelRef, before_message_id: int | None, limit: int
+    ) -> Sequence[Message]:
+        self.calls += 1
+        raise SourceUnavailable(str(channel))
+
+
+async def test_an_unavailable_channel_is_not_recorded_as_complete() -> None:
+    """Marking it complete retires the channel from backfill for good.
+
+    The question was never answered, so nothing is known about what remains.
+    This is how a cold gateway cache at startup silently emptied the corpus.
+    """
+    store = FakeStore()
+    service = IngestService(
+        UnavailableSource([]), store, WindowBuilder(), frozenset({INDEXED}), 3
+    )
+    report = await service.backfill_page(CH)
+    assert report.unavailable
+    assert not report.complete
+    assert report.imported == 0
+
+
+async def test_an_unavailable_sweep_leaves_the_cursor_alone() -> None:
+    """The next sweep must start where this one would have."""
+    store = FakeStore()
+    service = IngestService(
+        UnavailableSource([]), store, WindowBuilder(), frozenset({INDEXED}), 3
+    )
+    await service.backfill_channel(CH)
+    assert store.cursors == {}, "an unread channel must record no progress"
+
+
+async def test_an_empty_page_still_means_complete() -> None:
+    """Exhaustion is a real answer and must stay distinguishable."""
+    service, _, _ = build([])
+    report = await service.backfill_page(CH)
+    assert report.complete
+    assert not report.unavailable

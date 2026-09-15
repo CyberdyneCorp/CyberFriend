@@ -31,6 +31,7 @@ import structlog
 
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
+from chatmemory.ports.sources import SourceUnavailable
 
 log = structlog.get_logger()
 
@@ -210,10 +211,11 @@ class DiscordHistoryReader:
         target = self._channels(channel.platform_channel_id)
         if target is None:
             # Not cached yet, or the bot lost access. Either way this is not
-            # the end of the channel's history, so report nothing rather than
-            # letting the caller record it as complete.
+            # the end of the channel's history. Returning an empty page would
+            # be indistinguishable from exhaustion and would mark the channel
+            # fully imported, so the caller is told it could not be asked.
             log.warning("backfill.channel_unavailable", channel=str(channel))
-            return []
+            raise SourceUnavailable(str(channel))
 
         before = discord.Object(id=before_message_id) if before_message_id else None
         # Ordering is stated explicitly: discord.py's default flips depending

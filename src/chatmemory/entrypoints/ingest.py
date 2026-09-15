@@ -88,7 +88,18 @@ async def backfill_loop(
     channels: Sequence[ChannelRef],
     state: HealthState,
     interval: float = BACKFILL_INTERVAL_SECONDS,
+    ready: asyncio.Event | None = None,
 ) -> None:
+    """Import history, once the gateway can answer questions about channels.
+
+    Waiting is not an optimisation. Channel lookups read discord.py's cache,
+    which an identified connection populates, so a sweep that starts first
+    finds every channel missing -- and logs it as unavailable, which reads
+    like a permissions failure rather than a race. Without the wait the
+    corpus stays empty until the next sweep, a quarter of an hour later.
+    """
+    if ready is not None:
+        await ready.wait()
     completed = time.time()
     while True:
         state.backfill_lag_seconds = time.time() - completed
@@ -233,8 +244,12 @@ async def main() -> None:
         indexed_channels=settings.indexed_channel_ids,
     )
 
+    gateway_ready = asyncio.Event()
+
     def connection_changed(connected: bool) -> None:
         state.gateway_connected = connected
+        if connected:
+            gateway_ready.set()
 
     handler = GatewayEventHandler(sink=service, feed=source)
     client = IngestClient(handler, settings.discord_guild_id, connection_changed)
@@ -242,7 +257,7 @@ async def main() -> None:
     async with asyncio.TaskGroup() as tasks:
         tasks.create_task(client.start(settings.discord_token.get_secret_value()))
         tasks.create_task(live_loop(source, service, state))
-        tasks.create_task(backfill_loop(service, channels, state))
+        tasks.create_task(backfill_loop(service, channels, state, ready=gateway_ready))
 
         # Unconditional, like windowing and embedding below, and for the same
         # reason. This used to start only if the store was probed and found to

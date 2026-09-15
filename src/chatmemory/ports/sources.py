@@ -9,6 +9,16 @@ from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
 
 
+class SourceUnavailable(Exception):
+    """The platform could not be asked, so nothing can be concluded.
+
+    Distinct from an empty page. An empty page means the history is
+    exhausted; unavailability means the question went unanswered, and
+    treating the two alike marks a channel fully imported when it was never
+    read at all.
+    """
+
+
 class ChatSource(Protocol):
     """A platform we ingest from. Nothing here names Discord."""
 
