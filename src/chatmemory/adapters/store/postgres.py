@@ -60,6 +60,18 @@ class PostgresStore:
         if not messages:
             return 0
         async with self._engine.begin() as conn:
+            # The channel row has to exist before any message can reference
+            # it, and nothing else creates one: a channel is discovered by
+            # ingesting from it, not configured in advance.
+            for channel in {m.channel for m in messages}:
+                await conn.execute(
+                    sql.ENSURE_CHANNEL,
+                    {
+                        "id": channel.platform_channel_id,
+                        "platform": channel.platform,
+                        "name": "",
+                    },
+                )
             written = 0
             # Sorted by id so that two batches overlapping on the same message
             # take the per-message locks below in the same order and cannot
