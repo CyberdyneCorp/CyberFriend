@@ -21,6 +21,26 @@ After creation:
 The migration creates the extension itself (`CREATE EXTENSION IF NOT EXISTS
 vector`), which requires the image to carry it — hence the database type above.
 
+### Connect the application to the predefined network
+
+**Required, and not stored in the repository.** On the application's settings,
+enable **Connect To Predefined Network**.
+
+A Docker Compose application is placed on its own isolated network, while a
+standalone database lives on the shared `coolify` network. Without this the
+containers cannot resolve the database host at all, and the symptom is
+indirect: the deploy fails after roughly two minutes with `service "migrate"
+didn't complete successfully`, because the migration job exhausts its
+connection retries. Nothing in the log names the network.
+
+Via the API:
+
+```bash
+curl -X PATCH -H "Authorization: Bearer $COOLIFY_CYBERDYNE_TOKEN" \
+  -H "Content-Type: application/json" -d '{"connect_to_docker_network":true}' \
+  "$COOLIFY_CYBERDYNE_URL/api/v1/applications/<app-uuid>"
+```
+
 ## 2. Application
 
 Create an **Application** from this repository, build pack **Docker Compose**,
@@ -125,3 +145,26 @@ End-to-end check:
   quality degrades quietly before anything else looks wrong.
 - **Deleting a channel from `INDEXED_CHANNEL_IDS`** stops ingestion but does not
   purge existing content on its own; run the purge task for that channel.
+
+
+## 7. What actually went wrong the first time
+
+Seven issues surfaced during the first deployment, none of which the test
+suite could have caught. They are recorded here because most of them look
+like application faults from the outside.
+
+| Symptom | Real cause |
+|---|---|
+| Platform rejects an env var with 422 | The variable is not declared in `docker-compose.yml`. Coolify only accepts variables the compose file mentions, so a setting absent there is not merely undocumented -- it cannot be set. |
+| Containers crash-loop with `ModuleNotFoundError` | The image shipped an empty package. A stub is installed first to cache the dependency layer; because the project version does not change, `uv` skipped the real install. Fixed with `--reinstall-package` plus a build-time import. |
+| `service "migrate" didn't complete successfully`, fast | The migration job loaded application settings, which validate the Discord credentials. A first deploy has none, so the schema could not be created until a bot token existed. |
+| `service "migrate" didn't complete successfully`, after ~2 min | The application is not on the predefined network and cannot reach the database. See section 1. |
+| `Input should be a valid integer` for a setting nobody touched | Coolify writes a blank for every compose variable left unfilled, and a blank is not the same as unset. Blanks are now dropped before validation. |
+
+Two lessons worth keeping:
+
+- **The deployment log does not carry container output.** When a container
+  fails, read its logs or reproduce the image locally. Inferring the cause
+  from the one variable you know is missing produces confident wrong answers.
+- **A build that succeeds is not a build that works.** The empty-package
+  image built cleanly for several deploys.
