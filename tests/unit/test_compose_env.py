@@ -61,3 +61,36 @@ def test_only_the_mcp_service_is_published() -> None:
     assert "SERVICE_FQDN" in service_block("mcp")
     for private in ("ingest", "bot"):
         assert "SERVICE_FQDN" not in service_block(private)
+
+
+# --- deploy ordering ---------------------------------------------------
+
+
+def test_a_migrate_service_exists() -> None:
+    """Without it the containers start against a schema-less database and
+    fail on their first statement, which reads as an application bug."""
+    assert "\n  migrate:\n" in COMPOSE
+
+
+def test_migrate_runs_once_and_exits() -> None:
+    block = service_block("migrate")
+    assert 'restart: "no"' in block, "a one-shot job must not be restarted"
+    assert "chatmemory.entrypoints.migrate" in block
+
+
+@pytest.mark.parametrize("service", ["ingest", "bot", "mcp"])
+def test_long_running_services_wait_for_the_migration(service: str) -> None:
+    block = service_block(service)
+    assert "service_completed_successfully" in block, (
+        f"{service} may start before the schema exists"
+    )
+
+
+def test_only_one_service_migrates() -> None:
+    """Three containers racing the same DDL is a real race: alembic takes no
+    lock of its own, so concurrent upgrades can both try to create a table."""
+    migrating = [
+        s for s in ("migrate", "ingest", "bot", "mcp")
+        if "entrypoints.migrate" in service_block(s)
+    ]
+    assert migrating == ["migrate"], f"more than one service migrates: {migrating}"
