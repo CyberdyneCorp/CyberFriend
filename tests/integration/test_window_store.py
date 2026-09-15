@@ -444,3 +444,31 @@ async def test_the_rebuild_loop_converges(clean: AsyncEngine) -> None:
     after_first = await window_rows(clean)
     assert await rebuild_pending_windows(service, store, batch=100) == 0
     assert await window_rows(clean) == after_first
+
+
+async def test_ingesting_a_message_registers_its_channel(clean: AsyncEngine) -> None:
+    """Nothing else creates the channel row.
+
+    A channel is discovered by ingesting from it, not configured in advance,
+    and `message` carries a foreign key to it. Every other integration test
+    inserts the channel by hand in its fixture, which is precisely why a
+    production ingest failed on the foreign key while the suite stayed green.
+    """
+    store = PostgresStore(clean)
+    channel = ChannelRef("discord", 987654321)
+    message = Message(
+        platform_message_id=555,
+        channel=channel,
+        author=PersonRef("discord", 42),
+        content="the espresso machine is broken",
+        created_at=datetime(2026, 9, 15, tzinfo=UTC),
+    )
+
+    await store.upsert_messages([message])
+
+    async with clean.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT id, platform FROM channel WHERE id = :c"),
+            {"c": channel.platform_channel_id},
+        )
+        assert rows.fetchone() is not None, "the channel was never registered"
