@@ -16,7 +16,7 @@ import structlog
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
-from chatmemory.ports.sources import ChatSource, EmbeddingClient
+from chatmemory.ports.sources import ChatSource, EmbeddingClient, SourceUnavailable
 from chatmemory.ports.store import Store
 
 log = structlog.get_logger()
@@ -38,6 +38,7 @@ class BackfillReport:
     channel: ChannelRef
     imported: int
     complete: bool
+    unavailable: bool = False
 
 
 class IngestService:
@@ -126,7 +127,13 @@ class IngestService:
             return BackfillReport(channel, 0, complete=True)
 
         cursor = await self._store.get_cursor(channel)
-        page = await self._source.backfill(channel, cursor, self._page_size)
+        try:
+            page = await self._source.backfill(channel, cursor, self._page_size)
+        except SourceUnavailable:
+            # Could not be asked, so nothing is known about what remains.
+            # Reporting completion here would retire the channel from
+            # backfill entirely on the strength of a question never answered.
+            return BackfillReport(channel, 0, complete=False, unavailable=True)
         if not page:
             return BackfillReport(channel, 0, complete=True)
 
@@ -148,7 +155,9 @@ class IngestService:
         for _ in range(max_pages):
             report = await self.backfill_page(channel)
             total += report.imported
-            if report.complete:
+            if report.complete or report.unavailable:
+                # Unavailable stops this sweep without recording progress, so
+                # the next one starts from the same cursor and tries again.
                 break
         return total
 
