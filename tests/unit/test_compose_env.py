@@ -28,6 +28,15 @@ DEPLOYMENT_SETTINGS = {
     "EMBEDDING_DIMENSIONS": ("ingest", "bot", "mcp"),
     "CHAT_MODEL": ("bot",),
     "EXTRACTION_MODEL": ("ingest",),
+    # Federation and the web tools decide what the agent may reach; asks
+    # decide what it extracts. All of them are settings an operator changes
+    # per deployment, so the platform has to accept them.
+    "FEDERATION_SERVERS": ("bot",),
+    "FEDERATION_TOOL_ALLOWLIST": ("bot",),
+    "WEB_TOOLS_ENABLED": ("bot",),
+    "SERPAPI_KEY": ("bot",),
+    "ASK_EXTRACTION_ENABLED": ("ingest",),
+    "ASK_MIN_CONFIDENCE": ("ingest",),
 }
 
 

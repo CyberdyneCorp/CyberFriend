@@ -436,3 +436,63 @@ def test_structlog_capture_is_actually_seeing_this_process() -> None:
     with capture_logs() as logs:
         structlog.get_logger().info("probe")
     assert [e for e in logs if e["event"] == "probe"]
+
+
+def _settings(**overrides: object):
+    """Settings for a deployment with no MCP servers, as ours has."""
+    from chatmemory.config import Settings
+
+    base = dict(
+        discord_token="x", discord_guild_id=1, llm_api_key="k",
+        database_url="postgresql+asyncpg://u:p@h/d",
+    )
+    base.update(overrides)
+    return Settings(_env_file=None, **base)  # type: ignore[arg-type]
+
+
+def _chat(settings):
+    from chatmemory.adapters.llm.chat import OpenAICompatibleChat
+    from chatmemory.composition import ANSWERING_STAGES, declared_capabilities
+
+    return OpenAICompatibleChat(
+        api_key="k", base_url=settings.llm_base_url, model=settings.chat_model,
+        stages=ANSWERING_STAGES, provides=declared_capabilities(settings),
+        scoring_model=settings.extraction_model,
+    )
+
+
+
+# --- local web providers register without any MCP server ---------------
+
+
+async def test_web_tools_register_with_no_mcp_servers_configured() -> None:
+    """The ordinary case for this deployment.
+
+    Wikipedia needs no server and no credential, so gating it on
+    FEDERATION_SERVERS left it in the image and off everywhere -- the
+    seventh feature in this project to ship complete and unreachable.
+    """
+    from chatmemory.composition import build_federation
+
+    settings = _settings(federation_servers="", web_tools_enabled=True)
+    tools = await build_federation(settings)
+    assert tools is not None, "web tools must register without an MCP server"
+    assert "wikipedia:search" in tools.federation.permits
+    await tools.federation.aclose()
+
+
+async def test_web_tools_can_be_turned_off_entirely() -> None:
+    """The setting closes the outbound boundary, not just Google."""
+    from chatmemory.composition import build_federation
+
+    tools = await build_federation(_settings(federation_servers=""))
+    assert tools is None, "egress must be off unless an operator turns it on"
+
+
+def test_a_proposer_exists_when_only_web_tools_are_configured() -> None:
+    """Gating the proposer on MCP servers left a deployment offering tools
+    every run and calling none, which reads as a model that never wants one."""
+    from chatmemory.composition import build_tool_proposer
+
+    settings = _settings(federation_servers="", web_tools_enabled=True)
+    assert build_tool_proposer(settings, _chat(settings)) is not None

@@ -109,6 +109,29 @@ class Settings(BaseSettings):
     # check refuses outright, so this bounds what a steered run can name.
     federation_max_tools_per_run: int = 5
 
+    web_tools_enabled: bool = False
+    """Wikipedia, and Google when a SerpApi key is set.
+
+    Off by default, deliberately. This is the switch that gives the agent an
+    outbound network connection, and it holds private channel content while
+    ingesting text anyone in the server can write -- a deployment should
+    acquire that boundary because someone chose it, not because they failed
+    to turn it off. Wikipedia needs no credential, which makes it easy to
+    enable and no less of a boundary.
+    """
+
+    serpapi_key: SecretStr | None = None
+    """Absent means Google is not registered at all.
+
+    Not registered rather than registered-and-failing: a tool the model can
+    see but cannot use is one it will plan around and then fail on.
+    """
+
+    web_max_calls_per_run: int = 3
+    """Outbound calls one question may cause, across all providers."""
+
+    web_timeout_seconds: float = 10.0
+
     # --- Windowing -----------------------------------------------------
     # Guesses until measured against a real corpus; see design.md.
     window_max_messages: int = 10
