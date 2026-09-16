@@ -201,7 +201,38 @@ class AskStateService:
         canonical = canonical_reaction(emoji)
         if canonical is None:
             return False
-        await self._store.record_reaction(source_message_id, person, canonical, at)
+        closed = await self._store.record_reaction(
+            source_message_id, person, canonical, at, ACKNOWLEDGING_REACTIONS
+        )
+        if closed:
+            log.info(
+                "asks.closed_by_reaction",
+                source_message_id=source_message_id,
+                closed=closed,
+            )
+        return True
+
+    async def remove_reaction(
+        self, source_message_id: int, person: PersonRef, emoji: str
+    ) -> bool:
+        """Withdraw an acknowledgement, reopening whatever it closed.
+
+        The mirror of recording one. Closing on a tick and then ignoring its
+        removal would leave people unable to correct a mistake they made in
+        one keystroke, which is how a tick stops being used at all.
+        """
+        canonical = canonical_reaction(emoji)
+        if canonical is None:
+            return False
+        reopened = await self._store.remove_reaction(
+            source_message_id, person, canonical, ACKNOWLEDGING_REACTIONS
+        )
+        if reopened:
+            log.info(
+                "asks.reopened_by_reaction_removal",
+                source_message_id=source_message_id,
+                reopened=reopened,
+            )
         return True
 
     async def refresh(self, now: datetime) -> StateRefresh:

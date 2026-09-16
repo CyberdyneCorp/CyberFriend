@@ -54,3 +54,18 @@
 - [x] 7.3 Measure addressee-resolution accuracy separately; it is the likeliest source of wrong entries
 - [x] 7.4 Re-run against the configured endpoint before release, since structured-output reliability is stack-dependent
 - [x] 7.5 Record standing extraction cost per 10k messages
+
+
+## 10. Wiring (added after the fact)
+
+These were ticked while the code they describe had no caller in any running
+process: `record_reaction` and `CorrectionService` were reachable only from
+their own tests. A ticked box in this file was not evidence, and this section
+exists so the next reader knows that.
+
+- [x] 10.1 Bind reaction events through the gateway so an acknowledgement reaches the store
+- [x] 10.2 Give the addressee a Discord command to resolve or disown an ask
+- [x] 10.3 Close an ask in the same transaction that records the tick, rather than up to five minutes later
+- [x] 10.4 Reopen an ask when the acknowledgement that closed it is withdrawn
+- [x] 10.5 Extract from backfilled history, not only the live stream
+- [ ] 10.6 Verify each of the above against the live deployment

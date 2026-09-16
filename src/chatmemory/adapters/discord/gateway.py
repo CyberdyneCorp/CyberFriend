@@ -105,6 +105,12 @@ class AskAcknowledgements(Protocol):
         self, source_message_id: int, person: PersonRef, emoji: str, at: datetime
     ) -> bool: ...
 
+    async def remove_reaction(
+        self, source_message_id: int, person: PersonRef, emoji: str
+    ) -> bool:
+        """Withdraw a reaction that may have closed an ask."""
+        ...
+
 
 def reaction_emoji(emoji: RawEmoji) -> str | None:
     """The reaction as a plain character, or None when it cannot be one.
@@ -367,6 +373,24 @@ class GatewayEventHandler:
             self._now(),
         )
 
+    async def on_reaction_remove(self, payload: RawReactionPayload) -> None:
+        """Withdraw an acknowledgement, reopening whatever it closed.
+
+        The mirror of `on_reaction_add`. Closing on a tick and ignoring its
+        removal leaves somebody unable to undo a mistake made in one
+        keystroke, which is how a tick stops being used at all.
+        """
+        if self._asks is None:
+            return
+        emoji = reaction_emoji(payload.emoji)
+        if emoji is None:
+            return
+        await self._asks.remove_reaction(
+            payload.message_id,
+            PersonRef(PLATFORM, payload.user_id),
+            emoji,
+        )
+
     def on_member_changed(self, person: PersonRef | None = None) -> None:
         """Roles or membership changed: that person's resolved view is stale."""
         for cache in self._caches:
@@ -461,6 +485,12 @@ class IngestClient(discord.Client):
         acknowledges it -- which is to say, never cached.
         """
         await self._handler.on_reaction_add(cast(RawReactionPayload, payload))
+
+    async def on_raw_reaction_remove(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        """Raw, for the same reason the add is: the message is rarely cached."""
+        await self._handler.on_reaction_remove(cast(RawReactionPayload, payload))
 
     async def on_member_update(self, _before: discord.Member, after: discord.Member) -> None:
         self._handler.on_member_changed(PersonRef(PLATFORM, after.id))
