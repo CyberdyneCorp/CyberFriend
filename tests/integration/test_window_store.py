@@ -472,3 +472,39 @@ async def test_ingesting_a_message_registers_its_channel(clean: AsyncEngine) -> 
             {"c": channel.platform_channel_id},
         )
         assert rows.fetchone() is not None, "the channel was never registered"
+
+
+async def test_a_rebuilt_window_keeps_the_author_name(clean: AsyncEngine) -> None:
+    """Display names are captured at ingest but rendered at windowing.
+
+    Windowing reloads messages from SQL, so a name held only on the in-memory
+    Message is lost the moment a window is rebuilt -- putting account ids back
+    into the window text that gets embedded and into every citation excerpt.
+    """
+    store = PostgresStore(clean)
+    channel = ChannelRef("discord", 5150)
+    await store.upsert_messages([
+        Message(
+            platform_message_id=9001,
+            channel=channel,
+            author=PersonRef("discord", 713763086305329162),
+            content="the espresso machine is broken",
+            created_at=datetime(2026, 9, 15, tzinfo=UTC),
+            author_display="leonardoaraujos",
+        )
+    ])
+
+    rebuilt = await store.rewindow_channel(
+        channel, datetime(2026, 9, 1, tzinfo=UTC), WindowBuilder().build
+    )
+    assert rebuilt >= 1
+
+    async with clean.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT text FROM conversation_window WHERE channel_id = :c"),
+            {"c": channel.platform_channel_id},
+        )
+        window_text = rows.scalar_one()
+
+    assert "leonardoaraujos:" in window_text
+    assert "713763086305329162" not in window_text, "account id back in window text"

@@ -157,3 +157,72 @@ def test_a_web_citation_is_not_judged_by_channel_membership() -> None:
     )
     assert scoped.answer.citations == (web,), "a web citation must survive delivery"
     assert scoped.answer.text == "Frank Herbert."
+
+
+# --- every argument is checked, not one named key ----------------------
+
+
+def _permit(mutates: bool):
+    from chatmemory.app.authorization import CredentialScope, ToolEffect, ToolPermit
+
+    return ToolPermit(
+        qualified_name="wikipedia:search",
+        server="wikipedia",
+        tool="search",
+        credential=CredentialScope.NARROW_READ_ONLY,
+        effect=ToolEffect.MUTATING if mutates else ToolEffect.READ_ONLY,
+    )
+
+
+def test_a_read_only_call_is_rooted_across_every_argument() -> None:
+    """Checking only `arguments["query"]` left every other field unread, so
+    private text under any other key went out unexamined."""
+    from chatmemory.adapters.mcp_client.invoker import _query_for
+    from chatmemory.app.authorization import ActionOrigin, InvocationRequest
+    from chatmemory.domain.identity import PersonRef
+
+    request = InvocationRequest(
+        requester=PersonRef("discord", 1),
+        question="who wrote Dune",
+        qualified_name="wikipedia:search",
+        arguments={"query": "who wrote Dune", "context": "acme salary bands 2026"},
+        origin=ActionOrigin.REQUESTER_REQUEST,
+    )
+    assert not _query_for(request, _permit(False)).rooted_in_asker
+
+
+def test_a_missing_query_key_does_not_pass_trivially() -> None:
+    """The old fallback compared the question against itself."""
+    from chatmemory.adapters.mcp_client.invoker import _query_for
+    from chatmemory.app.authorization import ActionOrigin, InvocationRequest
+    from chatmemory.domain.identity import PersonRef
+
+    request = InvocationRequest(
+        requester=PersonRef("discord", 1),
+        question="who wrote Dune",
+        qualified_name="wikipedia:search",
+        arguments={"q": "acme salary bands 2026"},
+        origin=ActionOrigin.REQUESTER_REQUEST,
+    )
+    assert not _query_for(request, _permit(False)).rooted_in_asker
+
+
+def test_an_approved_mutating_call_is_not_word_rooted() -> None:
+    """Nobody types the body of the comment they ask the agent to post.
+
+    The requester was shown these exact arguments and approved them, which
+    is a stronger check than word containment -- rooting here would refuse
+    every legitimate action.
+    """
+    from chatmemory.adapters.mcp_client.invoker import _query_for
+    from chatmemory.app.authorization import ActionOrigin, InvocationRequest
+    from chatmemory.domain.identity import PersonRef
+
+    request = InvocationRequest(
+        requester=PersonRef("discord", 1),
+        question="close issue 7",
+        qualified_name="tracker:close",
+        arguments={"issue": 7, "comment": "done"},
+        origin=ActionOrigin.REQUESTER_REQUEST,
+    )
+    assert _query_for(request, _permit(True)).rooted_in_asker

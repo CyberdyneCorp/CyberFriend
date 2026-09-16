@@ -128,7 +128,13 @@ SELECT m.id, m.channel_id, m.content, m.created_at, m.edited_at,
            SELECT p.platform_user_id FROM person_platform_id p
            WHERE p.person_id = m.author_person_id AND p.platform = :platform
            ORDER BY p.platform_user_id LIMIT 1
-       ), m.author_person_id) AS platform_user_id
+       ), m.author_person_id) AS platform_user_id,
+       -- The name a reader recognises. Windowing renders it into the window
+       -- text, which is what gets embedded and what a citation excerpt
+       -- shows, so a rebuild that could not resolve it would silently put
+       -- account ids back into both.
+       (SELECT pe.display_name FROM person pe WHERE pe.id = m.author_person_id)
+           AS author_display
 FROM message m
 WHERE m.deleted_at IS NULL
   -- Not "has no membership row" but "is in no *live* window". Tombstoning a
@@ -368,7 +374,13 @@ SELECT m.id, m.channel_id, m.content, m.created_at, m.edited_at,
            SELECT p.platform_user_id FROM person_platform_id p
            WHERE p.person_id = m.author_person_id AND p.platform = :platform
            ORDER BY p.platform_user_id LIMIT 1
-       ), m.author_person_id) AS platform_user_id
+       ), m.author_person_id) AS platform_user_id,
+       -- The name a reader recognises. Windowing renders it into the window
+       -- text, which is what gets embedded and what a citation excerpt
+       -- shows, so a rebuild that could not resolve it would silently put
+       -- account ids back into both.
+       (SELECT pe.display_name FROM person pe WHERE pe.id = m.author_person_id)
+           AS author_display
 FROM message m
 WHERE m.deleted_at IS NULL
   AND m.channel_id = :channel_id

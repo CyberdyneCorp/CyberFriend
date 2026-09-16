@@ -29,6 +29,7 @@ from chatmemory.app.authorization import (
     FencedContent,
     InvocationRequest,
     Refusal,
+    ToolPermit,
 )
 from chatmemory.app.egress import (
     EgressGuard,
@@ -131,7 +132,7 @@ class GuardedInvoker:
             clearance = self._egress.authorize(
                 EgressRequest(
                     asker=request.requester,
-                    query=_query_for(request),
+                    query=_query_for(request, permit),
                     provider=permit.server,
                 )
             )
@@ -142,17 +143,21 @@ class GuardedInvoker:
                 requester=str(request.requester),
                 reason=str(refused.reason),
             )
+            # Refused after approval: the attempt happened, so the approval
+            # is spent. Otherwise a refusal leaves the "yes" reusable.
+            self._confirmations.consume(request)
             entry = self._audit.append(request, decision, AuditOutcome.REFUSED, now=now)
             return InvocationOutcome(decision=decision, entry=entry)
 
         with authorized(clearance):
             result = await self._federation.call(permit, request.arguments)
 
-        if result.ok:
-            # One approval authorises one call: a second invocation with the
-            # same arguments has to be confirmed again rather than replaying
-            # the first "yes".
-            self._confirmations.consume(request)
+        # Consumed whatever the outcome. An approval authorises one attempt,
+        # not one success: leaving it granted after a timeout or a transport
+        # error left a live "yes" in the ledger for the rest of its window,
+        # which a second call with the same arguments could spend without
+        # asking anyone. The person approved a call that has now been made.
+        self._confirmations.consume(request)
 
         outcome = (
             AuditOutcome.INVOKED
@@ -189,7 +194,7 @@ class GuardedInvoker:
         return self._confirmations.propose(request, decision.permit, now=now)
 
 
-def _query_for(request: InvocationRequest) -> ProvenancedQuery:
+def _query_for(request: InvocationRequest, permit: ToolPermit) -> ProvenancedQuery:
     """The query this call would send, with where its text came from.
 
     A tool's arguments are written by the model, so the text it proposes is
@@ -197,10 +202,41 @@ def _query_for(request: InvocationRequest) -> ProvenancedQuery:
     asker wrote. The question is taken from the request rather than from the
     arguments, because the arguments are the thing being checked.
     """
-    proposed = request.arguments.get("query")
-    text = proposed if isinstance(proposed, str) and proposed.strip() else request.question
+    # A mutating call has already been shown to the requester, argument for
+    # argument, and invoked only because they approved it. Rooting its text
+    # in their question would refuse every legitimate action -- nobody types
+    # the body of the comment they are asking the agent to post -- and the
+    # human who read the exact arguments is a stronger check than word
+    # containment. Rooting is for calls made WITHOUT that review.
+    if permit.effect.mutates:
+        return ProvenancedQuery(
+            text=request.question, origin=QueryOrigin.ASKER, question=request.question
+        )
+
+    # EVERY string argument, not one named key. Checking only `query` left
+    # every other field unexamined, so a call carrying private text in `q`,
+    # `context` or any name the model chose went out unread -- and when
+    # `query` was absent the check compared the question against itself and
+    # passed trivially. What is checked has to be what is sent.
+    texts = tuple(
+        value.strip()
+        for value in request.arguments.values()
+        if isinstance(value, str) and value.strip()
+    )
+    if not texts:
+        # Nothing textual leaves, so there is nothing to root. Recorded
+        # against the question so the audit line still names the run.
+        return ProvenancedQuery(
+            text=request.question, origin=QueryOrigin.ASKER, question=request.question
+        )
+
+    combined = " ".join(texts)
     return ProvenancedQuery(
-        text=text,
-        origin=QueryOrigin.ASKER if text == request.question else QueryOrigin.MODEL_REFORMULATION,
+        text=combined,
+        origin=(
+            QueryOrigin.ASKER
+            if len(texts) == 1 and texts[0] == request.question.strip()
+            else QueryOrigin.MODEL_REFORMULATION
+        ),
         question=request.question,
     )

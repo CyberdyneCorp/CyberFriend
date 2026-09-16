@@ -34,6 +34,9 @@ def _message_from_row(row: RowMapping, channel: ChannelRef | None = None) -> Mes
         platform_message_id=cast(int, row["id"]),
         channel=channel or ChannelRef(PLATFORM, cast(int, row["channel_id"])),
         author=PersonRef(PLATFORM, cast(int, row["platform_user_id"])),
+        # Empty when the row predates display-name capture; windowing then
+        # falls back to the account id, as it did before.
+        author_display=cast(str, row["author_display"] or ""),
         content=str(row["content"]),
         created_at=cast(datetime, row["created_at"]),
         edited_at=cast("datetime | None", row["edited_at"]),
