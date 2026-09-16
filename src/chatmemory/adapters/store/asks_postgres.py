@@ -102,8 +102,20 @@ class PostgresAskStore:
             return written
 
     async def record_reaction(
-        self, source_message_id: int, person: PersonRef, emoji: str, at: datetime
-    ) -> None:
+        self,
+        source_message_id: int,
+        person: PersonRef,
+        emoji: str,
+        at: datetime,
+        acknowledging: frozenset[str] = frozenset(),
+    ) -> int:
+        """Store the reaction and close what it answers, in one transaction.
+
+        Closing here as well as in the periodic pass is not duplication: the
+        pass runs every few minutes, and watching a tick you just left do
+        nothing for that long reads as the feature being broken. Both run the
+        same statement, narrowed.
+        """
         async with self._engine.begin() as conn:
             person_id = await self._person_id(conn, person, create=True)
             await conn.execute(
@@ -115,6 +127,48 @@ class PostgresAskStore:
                     "at": at,
                 },
             )
+            if not acknowledging:
+                return 0
+            closed = await conn.execute(
+                asks_sql.CLOSE_ANSWERED_BY_REACTION_FOR_MESSAGE,
+                {
+                    "emojis": sorted(acknowledging),
+                    "source_message_id": source_message_id,
+                },
+            )
+            return int(closed.rowcount or 0)
+
+    async def remove_reaction(
+        self,
+        source_message_id: int,
+        person: PersonRef,
+        emoji: str,
+        acknowledging: frozenset[str] = frozenset(),
+    ) -> int:
+        """Withdraw a reaction, and reopen what it had closed.
+
+        A closure that cannot be undone teaches people not to use the tick.
+        """
+        async with self._engine.begin() as conn:
+            person_id = await self._person_id(conn, person, create=True)
+            await conn.execute(
+                asks_sql.REMOVE_REACTION,
+                {
+                    "source_message_id": source_message_id,
+                    "person_id": person_id,
+                    "emoji": emoji,
+                },
+            )
+            if not acknowledging:
+                return 0
+            reopened = await conn.execute(
+                asks_sql.REOPEN_WITHOUT_REACTION,
+                {
+                    "source_message_id": source_message_id,
+                    "emojis": sorted(acknowledging),
+                },
+            )
+            return int(reopened.rowcount or 0)
 
     async def refresh_state(
         self, now: datetime, stale_after: timedelta, acknowledging: frozenset[str]

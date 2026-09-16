@@ -61,9 +61,24 @@ class AskStore(Protocol):
     ) -> CorrectionOutcome: ...
 
     async def record_reaction(
-        self, source_message_id: int, person: PersonRef, emoji: str, at: datetime
-    ) -> None:
-        """Record an observed reaction on a message an ask came from."""
+        self,
+        source_message_id: int,
+        person: PersonRef,
+        emoji: str,
+        at: datetime,
+        acknowledging: frozenset[str] = frozenset(),
+    ) -> int:
+        """Record a reaction, and close what it answers. Returns asks closed."""
+        ...
+
+    async def remove_reaction(
+        self,
+        source_message_id: int,
+        person: PersonRef,
+        emoji: str,
+        acknowledging: frozenset[str] = frozenset(),
+    ) -> int:
+        """Withdraw a reaction, and reopen what it closed. Returns asks reopened."""
         ...
 
     async def refresh_state(

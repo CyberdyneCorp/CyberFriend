@@ -174,9 +174,30 @@ class FakeAskStore:
         return len(asks)
 
     async def record_reaction(
-        self, source_message_id: int, person: PersonRef, emoji: str, at: datetime
-    ) -> None:
+        self,
+        source_message_id: int,
+        person: PersonRef,
+        emoji: str,
+        at: datetime,
+        acknowledging: frozenset[str] = frozenset(),
+    ) -> int:
         self.reactions.append((source_message_id, Reaction(person, emoji, at)))
+        return 0
+
+    async def remove_reaction(
+        self,
+        source_message_id: int,
+        person: PersonRef,
+        emoji: str,
+        acknowledging: frozenset[str] = frozenset(),
+    ) -> int:
+        before = len(self.reactions)
+        self.reactions = [
+            (mid, r)
+            for mid, r in self.reactions
+            if not (mid == source_message_id and r.person == person and r.emoji == emoji)
+        ]
+        return before - len(self.reactions)
 
     async def refresh_state(
         self, now: datetime, stale_after: timedelta, acknowledging: frozenset[str]

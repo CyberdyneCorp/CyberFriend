@@ -31,7 +31,7 @@ from chatmemory.app.asks.extraction import ExtractionService
 from chatmemory.app.asks.model import AskCandidate, AskKind, ExtractedAsk
 from chatmemory.app.asks.obligations import NOTHING_OUTSTANDING
 from chatmemory.app.asks.resolution import ObservedDirectory
-from chatmemory.app.asks.state import AskStateService
+from chatmemory.app.asks.state import ACKNOWLEDGING_REACTIONS, AskStateService
 from chatmemory.app.asks.worker import ExtractionWorker
 from chatmemory.app.ingest import IngestService
 from chatmemory.app.windowing import WindowBuilder
@@ -405,3 +405,81 @@ async def test_a_reaction_after_the_ask_does_close_it(pipeline: Pipeline) -> Non
     )
     refreshed = await pipeline.state.refresh(NOW)
     assert refreshed.answered_by_reaction == 1
+
+
+async def test_a_tick_closes_the_ask_without_waiting_for_the_state_pass(
+    pipeline: Pipeline,
+) -> None:
+    """The pass runs every five minutes.
+
+    Watching a tick you just left do nothing for that long reads as the
+    feature being broken, so the reaction closes what it answers in the same
+    transaction that records it.
+    """
+    await pipeline.capture(
+        message(
+            31, ALICE, "@bob can you review the migration?",
+            mentions=frozenset({BOB}), thread_id=THREAD,
+        )
+    )
+    await pipeline.asks.record_reaction(
+        source_message_id=31, person=BOB, emoji="✅",
+        at=TODAY + timedelta(minutes=1), acknowledging=ACKNOWLEDGING_REACTIONS,
+    )
+
+    # No refresh() call: this must already be closed.
+    answered = await pipeline.ask("what do I need to do", viewer(BOB, OPEN_CH), OPEN_CH)
+    assert answered.text == NOTHING_OUTSTANDING
+
+
+async def test_removing_the_tick_reopens_the_ask(pipeline: Pipeline) -> None:
+    """A closure that cannot be undone teaches people not to use the tick."""
+    await pipeline.capture(
+        message(
+            32, ALICE, "@bob can you review the migration?",
+            mentions=frozenset({BOB}), thread_id=THREAD,
+        )
+    )
+    await pipeline.asks.record_reaction(
+        source_message_id=32, person=BOB, emoji="✅",
+        at=TODAY + timedelta(minutes=1), acknowledging=ACKNOWLEDGING_REACTIONS,
+    )
+    assert (
+        await pipeline.ask("what do I need to do", viewer(BOB, OPEN_CH), OPEN_CH)
+    ).text == NOTHING_OUTSTANDING
+
+    reopened = await pipeline.asks.remove_reaction(
+        source_message_id=32, person=BOB, emoji="✅",
+        acknowledging=ACKNOWLEDGING_REACTIONS,
+    )
+
+    assert reopened == 1
+    outstanding = await pipeline.ask(
+        "what do I need to do", viewer(BOB, OPEN_CH), OPEN_CH
+    )
+    assert outstanding.text != NOTHING_OUTSTANDING
+
+
+async def test_somebody_elses_tick_removal_reopens_nothing(pipeline: Pipeline) -> None:
+    """Only the addressee's acknowledgement closed it, so only theirs can
+    withdraw it."""
+    await pipeline.capture(
+        message(
+            33, ALICE, "@bob can you review the migration?",
+            mentions=frozenset({BOB}), thread_id=THREAD,
+        )
+    )
+    await pipeline.asks.record_reaction(
+        source_message_id=33, person=BOB, emoji="✅",
+        at=TODAY + timedelta(minutes=1), acknowledging=ACKNOWLEDGING_REACTIONS,
+    )
+
+    reopened = await pipeline.asks.remove_reaction(
+        source_message_id=33, person=ALICE, emoji="✅",
+        acknowledging=ACKNOWLEDGING_REACTIONS,
+    )
+
+    assert reopened == 0
+    assert (
+        await pipeline.ask("what do I need to do", viewer(BOB, OPEN_CH), OPEN_CH)
+    ).text == NOTHING_OUTSTANDING

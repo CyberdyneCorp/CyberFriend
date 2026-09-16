@@ -105,6 +105,63 @@ WHERE a.status IN ('open', 'stale')
   AND x.reacted_at > a.asked_at
 """)
 
+CLOSE_ANSWERED_BY_REACTION_FOR_MESSAGE = text("""
+UPDATE ask a SET status = 'answered', closed_at = x.reacted_at, closed_by = 'reaction'
+FROM ask_reaction x
+WHERE a.status IN ('open', 'stale')
+  AND a.addressee_kind = 'person'
+  AND x.message_id = a.source_message_id
+  AND x.person_id = a.addressee_person_id
+  AND x.emoji = ANY(:emojis)
+  -- The acknowledgement has to come after the thing it acknowledges. Its
+  -- sibling above carries the same guard: without it a tick left on a
+  -- message for some earlier reason closes an ask the moment extraction
+  -- creates one, so the obligation is answered before anybody has read it.
+  AND x.reacted_at > a.asked_at
+  AND a.source_message_id = :source_message_id
+""")
+"""The same rule as the periodic pass, for one message.
+
+The pass runs every few minutes, which is a long time to watch a tick you
+just left do nothing. Narrowing the same statement rather than writing a
+second one is deliberate: two statements deciding when an ask is answered
+would drift, and the periodic pass would quietly become the authority on
+anything the fast path got wrong.
+"""
+
+
+REMOVE_REACTION = text("""
+DELETE FROM ask_reaction
+WHERE message_id = :source_message_id
+  AND person_id = :person_id
+  AND emoji = :emoji
+""")
+
+
+REOPEN_WITHOUT_REACTION = text("""
+UPDATE ask a SET status = 'open', closed_at = NULL, closed_by = NULL
+WHERE a.source_message_id = :source_message_id
+  AND a.closed_by = 'reaction'
+  AND a.status = 'answered'
+  -- Only when nothing else still acknowledges it. Somebody removing one of
+  -- two ticks has not withdrawn the other, and an ask that reopened because
+  -- of that would be a request nobody made.
+  AND NOT EXISTS (
+      SELECT 1 FROM ask_reaction x
+      WHERE x.message_id = a.source_message_id
+        AND x.person_id = a.addressee_person_id
+        AND x.emoji = ANY(:emojis)
+        AND x.reacted_at > a.asked_at
+  )
+""")
+"""Undo a closure whose reason has gone.
+
+Reopening is the honest reading of removing an acknowledgement: the ask was
+closed because somebody said it was done, and they have taken that back. A
+closure that cannot be undone teaches people not to use the tick.
+"""
+
+
 # Ageing marks an ask stale. It never closes one: an ask nobody answered in
 # three weeks is exactly what somebody asking "what do I need to do" wants to
 # see, and closing it would hide that.

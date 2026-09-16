@@ -142,6 +142,19 @@ UNSCOPED: dict[str, str] = {
     "asks_sql.RECORD_REACTION": "write; an observed reaction",
     "asks_sql.CLOSE_ANSWERED_BY_REPLY": "write; state transition from an event",
     "asks_sql.CLOSE_ANSWERED_BY_REACTION": "write; state transition from an event",
+    "asks_sql.CLOSE_ANSWERED_BY_REACTION_FOR_MESSAGE": (
+        "write; the same closing rule as the periodic pass, narrowed to one "
+        "message so a tick closes what it answers immediately. No viewer: an "
+        "ask is closed by its own addressee, bound as a predicate"
+    ),
+    "asks_sql.REMOVE_REACTION": (
+        "write; withdraws a reaction the same person left. No viewer: the "
+        "actor is bound as a predicate, and a reaction is not content"
+    ),
+    "asks_sql.REOPEN_WITHOUT_REACTION": (
+        "write; undoes a closure whose acknowledgement has been removed. No "
+        "viewer: it acts on the ask whose addressee left the reaction"
+    ),
     "asks_sql.MARK_STALE": "write; ageing, which never closes an ask",
     # --- documents_sql ---------------------------------------------------
     "documents_sql.UPSERT_DOCUMENT": "write; returns the document id only",
