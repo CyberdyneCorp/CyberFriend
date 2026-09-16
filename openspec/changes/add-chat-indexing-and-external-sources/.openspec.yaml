@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-16
+goal: Grow what the agent knows and reaches from the conversation itself,
+  without a redeploy and without widening the archive by accident
