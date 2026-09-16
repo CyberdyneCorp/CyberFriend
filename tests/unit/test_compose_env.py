@@ -22,7 +22,9 @@ COMPOSE = (ROOT / "docker-compose.yml").read_text()
 DEPLOYMENT_SETTINGS = {
     "DISCORD_TOKEN": ("ingest", "bot", "mcp"),
     "DISCORD_GUILD_ID": ("ingest", "bot", "mcp"),
-    "INDEXED_CHANNEL_IDS": ("ingest", "bot", "admin"),
+    # The MCP server reads scope live too, and the environment is its baseline
+    # until something is stored.
+    "INDEXED_CHANNEL_IDS": ("ingest", "bot", "mcp", "admin"),
     "DATABASE_URL": ("ingest", "bot", "mcp", "admin"),
     "LLM_BASE_URL": ("ingest", "bot", "mcp"),
     "LLM_API_KEY": ("ingest", "bot", "mcp"),
@@ -45,6 +47,11 @@ DEPLOYMENT_SETTINGS = {
     "FEDERATION_MAX_TOOLS_PER_RUN": ("bot", "admin"),
     "WEB_TOOLS_ENABLED": ("bot", "admin"),
     "SERPAPI_KEY": ("bot",),
+    # Market data is merged into the bot's federation; declared here or an
+    # operator enabling it in the platform silently keeps it off.
+    "MARKET_TOOLS_ENABLED": ("bot",),
+    "MARKET_MAX_CALLS_PER_RUN": ("bot",),
+    "MARKET_TIMEOUT_SECONDS": ("bot",),
     "ASK_EXTRACTION_ENABLED": ("ingest", "admin"),
     "ASK_MIN_CONFIDENCE": ("ingest", "admin"),
     # Conversation memory. Retention is enforced by the ingest sweep, so a

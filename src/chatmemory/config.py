@@ -161,6 +161,22 @@ class Settings(BaseSettings):
 
     web_timeout_seconds: float = 10.0
 
+    market_tools_enabled: bool = False
+    """BTC/ETH prices, currency conversion, and the S&P 500 with a SerpApi key.
+
+    Off by default for the same reason as `web_tools_enabled`: it is an
+    outbound connection a chat message can trigger, and a deployment should
+    acquire one because someone chose it. What leaves is narrower than a web
+    query -- members of closed vocabularies checked in `app.egress` -- but
+    "narrow" is not "none", and the switch is what makes it a decision.
+    The S&P 500 reuses SERPAPI_KEY rather than a second key.
+    """
+
+    market_max_calls_per_run: int = 3
+    """Market lookups one question may cause, across all market providers."""
+
+    market_timeout_seconds: float = 8.0
+
     # --- Windowing -----------------------------------------------------
     # Guesses until measured against a real corpus; see design.md.
     window_max_messages: int = 10
@@ -268,6 +284,14 @@ class Settings(BaseSettings):
                 "memory_summarise_after_turns must exceed memory_recent_turns"
             )
         return self
+
+    @field_validator("market_max_calls_per_run", "market_timeout_seconds")
+    @classmethod
+    def _positive_market_setting(cls, v: float) -> float:
+        """Refused at boot: a zero budget registers tools that refuse every call."""
+        if v <= 0:
+            raise ValueError("must be positive")
+        return v
 
     @field_validator("ask_stale_after_days", "ask_extraction_window_messages")
     @classmethod

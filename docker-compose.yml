@@ -105,6 +105,12 @@ services:
       - SERPAPI_KEY=${SERPAPI_KEY}
       - WEB_MAX_CALLS_PER_RUN=${WEB_MAX_CALLS_PER_RUN}
       - WEB_TIMEOUT_SECONDS=${WEB_TIMEOUT_SECONDS}
+      # Market data: BTC/ETH, currency conversion, and the S&P 500 when
+      # SERPAPI_KEY is set. Off unless enabled; lookups are held to closed
+      # vocabularies by the egress guard, never to free text.
+      - MARKET_TOOLS_ENABLED=${MARKET_TOOLS_ENABLED}
+      - MARKET_MAX_CALLS_PER_RUN=${MARKET_MAX_CALLS_PER_RUN}
+      - MARKET_TIMEOUT_SECONDS=${MARKET_TIMEOUT_SECONDS}
       # Conversation memory: turns kept verbatim, and the size past which older
       # turns are summarised on EXTRACTION_MODEL in the background.
       - MEMORY_RECENT_TURNS=${MEMORY_RECENT_TURNS}
@@ -136,6 +142,10 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      # The environment baseline for indexing scope. Stored scope wins once
+      # the console has written one; without this, a deployment that never
+      # used the console served nothing here while the bot answered.
+      - INDEXED_CHANNEL_IDS=${INDEXED_CHANNEL_IDS}
       - LLM_BASE_URL=${LLM_BASE_URL}
       - LLM_API_KEY=${LLM_API_KEY}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL}

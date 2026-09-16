@@ -15,6 +15,13 @@ permission change made wrong, so the invalidation source is an object
 (`PermissionCaches`) that a cache must be handed, and the only way to hand it
 to a resolver the composition root builds is to pass a `LiveGuild` in place of
 a bare guild provider. A resolver given a plain provider does not cache.
+
+Indexing scope is read on every resolution rather than captured when the
+resolver is built. A resolver holding the startup set keeps showing a channel
+an operator removed and never shows one they added, and because the resolver
+is what bounds retrieval, that is the whole of retrieval's view of scope.
+Cached results carry the scope they were computed under and are not served
+once it has moved.
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from typing import Protocol
 
 import structlog
 
+from chatmemory.app.scope import ScopeProvider, as_scope
 from chatmemory.domain.audience import EMPTY_AUDIENCE, Audience, DeliveryMode
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 
@@ -164,17 +172,30 @@ def _can_read(channel: _Channel, member: _Member) -> bool:
     return bool(perms.view_channel and perms.read_message_history)
 
 
+def _in_scope(guild: _Guild, indexed: frozenset[int]) -> list[_Channel]:
+    if not indexed:
+        return []
+    return [c for c in guild.text_channels if c.id in indexed]
+
+
 class DiscordAclResolver:
     """Resolves a single person's readable channels."""
 
-    def __init__(self, guild: GuildProvider | _Guild, indexed: Iterable[int] = ()) -> None:
+    def __init__(
+        self,
+        guild: GuildProvider | _Guild,
+        indexed: ScopeProvider | Iterable[int] = (),
+    ) -> None:
         self._guild = guild if callable(guild) else static_guild(guild)
-        self._indexed = frozenset(indexed)
+        self._scope = as_scope(indexed)
+
+    @property
+    def scope(self) -> ScopeProvider:
+        """What a cache in front of this resolver checks its entries against."""
+        return self._scope
 
     def _channels(self, guild: _Guild) -> list[_Channel]:
-        if not self._indexed:
-            return []
-        return [c for c in guild.text_channels if c.id in self._indexed]
+        return _in_scope(guild, self._scope.current())
 
     async def resolve_viewer(self, person: PersonRef) -> Viewer:
         guild = self._guild()
@@ -218,23 +239,22 @@ class DiscordAudienceResolver:
     def __init__(
         self,
         guild: GuildProvider | _Guild,
-        indexed: Iterable[int] = (),
+        indexed: ScopeProvider | Iterable[int] = (),
         cache_ttl_seconds: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._guild = guild if callable(guild) else static_guild(guild)
-        self._indexed = frozenset(indexed)
+        self._scope = as_scope(indexed)
         self._ttl = cache_ttl_seconds
         self._clock = clock
-        self._cache: dict[int, tuple[float, Audience]] = {}
+        # Each entry remembers the scope it was computed under. A scope change
+        # is not a permission event, so no listener clears the cache for it;
+        # comparing on read is what stops an audience that still includes a
+        # removed channel from being served for the rest of its TTL.
+        self._cache: dict[int, tuple[float, frozenset[int], Audience]] = {}
         self._invalidation = invalidation_for(self._guild)
         if self._invalidation is not None:
             self._invalidation.register(self)
-
-    def _channels(self, guild: _Guild) -> list[_Channel]:
-        if not self._indexed:
-            return []
-        return [c for c in guild.text_channels if c.id in self._indexed]
 
     @property
     def members_available(self) -> bool:
@@ -275,19 +295,24 @@ class DiscordAudienceResolver:
             return EMPTY_AUDIENCE
 
         key = destination.platform_channel_id
+        indexed = self._scope.current()
         if self.caching:
             cached = self._cache.get(key)
             # The TTL is a backstop for events missed across a gateway gap,
             # not the mechanism: invalidation is.
-            if cached is not None and (self._clock() - cached[0]) < self._ttl:
-                return cached[1]
+            if (
+                cached is not None
+                and (self._clock() - cached[0]) < self._ttl
+                and cached[1] == indexed
+            ):
+                return cached[2]
 
-        audience = self._compute(destination)
+        audience = self._compute(destination, indexed)
         if self.caching:
-            self._cache[key] = (self._clock(), audience)
+            self._cache[key] = (self._clock(), indexed, audience)
         return audience
 
-    def _compute(self, destination: ChannelRef) -> Audience:
+    def _compute(self, destination: ChannelRef, indexed: frozenset[int]) -> Audience:
         guild = self._guild()
         if guild is None or not self.members_available:
             # Vacuous containment would permit everything. Refuse instead.
@@ -309,7 +334,7 @@ class DiscordAudienceResolver:
         # A source is permitted only if every receiver can read it.
         readable = frozenset(
             ChannelRef(PLATFORM, c.id)
-            for c in self._channels(guild)
+            for c in _in_scope(guild, indexed)
             if all(_can_read(c, m) for m in receivers)
         )
         return Audience(
@@ -321,7 +346,7 @@ class DiscordAudienceResolver:
 
     async def resolve_private(self, person: PersonRef) -> Audience:
         """An audience of one: the person's own visibility, by definition."""
-        viewer = await DiscordAclResolver(self._guild, self._indexed).resolve_viewer(person)
+        viewer = await DiscordAclResolver(self._guild, self._scope).resolve_viewer(person)
         return Audience(
             mode=DeliveryMode.DIRECT_MESSAGE,
             members=frozenset({person}),

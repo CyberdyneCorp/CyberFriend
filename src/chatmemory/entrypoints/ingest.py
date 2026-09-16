@@ -4,9 +4,10 @@ Runs exactly one replica. Two containers sharing a bot token both identify to
 the gateway and ingest every message twice; Discord does not error, so the
 duplication is silent. See docker-compose.yml.
 
-Nine concurrent jobs make up the process, each a loop that survives its own
+Ten concurrent jobs make up the process, each a loop that survives its own
 failures because none of them may take the others down:
 
+  scope        indexing scope re-read from runtime configuration
   live         messages the gateway hands us, persisted as they arrive
   backfill     paginated history, newest-first, resuming from stored cursors
   reconcile    edits and deletions that happened while we were not running
@@ -16,6 +17,11 @@ failures because none of them may take the others down:
   ask backlog  asks read out of everything backfill imported
   ask state    open/answered/stale, applied from observed events only
   memory       remembered conversation past its retention window, deleted
+
+Indexing scope is read live, not once at startup. Every job below asks the
+same `LiveScope` which channels are in scope each time it acts, so a channel
+an operator adds in the console starts being captured and backfilled within a
+refresh period, and one they remove stops being captured, without a restart.
 
 Only the live loop is real-time. The rest are catch-up work whose whole point
 is that an outage costs time rather than fidelity.
@@ -37,8 +43,10 @@ so it reports its own progress on the health endpoint.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -55,18 +63,24 @@ from chatmemory.adapters.discord.source import (
     reconcile_window,
 )
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
+from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.state import AskStateService
-from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
+from chatmemory.app.asks.worker import (
+    BacklogExtractionWorker,
+    ExtractionLedger,
+    ExtractionWorker,
+)
 from chatmemory.app.conversation import MemoryRetention
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
+from chatmemory.app.scope import LiveScope, ScopeChange, ScopeProvider
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import build_ask_pipeline, build_memory_retention
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
 from chatmemory.health import HealthState, spawn
-from chatmemory.ports.store import Store
+from chatmemory.ports.store import PendingExtraction, Store
 
 log = structlog.get_logger()
 
@@ -96,8 +110,74 @@ BACKLOG_EXTRACTION_INTERVAL_SECONDS = 60.0
 MEMORY_RETENTION_INTERVAL_SECONDS = 3600.0
 
 
+def channels_in(channel_ids: frozenset[int]) -> list[ChannelRef]:
+    return [ChannelRef(PLATFORM, cid) for cid in sorted(channel_ids)]
+
+
 def indexed_channels(settings: Settings) -> list[ChannelRef]:
-    return [ChannelRef(PLATFORM, cid) for cid in sorted(settings.indexed_channel_ids)]
+    """The environment's scope. Startup logging only; jobs read `LiveScope`."""
+    return channels_in(settings.indexed_channel_ids)
+
+
+class ScopedExtractionLedger:
+    """The corpus's extraction record, narrowed to the scope in force now.
+
+    `BacklogExtractionWorker` takes its channels once, at construction. Handed
+    the startup scope, it would keep paying model calls for a channel an
+    operator removed and never read the history of one they added. Reading
+    scope here, on every pass, fixes both without a second worker; the
+    `channels` argument the worker passes is replaced, not intersected, because
+    the worker's copy is exactly the stale value this exists to ignore.
+    """
+
+    def __init__(self, inner: ExtractionLedger, scope: ScopeProvider) -> None:
+        self._inner = inner
+        self._scope = scope
+
+    async def messages_pending_extraction(
+        self, limit: int, channels: Sequence[ChannelRef] = ()
+    ) -> Sequence[PendingExtraction]:
+        return await self._inner.messages_pending_extraction(
+            limit, channels_in(self._scope.current())
+        )
+
+    async def record_extraction(self, entries: Sequence[PendingExtraction]) -> int:
+        return await self._inner.record_extraction(entries)
+
+    async def pending_extraction_count(
+        self, cap: int = 1000, channels: Sequence[ChannelRef] = ()
+    ) -> int:
+        return await self._inner.pending_extraction_count(
+            cap, channels_in(self._scope.current())
+        )
+
+
+def wake_on_widening(wake: asyncio.Event) -> Callable[[ScopeChange], None]:
+    """A scope observer that starts a backfill sweep when a channel is added.
+
+    Only additions: a removed channel has nothing to fetch, and the sweep
+    already skips it because it reads scope as it goes.
+    """
+
+    def observe(change: ScopeChange) -> None:
+        if change.added:
+            wake.set()
+
+    return observe
+
+
+async def _pause(interval: float, wake: asyncio.Event | None) -> None:
+    """Sleep for `interval`, or until `wake` is set, whichever comes first.
+
+    Cleared after waking rather than before waiting, so a scope change that
+    lands during a sweep still triggers the next one.
+    """
+    if wake is None:
+        await asyncio.sleep(interval)
+        return
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(wake.wait(), timeout=interval)
+    wake.clear()
 
 
 # --- the jobs -----------------------------------------------------------
@@ -130,10 +210,11 @@ async def live_loop(
 
 async def backfill_loop(
     service: IngestService,
-    channels: Sequence[ChannelRef],
+    scope: ScopeProvider,
     state: HealthState,
     interval: float = BACKFILL_INTERVAL_SECONDS,
     ready: asyncio.Event | None = None,
+    wake: asyncio.Event | None = None,
 ) -> None:
     """Import history, once the gateway can answer questions about channels.
 
@@ -142,13 +223,18 @@ async def backfill_loop(
     finds every channel missing -- and logs it as unavailable, which reads
     like a permissions failure rather than a race. Without the wait the
     corpus stays empty until the next sweep, a quarter of an hour later.
+
+    Scope is read at the start of every sweep, and `wake` starts one early
+    when a channel is added: without it a newly indexed channel would sit with
+    no history for up to a quarter of an hour, which to the person who just
+    added it looks like indexing did not work.
     """
     if ready is not None:
         await ready.wait()
     completed = time.time()
     while True:
         state.backfill_lag_seconds = time.time() - completed
-        for channel in channels:
+        for channel in channels_in(scope.current()):
             try:
                 imported = await service.backfill_channel(channel)
             except Exception:
@@ -160,12 +246,12 @@ async def backfill_loop(
                 log.info("backfill.channel", channel=str(channel), imported=imported)
         completed = time.time()
         state.backfill_lag_seconds = 0.0
-        await asyncio.sleep(interval)
+        await _pause(interval, wake)
 
 
 async def reconcile_loop(
     reconciler: Reconciler,
-    channels: Sequence[ChannelRef],
+    scope: ScopeProvider,
     interval: float = RECONCILE_INTERVAL_SECONDS,
     lookback: timedelta = RECONCILE_LOOKBACK,
     ready: asyncio.Event | None = None,
@@ -178,7 +264,10 @@ async def reconcile_loop(
     # the events it missed are waiting to be discovered.
     while True:
         since = reconcile_window(lookback)
-        for channel in channels:
+        # Current scope, per pass: a removed channel is no longer repaired
+        # into a corpus it has left, and an added one is covered from the
+        # next pass on.
+        for channel in channels_in(scope.current()):
             try:
                 await reconciler.reconcile(channel, since)
             except Exception:
@@ -356,6 +445,19 @@ async def memory_retention_loop(
         await asyncio.sleep(interval)
 
 
+async def scope_loop(scope: LiveScope, state: HealthState) -> None:
+    """Keep indexing scope current, and say on the health endpoint that it is.
+
+    `LiveScope.refresh` never raises and keeps the scope in force when stored
+    configuration cannot be read, so this loop cannot end on a database blip
+    -- the failure it guards against is a scope silently frozen at boot.
+    """
+    while True:
+        await scope.refresh()
+        state.details["indexing_scope"] = scope.status()
+        await asyncio.sleep(scope.interval)
+
+
 # --- wiring -------------------------------------------------------------
 
 
@@ -365,20 +467,30 @@ async def main() -> None:
     state = HealthState()
     spawn(state, settings.health_port)
 
-    channels = indexed_channels(settings)
+    engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
+    # Stored scope beats the environment, and is read before anything is
+    # captured: starting from the environment and correcting a period later
+    # would capture from a channel an operator had already removed. A failed
+    # read here keeps the environment's scope, which at startup is the scope
+    # in force; it is never a reason not to start.
+    scope = LiveScope.from_settings(PostgresConfigurationStore(engine), settings, os.environ)
+    await scope.refresh()
+    state.details["indexing_scope"] = scope.status()
+
     log.info(
         "ingest.starting",
         guild_id=settings.discord_guild_id,
-        indexed_channels=len(channels),
+        indexed_channels=len(scope.current()),
         health_port=settings.health_port,
     )
-    if not channels:
+    if not scope.current():
         # Indexing is opt-in: an empty scope means the corpus stays empty.
         # Surfaced loudly because "the bot is running but indexes nothing"
         # otherwise looks identical to "the bot is broken".
-        log.warning("ingest.no_indexed_channels", hint="set INDEXED_CHANNEL_IDS")
-
-    engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
+        log.warning(
+            "ingest.no_indexed_channels",
+            hint="add a channel in the admin console or set INDEXED_CHANNEL_IDS",
+        )
     # The adapter boundary, annotated rather than cast: the type checker is
     # what proves PostgresStore still satisfies every method the jobs below
     # call. A cast here once hid a store missing window persistence, and the
@@ -404,8 +516,15 @@ async def main() -> None:
             max_tokens=settings.window_max_tokens,
             gap=timedelta(seconds=settings.window_gap_seconds),
         ),
-        indexed_channels=settings.indexed_channel_ids,
+        # The provider, not its current value: capture, edits, backfill and
+        # windowing all ask it on every decision.
+        indexed_channels=scope,
     )
+    # Registered before any refresh loop runs, so the first stored change is
+    # not missed. A channel added in the console gets its history fetched
+    # within a refresh period, not at the next quarter-hour sweep.
+    backfill_wake = asyncio.Event()
+    scope.on_change(wake_on_widening(backfill_wake))
 
     gateway_ready = asyncio.Event()
 
@@ -442,11 +561,17 @@ async def main() -> None:
         handler.acknowledge_asks_with(asks.state)
 
     async with asyncio.TaskGroup() as tasks:
+        # Unconditional, and first. Without it every job below runs against the
+        # scope read at boot, and the admin console's channel screen edits a
+        # value this process never reads again.
+        tasks.create_task(scope_loop(scope, state))
         tasks.create_task(client.start(settings.discord_token.get_secret_value()))
         tasks.create_task(
             live_loop(source, service, state, asks.worker if asks else None)
         )
-        tasks.create_task(backfill_loop(service, channels, state, ready=gateway_ready))
+        tasks.create_task(
+            backfill_loop(service, scope, state, ready=gateway_ready, wake=backfill_wake)
+        )
 
         # Unconditional, like windowing and embedding below, and for the same
         # reason. This used to start only if the store was probed and found to
@@ -458,7 +583,7 @@ async def main() -> None:
         # now declares the method, so the type checker proves at the wiring
         # site what the probe used to discover at runtime and discard.
         reconciler = Reconciler(source=source, ledger=store, sink=service)
-        tasks.create_task(reconcile_loop(reconciler, channels, ready=gateway_ready))
+        tasks.create_task(reconcile_loop(reconciler, scope, ready=gateway_ready))
 
         # Retrieval exists only if these two run, so a store that cannot serve
         # them must stop the process rather than let it capture into a corpus
@@ -497,10 +622,11 @@ async def main() -> None:
                 backlog_extraction_loop(
                     BacklogExtractionWorker(
                         asks.worker,
-                        store,
-                        # The operator's configured scope, so a channel taken
-                        # out of it stops costing model calls immediately.
-                        channels=channels,
+                        # The operator's configured scope, read on every pass,
+                        # so a channel taken out of it stops costing model
+                        # calls within a refresh period and one added to it
+                        # has its history read without a restart.
+                        ScopedExtractionLedger(store, scope),
                         # The same batch size the live pass buffers to, because
                         # it means the same thing on both: how much
                         # conversation the model is shown at once.

@@ -16,8 +16,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from chatmemory.app.egress import (
+    MARKET_CRYPTO_PROVIDER,
+    MARKET_FX_PROVIDER,
+    MARKET_INDEX_PROVIDER,
+)
 from chatmemory.app.routing import self_description_question
 from chatmemory.ports.answers import Answer, AnswerService, Question
+
+MARKET_DESCRIPTIONS = {
+    MARKET_CRYPTO_PROVIDER: "Bitcoin and Ether prices",
+    MARKET_INDEX_PROVIDER: "the S&P 500",
+    MARKET_FX_PROVIDER: "currency conversion (daily reference rates)",
+}
+"""What each market server lets a person ask, in the order they are listed.
+
+Keyed by server, so a deployment without a SerpApi key -- and therefore
+without the S&P 500 -- does not promise it."""
 
 
 def describe_capabilities(external_tools: Sequence[str]) -> str:
@@ -31,7 +46,11 @@ def describe_capabilities(external_tools: Sequence[str]) -> str:
         "• summarise the discussion in #general yesterday",
     ]
     web = sorted(t for t in external_tools if t.split(":")[0] in {"wikipedia", "serpapi"})
-    other = sorted(t for t in external_tools if t not in web)
+    servers = {t.split(":")[0] for t in external_tools}
+    market = [text for server, text in MARKET_DESCRIPTIONS.items() if server in servers]
+    other = sorted(
+        t for t in external_tools if t not in web and t.split(":")[0] not in MARKET_DESCRIPTIONS
+    )
     if web or other:
         lines += ["", "When the conversations don't have the answer, I can also look it up:"]
         if web:
@@ -42,6 +61,14 @@ def describe_capabilities(external_tools: Sequence[str]) -> str:
             "Answers from outside this server are labelled as such, so you can "
             "always tell what your colleagues said from what I looked up."
         )
+    if market:
+        lines += [
+            "",
+            "Current market data, from live sources and never from a price "
+            "somebody mentioned in a channel: " + ", ".join(market) + ".",
+            "Each figure says how current it is. I report figures; I don't "
+            "recommend buying, selling or holding anything.",
+        ]
     lines += [
         "",
         "In a channel, I only cite what everyone there can read. Ask me in a "

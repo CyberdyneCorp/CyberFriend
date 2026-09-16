@@ -1,0 +1,152 @@
+"""Bitcoin and Ether prices from CoinGecko.
+
+No key, and a quote timestamp (`last_updated_at`) on every price, which is
+the property that matters most: the figure can be dated by the source itself
+rather than by when we happened to ask.
+
+The instrument vocabulary is the ticker a person uses ("ETH"); CoinGecko
+wants its own coin id ("ethereum"). The mapping is a constant here, so what
+leaves is still a function of a closed-set member and nothing else.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from types import MappingProxyType
+
+import httpx
+
+from chatmemory.adapters.market.arguments import ArgumentCheck, Lookup, single_member
+from chatmemory.adapters.market.cache import FreshCache
+from chatmemory.adapters.market.provider import (
+    DEFAULT_TIMEOUT,
+    MarketProvider,
+    MarketToolSpec,
+    ProviderUnavailable,
+    as_decimal,
+    read_json,
+)
+from chatmemory.adapters.market.quotes import Quote, Timing
+from chatmemory.adapters.web.limits import CallBudget, RateLimiter
+from chatmemory.adapters.web.results import as_mapping
+from chatmemory.app.egress import CRYPTO_ASSETS, MARKET_CRYPTO_PROVIDER
+
+COINGECKO_ENDPOINT = "https://api.coingecko.com/api/v3/simple/price"
+COINGECKO_LABEL = "CoinGecko"
+QUOTE_CURRENCY = "usd"
+DEFAULT_TTL_SECONDS = 60.0
+
+CRYPTO_PRICE = "crypto_price"
+ARG_ASSET = "asset"
+
+COIN_IDS: Mapping[str, str] = MappingProxyType({"BTC": "bitcoin", "ETH": "ethereum"})
+COIN_PAGES: Mapping[str, str] = MappingProxyType(
+    {
+        "BTC": "https://www.coingecko.com/en/coins/bitcoin",
+        "ETH": "https://www.coingecko.com/en/coins/ethereum",
+    }
+)
+_NAMES: Mapping[str, str] = MappingProxyType({"BTC": "Bitcoin (BTC)", "ETH": "Ether (ETH)"})
+
+TOOL = MarketToolSpec(
+    name=CRYPTO_PRICE,
+    description=(
+        "Current price in US dollars of the cryptocurrency Bitcoin (BTC) or "
+        "Ether (ETH, ethereum), from live crypto market data, with the time "
+        "of the quote. Use for what BTC or ETH is at now, not for prices "
+        "someone mentioned in a channel."
+    ),
+    input_schema=MappingProxyType(
+        {
+            "type": "object",
+            "properties": {
+                ARG_ASSET: {
+                    "type": "string",
+                    "enum": sorted(CRYPTO_ASSETS),
+                    "description": "The ticker: BTC or ETH. Nothing else is accepted.",
+                }
+            },
+            "required": [ARG_ASSET],
+            "additionalProperties": False,
+        }
+    ),
+)
+
+
+class CoinGeckoProvider(MarketProvider):
+    """`ToolSession` over CoinGecko's simple price endpoint."""
+
+    def __init__(
+        self,
+        budget: CallBudget,
+        *,
+        endpoint: str = COINGECKO_ENDPOINT,
+        ttl_seconds: float = DEFAULT_TTL_SECONDS,
+        limiter: RateLimiter | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        super().__init__(
+            server=MARKET_CRYPTO_PROVIDER,
+            label=COINGECKO_LABEL,
+            endpoint=endpoint,
+            tool=TOOL,
+            budget=budget,
+            cache=FreshCache(ttl_seconds),
+            limiter=limiter,
+            timeout_seconds=timeout_seconds,
+            client=client,
+        )
+
+    def check_arguments(self, arguments: Mapping[str, object]) -> ArgumentCheck:
+        return single_member(arguments, ARG_ASSET, CRYPTO_ASSETS)
+
+    async def fetch(self, lookup: Lookup, client: httpx.AsyncClient) -> Quote:
+        (asset,) = lookup.terms
+        response = await client.get(
+            self.endpoint,
+            params={
+                # Every supported coin, whichever was asked for. The request is
+                # then a constant: it does not reveal which asset someone
+                # asked about, and one call fills the cache for both, which
+                # halves what a burst of questions costs the free tier's
+                # rate limit.
+                "ids": ",".join(COIN_IDS[a] for a in sorted(COIN_IDS)),
+                "vs_currencies": QUOTE_CURRENCY,
+                "include_last_updated_at": "true",
+            },
+            timeout=self._timeout,
+        )
+        payload = read_json(response, COINGECKO_LABEL)
+        quotes = {a: self._quote(a, as_mapping(payload.get(COIN_IDS[a]))) for a in COIN_IDS}
+        for other, quote in quotes.items():
+            if other != asset and quote is not None:
+                self.remember(Lookup(terms=(other,)), quote)
+        requested = quotes[asset]
+        if requested is None:
+            raise ProviderUnavailable("coingecko returned no usable price")
+        return requested
+
+    def _quote(self, asset: str, entry: Mapping[str, object]) -> Quote | None:
+        price = as_decimal(entry.get(QUOTE_CURRENCY))
+        if price is None:
+            return None
+        timing, as_of = self._when(entry.get("last_updated_at"))
+        return Quote(
+            instrument=_NAMES[asset],
+            value=price,
+            unit=QUOTE_CURRENCY.upper(),
+            source=COINGECKO_LABEL,
+            url=COIN_PAGES[asset],
+            timing=timing,
+            as_of=as_of,
+        )
+
+    def _when(self, quoted_at: object) -> tuple[Timing, datetime]:
+        # The quote time when CoinGecko gives one. If a response ever lacks
+        # it, the retrieval time is stated as retrieval time -- never
+        # presented as the quote's own time.
+        if isinstance(quoted_at, int) and not isinstance(quoted_at, bool) and quoted_at > 0:
+            return Timing.QUOTE_TIME, datetime.fromtimestamp(quoted_at, UTC)
+        return Timing.RETRIEVAL_TIME, self.retrieved_at()

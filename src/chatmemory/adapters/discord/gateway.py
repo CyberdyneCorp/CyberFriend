@@ -40,8 +40,13 @@ from typing import Protocol, cast
 import discord
 import structlog
 
-from chatmemory.adapters.discord.acl import CacheInvalidator, PermissionCaches
+from chatmemory.adapters.discord.acl import (
+    CacheInvalidator,
+    DiscordAclResolver,
+    PermissionCaches,
+)
 from chatmemory.adapters.discord.source import RawMessage, to_message
+from chatmemory.app.scope import ScopeProvider
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message
 from chatmemory.ports.acl import AclResolver
@@ -146,6 +151,14 @@ class CachingAclResolver:
 
     The failure direction matters: on any doubt the entry is dropped, so a
     stale *grant* cannot survive an event we saw.
+
+    Indexing scope is the other thing an entry depends on, and no gateway
+    event announces a scope change. So each entry records the scope it was
+    resolved under and is not served once scope has moved -- otherwise a
+    channel removed from scope stays readable for a TTL after the refresh
+    that removed it. `scope` defaults to the inner resolver's own when that is
+    a `DiscordAclResolver`, so the ordinary wiring gets this without a second
+    argument to forget.
     """
 
     def __init__(
@@ -155,11 +168,15 @@ class CachingAclResolver:
         invalidation: PermissionCaches | None = None,
         ttl_seconds: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
+        scope: ScopeProvider | None = None,
     ) -> None:
         self._inner = inner
         self._ttl = ttl_seconds
         self._clock = clock
-        self._cache: dict[PersonRef, tuple[float, Viewer]] = {}
+        if scope is None and isinstance(inner, DiscordAclResolver):
+            scope = inner.scope
+        self._scope = scope
+        self._cache: dict[PersonRef, tuple[float, frozenset[int] | None, Viewer]] = {}
         self._invalidation = invalidation
         if invalidation is None:
             log.warning(
@@ -175,13 +192,21 @@ class CachingAclResolver:
         return self._invalidation is None or self._invalidation.live
 
     async def resolve_viewer(self, person: PersonRef) -> Viewer:
+        # Read before resolving, so an entry is tagged with a scope no newer
+        # than the one it was computed under: a change landing mid-resolve
+        # makes the entry look stale, never fresh.
+        indexed = None if self._scope is None else self._scope.current()
         if self.caching:
             cached = self._cache.get(person)
-            if cached is not None and (self._clock() - cached[0]) < self._ttl:
-                return cached[1]
+            if (
+                cached is not None
+                and (self._clock() - cached[0]) < self._ttl
+                and cached[1] == indexed
+            ):
+                return cached[2]
         viewer = await self._inner.resolve_viewer(person)
         if self.caching:
-            self._cache[person] = (self._clock(), viewer)
+            self._cache[person] = (self._clock(), indexed, viewer)
         return viewer
 
     def invalidate(self, person: PersonRef | None = None) -> None:

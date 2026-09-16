@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+from urllib.parse import urlsplit
 
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
@@ -89,6 +90,11 @@ class Evidence:
     author_display: str = ""
     message_ids: tuple[int, ...] = ()
     source_system: str = SOURCE_DISCORD
+    # What a reader is shown of this item, when that is not simply its text.
+    # A split web result keeps the provider's "this is external content"
+    # header in front of it for the model, and a citation that quoted that
+    # header would show the same sentence under every link.
+    excerpt: str = ""
 
     @property
     def from_corpus(self) -> bool:
@@ -121,13 +127,72 @@ class Evidence:
             # conversation; 0 marks a window with no resolvable message.
             message_id=self.message_ids[0] if self.message_ids else 0,
             author_display=self.author_display,
-            excerpt=self.text[:EXCERPT_CHARS],
+            excerpt=(self.excerpt or self.text)[:EXCERPT_CHARS],
             url=self.url,
             # Carried, not re-derived: whatever produced this item is the
             # only thing that knows where it came from, and a surface that
             # guessed would guess wrong exactly when it matters.
             source_system=self.source_system,
         )
+
+
+LINK_LABELS = ("url:", "source:")
+"""Labels under which an external result states where it can be opened.
+
+The rendering contract every local provider follows (`adapters.web.results`
+and `adapters.market.quotes`): a line that *starts* with one of these was
+written by the adapter, and every untrusted value sits behind a label of its
+own. A remote MCP server follows no contract, so its result simply has no
+link -- which renders as a citation without one, never as a guessed one.
+"""
+
+
+def openable(url: str) -> bool:
+    """An absolute http(s) link with nothing in it that could break the line."""
+    parts = urlsplit(url)
+    return (
+        parts.scheme in {"http", "https"}
+        and bool(parts.netloc)
+        and not any(ch.isspace() for ch in url)
+    )
+
+
+def link_in(block: str) -> str:
+    """The first link a block states on a labelled line, or ""."""
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped.lower().startswith(LINK_LABELS):
+            continue
+        for token in reversed(stripped.split()):
+            if openable(token):
+                return token
+    return ""
+
+
+def linked_results(text: str) -> list[tuple[str, str, str]]:
+    """Split a tool result into its linked results, each with its link.
+
+    A result block is separated from the next by a blank line. When every
+    block after the leading header states a link, each becomes its own piece
+    of evidence with the header kept in front -- the header is what says
+    "this is external content", and a result shown to a model without it
+    would no longer say so. Anything else stays whole, with the first link it
+    states, because splitting a result that does not follow the contract
+    would only lose the part that did not.
+
+    Each entry is `(text, link, excerpt)`: the excerpt is the result alone,
+    for the citation a reader sees; an empty excerpt means the whole text.
+    """
+    blocks = [b for b in text.split("\n\n") if b.strip()]
+    if len(blocks) >= 2 and not link_in(blocks[0]):
+        header, results = blocks[0], blocks[1:]
+        links = [link_in(b) for b in results]
+        if all(links):
+            return [
+                (f"{header}\n\n{b}", u, b.strip())
+                for b, u in zip(results, links, strict=True)
+            ]
+    return [(text, next((u for b in blocks if (u := link_in(b))), ""), "")]
 
 
 def query_signature(query: SearchQuery) -> tuple[object, ...]:
@@ -200,6 +265,22 @@ class EvidenceLedger:
                 f"external evidence needs a source system outside the corpus, got "
                 f"{source_system!r}"
             )
+        # One item per linked result, not one per call. Every web citation used
+        # to carry an empty link: the URLs were in the result text and nothing
+        # read them out, so a reader was told "from the web" and handed
+        # nothing to open. Splitting also means the answer cites the result it
+        # rests on, rather than a bundle of five with one link between them.
+        parts = [(text, url, "")] if url else linked_results(text)
+        minted = [
+            self._mint(body, source_system, attribution, link, excerpt)
+            for body, link, excerpt in parts
+        ]
+        # `linked_results` always returns at least the text itself.
+        return minted[0]
+
+    def _mint(
+        self, text: str, source_system: str, attribution: str, url: str, excerpt: str
+    ) -> Evidence:
         self._external += 1
         item = Evidence(
             window_id=-self._external,
@@ -214,6 +295,7 @@ class EvidenceLedger:
             url=url,
             author_display=attribution,
             source_system=source_system,
+            excerpt=excerpt,
         )
         self._items[item.window_id] = item
         return item

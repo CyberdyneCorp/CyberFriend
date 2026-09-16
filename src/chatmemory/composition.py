@@ -45,6 +45,13 @@ already holds: `build_conversations` for the bot, which recalls, remembers and
 summarises, and `build_memory_retention` for the ingest process's sweep. The
 summariser runs on the extraction model, because it runs after every few
 questions and nobody is waiting on it.
+
+Indexing scope -- which channels exist to be read at all, as opposed to which
+of them a viewer may read -- is live. `build_live_scope` is the one
+construction every gateway-holding process uses, and the resolvers built here
+are handed the provider rather than a set, so they ask it on every resolution.
+The refresh loop belongs to the entrypoint, because a loop is a property of a
+running process and this module only builds objects.
 """
 
 from __future__ import annotations
@@ -69,6 +76,7 @@ from chatmemory.adapters.llm.asks_extraction import (
 )
 from chatmemory.adapters.llm.chat import OpenAICompatibleChat
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
+from chatmemory.adapters.market.registration import MarketToolsConfig, build_market_tools
 from chatmemory.adapters.mcp_client import (
     AllowedTool,
     Federation,
@@ -86,6 +94,7 @@ from chatmemory.adapters.mcp_client.config import (
 )
 from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
+from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
@@ -141,6 +150,7 @@ from chatmemory.app.reasoning.retrieval import (
 )
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.stages import ModelToolProposer
+from chatmemory.app.scope import LiveScope, ScopeProvider, StaticScope
 from chatmemory.app.self_description import SelfDescriptionAnswerService
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
@@ -594,6 +604,20 @@ def _check_mutation_is_spendable(
             )
 
 
+def federates_anything(settings: Settings) -> bool:
+    """Whether any tool -- remote, web or market -- could be registered.
+
+    One predicate for both callers. The config and the proposer used to repeat
+    the condition, and a third kind of tool added to one copy and not the other
+    is exactly a tool registered, offered, and never called.
+    """
+    return bool(
+        settings.federation_servers
+        or settings.web_tools_enabled
+        or settings.market_tools_enabled
+    )
+
+
 def build_federation_config(settings: Settings) -> FederationConfig | None:
     """The outbound surface an operator asked for, or None for "no federation".
 
@@ -605,7 +629,7 @@ def build_federation_config(settings: Settings) -> FederationConfig | None:
     # MCP servers alone left a deployment with local web tools offering them
     # every run and calling none -- the log said "offer_only" and the
     # behaviour looked like a model that never wanted a tool.
-    if not settings.federation_servers and not settings.web_tools_enabled:
+    if not federates_anything(settings):
         return None
     config = FederationConfig(
         servers=tuple(parse_server(s) for s in settings.federation_servers),
@@ -687,6 +711,22 @@ def web_tools_config(settings: Settings) -> WebToolsConfig:
     )
 
 
+def market_tools_config(settings: Settings) -> MarketToolsConfig:
+    """Operator settings, translated for the market adapter.
+
+    The SerpApi key is the web tools' key: the S&P 500 comes from Google
+    Finance through the same account, so a second variable would only be a
+    second place for the same secret to be set wrong.
+    """
+    return MarketToolsConfig(
+        serpapi_key=(
+            settings.serpapi_key.get_secret_value() if settings.serpapi_key else None
+        ),
+        max_calls_per_run=settings.market_max_calls_per_run,
+        timeout_seconds=settings.market_timeout_seconds,
+    )
+
+
 async def build_federation(
     settings: Settings,
     factory: SessionFactory | None = None,
@@ -728,6 +768,21 @@ async def build_federation(
         )
     elif settings.web_tools_enabled:
         log.warning("composition.web_tools.none_available")
+
+    # Market data, through the same door and after the web tools, so its
+    # factory is outermost and anything it does not own falls through to the
+    # web factory and then to remote MCP. Read-only is declared by
+    # `build_market_tools` itself; nothing here can widen it. What leaves is
+    # held to membership in `app.egress.CLOSED_VOCABULARIES` by the invoker's
+    # guard, not by anything this function chooses.
+    if settings.market_tools_enabled:
+        market = build_market_tools(market_tools_config(settings))
+        config = market.merge_into(config or FederationConfig())
+        factory = market.factory(factory)
+        log.info(
+            "composition.market_tools.registered",
+            providers=sorted(market.providers),
+        )
 
     if config is None:
         log.info("composition.federation.disabled", reason="no servers configured")
@@ -826,7 +881,7 @@ def build_tool_proposer(
     # MCP servers alone left a deployment with local web tools offering them
     # every run and calling none -- the log said "offer_only" and the
     # behaviour looked like a model that never wanted a tool.
-    if not settings.federation_servers and not settings.web_tools_enabled:
+    if not federates_anything(settings):
         return None
     try:
         # Raises here, naming `tool_calling`, rather than as an endpoint's 400
@@ -1044,6 +1099,20 @@ def build_memory_retention(settings: Settings, engine: AsyncEngine) -> MemoryRet
     )
 
 
+def build_live_scope(
+    settings: Settings, engine: AsyncEngine, environ: Mapping[str, str]
+) -> LiveScope:
+    """Indexing scope as stored configuration says it is now.
+
+    The same construction ingest uses, so the bot and the MCP server agree
+    with it about which channels exist. Not yet refreshed: the caller awaits
+    `refresh()` before serving, then runs the loop, because a process that
+    answers from the environment's scope for its first period would show a
+    channel an operator already removed.
+    """
+    return LiveScope.from_settings(PostgresConfigurationStore(engine), settings, environ)
+
+
 def build_ask_service(
     settings: Settings,
     guild: GuildProvider,
@@ -1051,14 +1120,20 @@ def build_ask_service(
     search: SearchBackend | None = None,
     confirmations: ConfirmationLedger | None = None,
     conversations: Conversations | None = None,
+    scope: ScopeProvider | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
     `guild` is late-bound because permissions are resolved from live guild
     state that does not exist until the gateway connects; a cold cache reads
     as an empty guild, so resolution fails closed during startup.
+
+    `scope` is the provider both resolvers ask on every resolution. None falls
+    back to the environment's fixed set, which is for callers with no
+    database; the bot process passes its `LiveScope`, and
+    `test_scope_and_market_wiring` proves that from the entrypoint down.
     """
-    indexed = settings.indexed_channel_ids
+    indexed = scope if scope is not None else StaticScope(settings.indexed_channel_ids)
     return AskService(
         acl=DiscordAclResolver(guild, indexed),
         audiences=DiscordAudienceResolver(guild, indexed),

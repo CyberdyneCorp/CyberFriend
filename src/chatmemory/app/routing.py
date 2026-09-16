@@ -345,6 +345,12 @@ def self_description_question(text: str) -> bool:
     assistant while asking about capability. Length still bounds it: a long
     question mentioning "tools" is almost always about the team's tools.
     """
+    if explicit_web_search(text) or mcp_change_request(text) or market_question(text):
+        # "can you search the web for X", "can you add the context7 MCP
+        # server" and "can you check BTC" address the bot and name its
+        # machinery, and are requests -- to use a capability, or to be refused
+        # one -- not questions about it. Each has its own answer downstream.
+        return False
     lowered = " ".join(text.lower().replace("?", " ").replace(",", " ").split())
     words = lowered.split()
     if any(pattern in lowered for pattern in _SELF_DESCRIPTION_PATTERNS):
@@ -384,3 +390,346 @@ def obligation_question(text: str) -> ObligationQuestion | None:
     ):
         return ObligationQuestion(ObligationIntent.MY_OBLIGATIONS, named_period(text))
     return None
+
+
+# --- questions that must not be answered from the corpus ----------------
+#
+# Three kinds of question are decided here before either retrieval path runs,
+# each because the corpus is the wrong instrument for it rather than merely a
+# weaker one:
+#
+# *   **Current market figures.** A channel message quoting a price is a record
+#     of what somebody said, not a price. Retrieval ranks "BTC is at 60k" from
+#     last month highly for "what is BTC at", and the answer then presents a
+#     stale figure as current -- on a server that discusses crypto, the most
+#     likely wrong answer this bot can give.
+# *   **An explicit web search.** Somebody who says "search the web for" has
+#     already told us the corpus is not what they want; answering from it
+#     instead is not a fallback, it is ignoring the request.
+# *   **Operator actions asked for in chat.** Connecting an MCP server widens
+#     what the agent can reach, and indexing a channel makes it permanent. Both
+#     have a front door that checks who is asking; a chat message is not it.
+#
+# Lexical, like everything above, and for the same reason. The cost of a miss
+# differs by kind: a missed price question falls back to the corpus, which is
+# exactly the failure being prevented, so these lean inclusive; a missed web
+# request is answered from the corpus first and may still escalate.
+
+
+class MarketKind(StrEnum):
+    CRYPTO = "crypto"
+    INDEX = "index"
+    CONVERSION = "conversion"
+
+
+@dataclass(frozen=True, slots=True)
+class MarketQuestion:
+    """A question for a current market figure.
+
+    `advisory` marks "should I buy BTC": it still gets the figure, and it gets
+    a plain statement that no recommendation is made instead of one.
+    """
+
+    kind: MarketKind
+    advisory: bool = False
+
+
+_CRYPTO_TERMS = frozenset({"btc", "bitcoin", "bitcoins", "eth", "ether", "ethereum"})
+_INDEX_PATTERN = re.compile(
+    r"s\s*&\s*p(?:\s*500)?|\bs\s+and\s+p(?:\s*500)?\b|\bsp\s?500\b|\bspx\b"
+)
+_PRICE_TERMS = (
+    " price", " prices", " priced", " worth", " trading", " quote", " value of",
+    " how much", " cost", " going for", " at now", " at right now", " right now",
+    " currently", " current", " today", " level", " where is", " where's",
+    " cotação", " cotacao", " preço", " preco", " valor", " quanto", " hoje",
+    " agora", " atual",
+)
+_ADVICE_PATTERN = re.compile(
+    r"\b(should i|shall i|is it a good time|good time to|worth buying|"
+    r"buy or sell|invest in|would you buy|recommend|devo|vale a pena|"
+    r"comprar|vender)\b"
+)
+_ADVICE_VERBS = frozenset({"buy", "sell", "hold", "invest", "short", "long"})
+
+# Conversation and past-time markers. "What did Ana say BTC would hit" and
+# "what was BTC at last month" are questions about a record, and the corpus is
+# the right place to look; only the present tense of a price leaves it.
+_RECORD_MARKERS = frozenset({
+    "said", "say", "says", "mentioned", "posted", "wrote", "discussed",
+    "discussion", "talked", "predicted", "prediction", "decided", "decide",
+    "was", "were", "yesterday", "last", "ago", "channel", "thread", "disse",
+    "falou", "ontem", "passado", "passada", "foi", "estava", "era",
+})
+# "semana" and "mês" are not markers on their own: "quanto está o bitcoin essa
+# semana" asks for the figure now, and the past it would guard against is
+# already carried by "passada", "passado" or a past-tense verb.
+
+# An explicit claim on the present outranks the record markers. "What is the
+# current BTC price? I was away" carries a past tense that is about the asker,
+# not the figure, and treating it as a record question hands a stale channel
+# quote back as the price. Only words that date the figure itself qualify:
+# "today" and "at the moment" do not ("what did Ana say about BTC today",
+# "what was BTC at the moment she posted" are about a message).
+_PRESENT_MARKERS = frozenset({
+    "current", "currently", "now", "presently", "atual", "atualmente", "agora",
+    "nowadays",
+})
+_PRESENT_PHRASES = (" these days ", " hoje em dia ")
+
+# An amount of an instrument, which with a currency beside it is a conversion
+# of a price: "how many dollars is one bitcoin", "1 BTC in BRL". A currency
+# alone is not enough -- "we accept BTC and USD" names both and asks nothing.
+_AMOUNT_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?|one|a single|um|uma|how many|quantos)\b")
+
+_CURRENCY_NAMES = {
+    "dollar": "USD", "dollars": "USD", "dólar": "USD", "dolar": "USD",
+    "dólares": "USD", "dolares": "USD", "euro": "EUR", "euros": "EUR",
+    "real": "BRL", "reais": "BRL", "pound": "GBP", "pounds": "GBP",
+    "sterling": "GBP", "yen": "JPY", "iene": "JPY", "libra": "GBP", "libras": "GBP",
+}
+# Codes spelled in lower case are counted only when they are unmistakably
+# currencies; the rest of ISO 4217 counts only as written in capitals, so
+# "all", "top" and "try" in a sentence are words.
+_COMMON_CODES = frozenset({
+    "usd", "eur", "brl", "gbp", "jpy", "cad", "aud", "chf", "cny", "ars", "mxn",
+})
+_CONVERSION_TERMS = (
+    " convert", " conversion", " exchange rate", " exchange", " in ", " to ",
+    " into ", " rate", " em ", " para ", " câmbio", " cambio", " converter",
+    " cotação", " cotacao", " how much",
+)
+_CODE_PATTERN = re.compile(r"\b[A-Z]{3}\b")
+
+
+def _currencies_in(text: str, iso_codes: frozenset[str]) -> set[str]:
+    found = {c for c in _CODE_PATTERN.findall(text) if c in iso_codes}
+    for word in re.findall(r"[^\W\d_]+", text.lower()):
+        if word in _COMMON_CODES:
+            found.add(word.upper())
+        elif word in _CURRENCY_NAMES:
+            found.add(_CURRENCY_NAMES[word])
+    return found
+
+
+def asks_for_advice(text: str) -> bool:
+    """Whether the question asks what to do with an asset, not what it costs."""
+    lowered = text.lower()
+    if _ADVICE_PATTERN.search(lowered):
+        return True
+    words = set(re.findall(r"[^\W\d_]+", lowered))
+    return bool(words & _ADVICE_VERBS) and ("i" in words or "we" in words)
+
+
+def market_question(
+    text: str, iso_codes: frozenset[str] = frozenset()
+) -> MarketQuestion | None:
+    """The market figure a question asks for now, or None.
+
+    `iso_codes` is the currency vocabulary the conversion tool accepts. It is
+    handed in rather than imported so routing keeps no copy of it: a code the
+    tool would refuse is not a conversion this can recognise either.
+    """
+    lowered = " " + " ".join(text.lower().split()) + " "
+    words = set(re.findall(r"[^\W\d_]+", lowered))
+    if _about_the_record(lowered, words):
+        return None
+    advisory = asks_for_advice(text)
+    priced = advisory or any(term in lowered for term in _PRICE_TERMS)
+    short = len(lowered.split()) <= 4
+    currencies = _currencies_in(text, iso_codes)
+    converting = any(term in lowered for term in _CONVERSION_TERMS)
+    # A crypto amount beside a currency is a price asked for in that currency.
+    in_a_currency = bool(currencies) and (converting or bool(_AMOUNT_PATTERN.search(lowered)))
+
+    if words & _CRYPTO_TERMS and (priced or short or in_a_currency):
+        return MarketQuestion(MarketKind.CRYPTO, advisory)
+    if _INDEX_PATTERN.search(lowered) and (priced or short):
+        return MarketQuestion(MarketKind.INDEX, advisory)
+    if len(currencies) >= 2 and converting:
+        return MarketQuestion(MarketKind.CONVERSION, advisory)
+    if currencies and (" exchange rate" in lowered or " câmbio" in lowered
+                       or " cambio" in lowered):
+        return MarketQuestion(MarketKind.CONVERSION, advisory)
+    return None
+
+
+def _about_the_record(lowered: str, words: set[str]) -> bool:
+    """Whether a question is about what was said rather than the figure now."""
+    if not words & _RECORD_MARKERS:
+        return False
+    # Punctuation folded to spaces, so "these days?" is the phrase it reads as.
+    bare = " " + " ".join(re.sub(r"[^\w\s]", " ", lowered).split()) + " "
+    present = words & _PRESENT_MARKERS or any(p in bare for p in _PRESENT_PHRASES)
+    return not present
+
+
+# A follow-up to a price question names no instrument: "and now?", "ok but what
+# is it trading at", "e agora?". Read alone it is nothing, and with memory
+# present it went to the loop, whose planner turned it into a corpus search for
+# the price -- the stale channel quote again, one turn later. So it is
+# recognised here, against the asker's previous question, and needs both a
+# continuation cue and a reason to think the figure is still what is wanted.
+_FOLLOW_UP_OPENERS = (
+    " and ", " ok ", " okay ", " so ", " but ", " what about ", " how about ", " e ",
+    " mas ", " então ", " entao ", " e quanto ",
+)
+_FOLLOW_UP_PRONOUNS = frozenset({"it", "that", "this", "ele", "isso", "esse", "este"})
+_FOLLOW_UP_REFRESH = frozenset({
+    "again", "update", "updated", "latest", "still", "novamente", "denovo", "ainda",
+})
+_FOLLOW_UP_MAX_WORDS = 8
+
+_CRYPTO_CANONICAL = {
+    "btc": "BTC", "bitcoin": "BTC", "bitcoins": "BTC",
+    "eth": "ETH", "ether": "ETH", "ethereum": "ETH",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class MarketFollowUp:
+    """A follow-up to a price question, and what it follows up on.
+
+    `subject` is built only from closed-vocabulary terms and numbers found in
+    the asker's earlier question -- "BTC price", "100 USD to BRL" -- never the
+    remembered text itself. Remembered turns are data: what reaches the tool
+    proposal from one is a term the market tools' own vocabulary would accept,
+    and nothing a sentence could be smuggled in.
+    """
+
+    question: MarketQuestion
+    subject: str
+
+    def text_for(self, follow_up: str) -> str:
+        return f"{follow_up.strip()} (following up on: {self.subject})"
+
+
+def market_follow_up(
+    text: str,
+    previous_questions: Sequence[str],
+    iso_codes: frozenset[str] = frozenset(),
+) -> MarketFollowUp | None:
+    """The market question `text` continues, or None.
+
+    `previous_questions` are the asker's own earlier questions, oldest first.
+    The newest one must be the price question, or a follow-up to it: "what is
+    BTC at", "and now?", "and now?" is one line of questioning, while a price
+    asked before an unrelated question is not what "and now?" refers to once
+    the conversation has moved on.
+    """
+    if not _follows_up(text, iso_codes):
+        return None
+    for earlier_text in reversed(previous_questions):
+        earlier = market_question(earlier_text, iso_codes)
+        if earlier is not None:
+            subject = _market_subject(earlier_text, earlier.kind, iso_codes)
+            return MarketFollowUp(MarketQuestion(earlier.kind, asks_for_advice(text)), subject)
+        if not _follows_up(earlier_text, iso_codes):
+            return None
+    return None
+
+
+def _follows_up(text: str, iso_codes: frozenset[str]) -> bool:
+    """Whether a question is shaped like a follow-up still wanting the figure."""
+    lowered = " " + " ".join(text.lower().split()) + " "
+    words = set(re.findall(r"[^\W\d_]+", lowered))
+    if len(lowered.split()) > _FOLLOW_UP_MAX_WORDS or _about_the_record(lowered, words):
+        return False
+    continues = (
+        any(lowered.startswith(opener) for opener in _FOLLOW_UP_OPENERS)
+        or bool(words & _FOLLOW_UP_PRONOUNS)
+    )
+    still_wanted = (
+        bool(words & (_PRESENT_MARKERS | _FOLLOW_UP_REFRESH))
+        or any(term in lowered for term in _PRICE_TERMS)
+        or bool(_currencies_in(text, iso_codes))
+    )
+    return continues and still_wanted
+
+
+def _market_subject(text: str, kind: MarketKind, iso_codes: frozenset[str]) -> str:
+    """The instrument an earlier question named, in closed-vocabulary terms."""
+    if kind is MarketKind.INDEX:
+        return "S&P 500 level"
+    terms: list[str] = []
+    for token in re.findall(r"\d+(?:[.,]\d+)?|[^\W\d_]+", text):
+        term = _subject_term(token, kind, iso_codes)
+        if term is not None and term not in terms:
+            terms.append(term)
+    if kind is MarketKind.CRYPTO:
+        return " ".join([*terms, "price"])
+    return " ".join(terms) + " exchange rate"
+
+
+def _subject_term(token: str, kind: MarketKind, iso_codes: frozenset[str]) -> str | None:
+    lowered = token.lower()
+    if kind is MarketKind.CRYPTO:
+        return _CRYPTO_CANONICAL.get(lowered)
+    if token[0].isdigit():
+        return token
+    found = _currencies_in(token, iso_codes)
+    return next(iter(found)) if found else None
+
+
+# Each alternative needs a verb aimed at the web AND something to look for.
+# "can you search the web?" names the capability and asks about the assistant;
+# "search the web for the latest Python release" is the request.
+_WEB_REQUEST_PATTERN = re.compile(
+    r"\b(search|look\s+up|check|browse)\s+(on\s+)?(the\s+)?(web|internet)\s+"
+    r"(for|about|on|to\s+find)\s+\S|"
+    r"\b(search|look\s+up)\s+\S.{0,80}\s+(online|on\s+the\s+(web|internet))\b|"
+    r"\b(search|look\s+up|check)\s+online\s+(for\s+)?\S|"
+    r"\bweb\s+search\s+(for|on|about)\s+\S|"
+    r"^\s*(please\s+)?google\s+(for\s+)?\S|"
+    r"\b(pesquis\w*|procur\w*|busc\w*)\s+(na\s+)?(web|internet)\s+(por|sobre)\s+\S"
+)
+
+
+def explicit_web_search(text: str) -> bool:
+    """Whether the person asked, in words, for the web rather than the corpus.
+
+    Requires a verb aimed at the web ("search the web for", "look up online",
+    "google X"); naming the web alone is not a request -- "do you have
+    internet access" asks about the assistant, and is answered as such.
+    """
+    return bool(_WEB_REQUEST_PATTERN.search(text.lower()))
+
+
+_MCP_CHANGE_PATTERN = re.compile(
+    r"\b(add|connect|install|configure|register|enable|set\s+up|setup|attach|"
+    r"plug\s+in|hook\s+up|use\s+a\s+new|remove|disconnect|disable|uninstall|"
+    r"adicion\w*|conect\w*|instal\w*|configur\w*|remov\w*)\b"
+    r".{0,60}\b(mcp|model\s+context\s+protocol)\b"
+    r"|\b(mcp|model\s+context\s+protocol)\b.{0,40}\b(server|servidor)\b.{0,40}"
+    r"\b(add|connect|install|configure|register|enable|remove|disconnect)\b"
+)
+
+
+def mcp_change_request(text: str) -> bool:
+    """Whether chat is asking the assistant to add, change or remove an MCP server.
+
+    Deliberately wider than it needs to be. A false positive tells somebody
+    where the admin console is; a false negative lets a question about wiring
+    new reach into the agent be answered as if chat could do it.
+    """
+    return bool(_MCP_CHANGE_PATTERN.search(" ".join(text.lower().split())))
+
+
+_INDEX_REQUEST_PATTERN = re.compile(
+    r"^\s*(please\s+)?(/)?(un)?index\b|"
+    r"\b(start|stop)\s+(indexing|archiving)\b|"
+    r"\b(add|remove)\b.{0,40}\bto\s+(the\s+)?(index|indexing|archive)\b|"
+    r"\b(index|unindex|archive)\s+(this\s+channel|#|<#)"
+)
+
+
+def indexing_request(text: str) -> bool:
+    """Whether chat is asking the assistant to index or unindex a channel.
+
+    Chat cannot do that, whoever is asking and whatever they say about
+    themselves: `/index` resolves the requester's Manage Channels permission
+    from the guild. Recognising the request here only means the answer is a
+    pointer to the command, instead of a search of the corpus for the word
+    "index".
+    """
+    return bool(_INDEX_REQUEST_PATTERN.search(text.lower()))

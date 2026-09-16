@@ -41,6 +41,7 @@ erased what they asked would say something about what they asked.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Sequence
 from itertools import zip_longest
 from typing import Any, Protocol
 
@@ -65,6 +66,12 @@ from chatmemory.app.asks.model import (
 from chatmemory.app.authorization import ConfirmationPrompt
 from chatmemory.app.confirmation import ConfirmationReply, Undeliverable
 from chatmemory.app.disclosure import ScopedAnswer, withheld_notice
+from chatmemory.app.indexing import (
+    ChannelAccess,
+    IndexAction,
+    IndexingService,
+    IndexRequest,
+)
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Citation
@@ -130,6 +137,16 @@ FORGET_HERE = "here"
 FORGET_EVERYWHERE = "everywhere"
 
 MEMORY_UNAVAILABLE = "I don't keep conversation history here, so there's nothing to forget."
+
+INDEXING_UNAVAILABLE = (
+    "Indexing can't be changed from Discord on this deployment. "
+    "Ask an operator to use the admin console."
+)
+
+INDEXING_DESCRIPTIONS = {
+    IndexAction.INDEX: "Archive a channel so people who can read it can search it",
+    IndexAction.UNINDEX: "Stop archiving a channel and delete what was archived",
+}
 
 
 def _forgotten_note(turns: int, summaries: int, everywhere: bool) -> str:
@@ -213,7 +230,33 @@ def _citation_line(number: int, citation: Citation) -> str:
     # repeats it for every non-corpus line, because a line quoted, screenshot
     # or read on its own loses the heading and keeps the claim.
     tag = "" if source == SOURCE_DISCORD else f"({source}) "
-    return f"{number}. {tag}[{label}]({citation.url}) — {excerpt}"
+    target = _link_target(citation.url)
+    if not target:
+        # `[label]()` renders as literal brackets, which reads as a broken
+        # link rather than as a source that has none -- a remote MCP server's
+        # result, typically. Say what it is instead.
+        return f"{number}. {tag}{label} — {excerpt}"
+    return f"{number}. {tag}[{label}]({target}) — {excerpt}"
+
+
+def _link_target(url: str) -> str:
+    """A URL that survives being the target of a markdown link.
+
+    Discord ends a link target at the first `)`, so a Wikipedia article like
+    `Dune_(novel)` opened `Dune_(novel` -- a working-looking link to the wrong
+    page. Parentheses, spaces and angle brackets are percent-encoded, which
+    every server decodes back to the same path.
+    """
+    stripped = url.strip()
+    if not stripped:
+        return ""
+    return (
+        stripped.replace(" ", "%20")
+        .replace("(", "%28")
+        .replace(")", "%29")
+        .replace("<", "%3C")
+        .replace(">", "%3E")
+    )
 
 
 def _grouped(citations: tuple[Citation, ...]) -> list[tuple[str, list[Citation]]]:
@@ -517,6 +560,86 @@ class DirectMessageConfirmation:
         return await view.settled()
 
 
+class _GuildPermissions(Protocol):
+    manage_channels: bool
+    view_channel: bool
+    read_message_history: bool
+    send_messages: bool
+
+
+class _GuildChannel(Protocol):
+    id: int
+    name: str
+
+    def permissions_for(self, obj: Any, /) -> _GuildPermissions: ...
+
+
+class _IndexingGuild(Protocol):
+    id: int
+
+    @property
+    def me(self) -> Any: ...
+
+    @property
+    def text_channels(self) -> Sequence[Any]: ...
+
+    def get_member(self, user_id: int, /) -> Any: ...
+
+
+class DiscordChannelAccess:
+    """Permissions for `/index`, resolved from the guild as it is right now.
+
+    The inputs are an authenticated account and a channel id; the member, the
+    channel and both permission sets are looked up in live guild state. A
+    channel outside this guild's text channels, or a requester who is not a
+    member, resolves to nothing the requester can use -- fail closed.
+    """
+
+    def __init__(self, guild: Callable[[], _IndexingGuild | None]) -> None:
+        self._guild = guild
+
+    async def resolve(self, requester: PersonRef, channel_id: int) -> ChannelAccess | None:
+        guild = self._guild()
+        if guild is None or requester.platform != PLATFORM:
+            return None
+        channel: _GuildChannel | None = next(
+            (c for c in guild.text_channels if c.id == channel_id), None
+        )
+        if channel is None:
+            return None
+        member = guild.get_member(requester.platform_user_id)
+        me = guild.me
+        requester_perms = channel.permissions_for(member) if member is not None else None
+        assistant = channel.permissions_for(me) if me is not None else None
+        return ChannelAccess(
+            channel=ChannelRef(PLATFORM, channel.id),
+            name=channel.name,
+            requester_can_manage=bool(requester_perms and requester_perms.manage_channels),
+            assistant_can_view=bool(assistant and assistant.view_channel),
+            assistant_can_read_history=bool(assistant and assistant.read_message_history),
+            assistant_can_send=bool(assistant and assistant.send_messages),
+        )
+
+
+class DiscordIndexNotifier:
+    """Posts the archive notice into the channel itself, visible to every member."""
+
+    def __init__(self, channels: Callable[[int], Any]) -> None:
+        self._channels = channels
+
+    async def announce(self, channel: ChannelRef, text: str) -> bool:
+        target = self._channels(channel.platform_channel_id)
+        if target is None or not hasattr(target, "send"):
+            log.warning("indexing.notice_no_channel", channel=str(channel))
+            return False
+        try:
+            await target.send(text, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            log.warning("indexing.notice_not_posted", channel=str(channel))
+            return False
+        return True
+
+
 class CyberFriendClient(discord.Client):
     def __init__(self, asks: AskService, guild_id: int) -> None:
         intents = discord.Intents.default()
@@ -533,6 +656,16 @@ class CyberFriendClient(discord.Client):
         self._asks = asks
         self._guild_id = guild_id
         self.tree = app_commands.CommandTree(self)
+        self._indexing: IndexingService | None = None
+
+    def attach_indexing(self, indexing: IndexingService) -> None:
+        """Give `/index` and `/unindex` somewhere to act.
+
+        Attached after construction because the service's permission resolver
+        and notifier read this client's guild cache. Without it both commands
+        are still registered and say indexing is unavailable here.
+        """
+        self._indexing = indexing
 
     async def setup_hook(self) -> None:
         guild = discord.Object(id=self._guild_id)
@@ -545,7 +678,39 @@ class CyberFriendClient(discord.Client):
         # off switch, and a way out that depends on configuration is one that
         # is missing on the deployment somebody needs it on.
         self.tree.add_command(self._build_forget_command(), guild=guild)
+        # No `default_permissions`: Manage Channels granted by a channel
+        # overwrite, and not guild-wide, must still see the command. The
+        # permission is checked on the target channel when it runs.
+        for action in IndexAction:
+            self.tree.add_command(self._build_indexing_command(action), guild=guild)
         await self.tree.sync(guild=guild)
+
+    def _build_indexing_command(
+        self, action: IndexAction
+    ) -> app_commands.Command[Any, ..., None]:
+        """`/index` or `/unindex` a channel. Always answered privately.
+
+        The channel is an option Discord resolves; only its id is used, and
+        the permissions that decide the request are looked up again from live
+        guild state rather than trusted from the interaction payload.
+        """
+
+        @app_commands.command(name=action.value, description=INDEXING_DESCRIPTIONS[action])
+        @app_commands.describe(channel="The channel to change")
+        @app_commands.guild_only()
+        async def command(
+            interaction: discord.Interaction, channel: discord.TextChannel
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if self._indexing is None:
+                await interaction.followup.send(INDEXING_UNAVAILABLE, ephemeral=True)
+                return
+            result = await self._indexing.handle(
+                IndexRequest(_person(interaction.user), channel.id, action)
+            )
+            await interaction.followup.send(result.message, ephemeral=True)
+
+        return command
 
     def _build_forget_command(self) -> app_commands.Command[Any, ..., None]:
         """`/forget`: erase the caller's own conversation, here or everywhere."""

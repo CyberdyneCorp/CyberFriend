@@ -26,6 +26,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
+from urllib.parse import urlsplit
 
 from chatmemory.app.reasoning.evidence import SOURCE_WEB
 
@@ -61,11 +62,19 @@ class WebResult:
     source: str
 
     def block(self, index: int) -> str:
+        """One result, every untrusted value behind a label of ours.
+
+        The labels are what `EvidenceLedger.add_external` reads a result's
+        link from, so a line may only *start* with `url:` when this method
+        wrote that label. A snippet was once rendered bare, and a page whose
+        snippet began "url: https://elsewhere" would have supplied the link
+        its own citation opened.
+        """
         lines = [f"{index}. {self.title}".strip(), f"   source: {self.source}"]
         if self.url:
             lines.append(f"   url: {self.url}")
         if self.snippet:
-            lines.append(f"   {self.snippet}")
+            lines.append(f"   snippet: {self.snippet}")
         return "\n".join(lines)
 
 
@@ -85,10 +94,27 @@ def clip(text: str, limit: int = MAX_SNIPPET_CHARS) -> tuple[str, bool]:
     return text[:limit].rstrip() + CLIP_MARKER, True
 
 
+def link(url: str) -> str:
+    """A URL a reader can open, or "" when the provider's is not one.
+
+    Only absolute http(s) with no whitespace. A citation renders this as the
+    target of a link, so anything else -- a relative path, a `javascript:`
+    scheme, a value with a newline that would start a line of its own in the
+    rendered block -- is dropped rather than repaired.
+    """
+    candidate = url.strip()
+    parts = urlsplit(candidate)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return ""
+    if any(ch.isspace() for ch in candidate):
+        return ""
+    return candidate
+
+
 def result(title: str, url: str, snippet: str, source: str) -> tuple[WebResult, bool]:
     """Build one result from raw provider text, reporting any clipping."""
     body, clipped = clip(clean(snippet))
-    return WebResult(title=clean(title), url=url.strip(), snippet=body, source=source), clipped
+    return WebResult(title=clean(title), url=link(url), snippet=body, source=source), clipped
 
 
 def render(

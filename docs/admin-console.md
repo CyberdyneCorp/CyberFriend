@@ -145,7 +145,7 @@ credential issue as an escalation.
 | --- | --- |
 | Status | Is it healthy, is ingestion keeping up, how large is the embedding backlog, what changed recently. |
 | Federation | Which servers the agent may reach, whether they answered a probe, what tools they offer, and which of those tools are allowed. |
-| Channels | What is indexed, and whether the bot can actually read each one. |
+| Channels | What is indexed, and whether the bot can actually read each one. Adding or removing a channel re-reads stored scope first, so it never undoes an `/index` or `/unindex` made from Discord since the console last refreshed; if stored scope cannot be read the edit is refused (503) and nothing is written. |
 | Retention | How long anything is kept, and who has opted out. |
 | Settings | Every setting, its value, and **where that value came from**. |
 | Tokens | Review and revoke MCP credentials. Issuing one is not possible from here; see below. |
