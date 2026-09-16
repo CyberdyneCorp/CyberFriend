@@ -1,3 +1,19 @@
+# The operator console is TypeScript and has to be compiled before the Python
+# image can serve it. Building it in its own stage keeps node out of the
+# runtime image entirely -- the service serves static files and has no reason
+# to carry a toolchain that can execute code.
+FROM node:22-slim AS console
+
+WORKDIR /console
+# Lockfile first, so an application edit does not reinstall the world.
+COPY console/package.json console/package-lock.json ./
+RUN npm ci
+COPY console/ ./
+# `build` runs tsc --noEmit first, so a type error fails the image rather than
+# shipping a console that breaks in somebody's browser.
+RUN npm run build
+
+
 FROM python:3.11-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -19,6 +35,10 @@ RUN mkdir -p src/chatmemory \
 COPY src/ ./src/
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
+# The compiled console, at the path ADMIN_CONSOLE_DIR names. Without this the
+# admin service starts, finds nothing to serve, and the API works while the
+# interface 404s -- which looks like a routing bug rather than a missing build.
+COPY --from=console /console/dist ./console
 # --reinstall-package is load-bearing. The project version does not change
 # between the stub install above and this one, so without it uv considers
 # chatmemory already satisfied and skips the install -- leaving the empty
