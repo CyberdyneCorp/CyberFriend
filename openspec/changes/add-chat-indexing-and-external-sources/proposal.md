@@ -29,6 +29,8 @@ not configured in production.
   it cannot answer at all, falls back to external sources.
 - **MCP in production.** Context7 is configured, allowlisted read-only, and
   verified against the live deployment.
+- **Market data.** Current BTC and ETH prices, the S&P 500, and currency
+  conversion, each stated with how current it is.
 
 Non-goals:
 
@@ -45,6 +47,8 @@ Non-goals:
 - `external-sources`: when a question goes to the web or to an MCP server
   instead of, or after, the corpus.
 - `live-scope`: running processes applying a scope change without a restart.
+- `market-data`: current prices, index levels and exchange rates from live
+  sources, with their age stated.
 
 ### Modified Capabilities
 
@@ -52,6 +56,11 @@ None. `runtime-configuration` already specifies that stored settings take
 effect without a redeploy; this change implements that for indexing scope.
 
 ## Impact
+
+- **A price from a channel is not a current price.** This server discusses
+  crypto; a question about BTC would otherwise retrieve a message quoting last
+  month's price and present it as the answer. Price questions go to market data
+  and never to the corpus.
 
 - **Anyone who can run the command can make a channel permanently
   searchable.** Indexing is opt-in precisely because an archive is a governance
