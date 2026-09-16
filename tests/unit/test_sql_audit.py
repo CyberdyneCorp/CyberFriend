@@ -37,6 +37,7 @@ SQL_MODULES = (
     "retention_sql",
     "admin_sql",
     "config_sql",
+    "memory_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -277,6 +278,35 @@ UNSCOPED: dict[str, str] = {
         "credential pasted into a settings field, and keeping the rejected "
         "text would store the secret the refusal exists to keep out"
     ),
+    # --- memory_sql ------------------------------------------------------
+    #
+    # Only the two RECALL statements return remembered text, and both bind
+    # :channel_ids. Nothing below returns a question, an answer or a summary.
+    "memory_sql.INSERT_TURN": (
+        "write; stores one of the asker's own turns with its provenance. "
+        "Returns the new id only, which is how a row dropped by the opt-out "
+        "trigger is told apart from a stored one"
+    ),
+    "memory_sql.LOCK_PERSON_MEMORY": "advisory lock; reads no table",
+    "memory_sql.REPLACE_WITH_SUMMARY": (
+        "write; replaces one person's older turns in one location with a "
+        "summary, computing its covered channels from the rows it deletes "
+        "rather than trusting the caller. Returns the new id only. Its CTEs "
+        "read channel id arrays and timestamps, never question or answer text"
+    ),
+    "memory_sql.FORGET_TURNS_AT": (
+        "write; /forget. Keyed on the requester's own platform identity, bound "
+        "as a predicate, so it can delete no one else's history. Returns no row"
+    ),
+    "memory_sql.FORGET_SUMMARIES_AT": "write; /forget, as FORGET_TURNS_AT",
+    "memory_sql.FORGET_TURNS_EVERYWHERE": "write; /forget everywhere, as FORGET_TURNS_AT",
+    "memory_sql.FORGET_SUMMARIES_EVERYWHERE": (
+        "write; /forget everywhere, as FORGET_TURNS_AT"
+    ),
+    "memory_sql.PURGE_TURNS_BEFORE": "write; retention",
+    "memory_sql.PURGE_SUMMARIES_BEFORE": (
+        "write; retention, keyed on the oldest content a summary carries"
+    ),
 }
 
 # Viewer-scoped statements that do not filter tombstones, and why. Kept
@@ -284,6 +314,11 @@ UNSCOPED: dict[str, str] = {
 # reason written for something else.
 TOMBSTONE_EXEMPT: dict[str, str] = {
     "sql.LIST_CHANNELS": "channels are not tombstoned; they carry is_indexed",
+    "memory_sql.RECALL_TURNS": (
+        "conversation turns are never tombstoned: /forget, retention, opt-out "
+        "and person deletion hard-delete them, so there is no deleted_at to test"
+    ),
+    "memory_sql.RECALL_SUMMARIES": "summaries are hard-deleted, as RECALL_TURNS",
 }
 
 

@@ -38,6 +38,7 @@ from chatmemory.app.reasoning.loop import (
 from chatmemory.app.reasoning.ports import (
     ExternalTool,
     JsonCompletion,
+    PromptContext,
     RetrievalResult,
     TextCompletion,
     ToolCall,
@@ -181,9 +182,11 @@ class RecordingSynthesizer(CitingSynthesizer):
         super().__init__()
         self.seen: tuple[Evidence, ...] = ()
 
-    async def synthesize(self, question_text: str, items: Sequence[Evidence]) -> object:
+    async def synthesize(
+        self, question_text: str, items: Sequence[Evidence], context: PromptContext
+    ) -> object:
         self.seen = tuple(items)
-        return await super().synthesize(question_text, items)
+        return await super().synthesize(question_text, items, context)
 
 
 class ToolCallingChat:

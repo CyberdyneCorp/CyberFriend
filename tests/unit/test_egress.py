@@ -10,6 +10,8 @@ before the call.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from chatmemory.app.egress import (
@@ -27,6 +29,7 @@ from chatmemory.app.egress import (
 from chatmemory.domain.audience import Audience, DeliveryMode
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.answers import Question
+from chatmemory.ports.memory import Recollection, RememberedTurn
 
 ASKER = PersonRef("discord", 7)
 PRIVATE = ChannelRef("discord", 900)
@@ -55,7 +58,17 @@ def question(text: str = QUESTION_TEXT) -> Question:
             members=frozenset({ASKER}),
             readable_channels=frozenset({PRIVATE}),
         ),
-        history=("what is the renewal value of the Contoso account?",),
+        memory=Recollection(
+            turns=(
+                RememberedTurn(
+                    turn_id=1,
+                    question="what is the renewal value of the Contoso account?",
+                    answer="the renewal value is in #deals",
+                    asked_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    source_channels=frozenset({PRIVATE}),
+                ),
+            )
+        ),
     )
 
 
@@ -154,15 +167,17 @@ def test_an_empty_query_never_leaves() -> None:
 
 
 def test_the_conversation_history_is_not_a_root() -> None:
-    """History holds questions *other people* asked in the same place.
+    """Remembered turns are not the question being asked now.
 
-    Rooting a query there would let one person's words authorise sending
-    another's, which is the same disclosure by a longer route.
+    A remembered answer quoted retrieved content, and a remembered question
+    was asked under whatever access applied then. Rooting a query there would
+    let text the person did not type in this request authorise a send, which
+    is the same disclosure by a longer route.
     """
     sender, _ = guard()
     asked = question()
     from_history = ProvenancedQuery.for_question(asked).derived(
-        asked.history[0], QueryOrigin.MODEL_REFORMULATION
+        asked.memory.turns[0].question, QueryOrigin.MODEL_REFORMULATION
     )
 
     with pytest.raises(EgressRefused) as raised:

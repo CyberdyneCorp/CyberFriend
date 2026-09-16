@@ -64,6 +64,7 @@ from chatmemory.app.reasoning.ports import (
     ToolSurface,
 )
 from chatmemory.app.reasoning.scope import retrieval_viewer
+from chatmemory.app.reasoning.stages import prompt_context
 from chatmemory.ports.answers import Question
 
 log = structlog.get_logger()
@@ -423,7 +424,15 @@ class ReasoningLoop:
         simple lookup is never expanded into several just because it reached
         this path.
         """
-        plan = await self._planner.plan(question.text, self._max_sub_questions)
+        # The planner is where memory does its work: it is the stage that turns
+        # "and last month?" into a lookup that retrieval can run. It sees the
+        # person's permitted earlier turns as fenced context, and what it
+        # writes is only ever a query -- retrieval under this run's viewer
+        # decides what comes back, so a steered lookup reaches nothing the
+        # person could not already read.
+        plan = await self._planner.plan(
+            question.text, self._max_sub_questions, prompt_context(question)
+        )
         spend.charge_model_call(plan.prompt_tokens, plan.model_calls)
         sub_questions = tuple(plan.sub_questions[: self._max_sub_questions]) or (question.text,)
         decision = Decision(

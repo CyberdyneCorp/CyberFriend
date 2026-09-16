@@ -86,6 +86,23 @@ class Settings(BaseSettings):
     # tell a follow-up from an opener.
     ask_extraction_window_messages: int = 20
 
+    # --- Conversation memory -------------------------------------------
+    # How many of a person's most recent turns in one place are put in front
+    # of the model verbatim. Each is a question and the answer it got, fenced
+    # as data; more of them resolve older references and cost prompt on every
+    # follow-up.
+    memory_recent_turns: int = 6
+
+    # Once a conversation holds more turns than this, the older ones are
+    # condensed into a summary on EXTRACTION_MODEL, in the background. Must
+    # exceed MEMORY_RECENT_TURNS, or there is nothing older to condense.
+    memory_summarise_after_turns: int = 12
+
+    # Remembered turns and summaries older than this are deleted by the ingest
+    # process's sweep. What a person asked the assistant is personal data in
+    # its own right, so it expires rather than accumulating.
+    memory_retention_days: int = 30
+
     # --- Federation (optional) -----------------------------------------
     # External MCP servers CyberFriend may reach, as `name=target` entries,
     # space- or comma-separated: "issues=https://issues.internal/mcp". Empty
@@ -229,6 +246,28 @@ class Settings(BaseSettings):
         if not 0.0 <= v <= 1.0:
             raise ValueError("ask_min_confidence must be between 0 and 1")
         return v
+
+    @field_validator(
+        "memory_recent_turns", "memory_summarise_after_turns", "memory_retention_days"
+    )
+    @classmethod
+    def _positive_memory_setting(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be positive")
+        return v
+
+    @model_validator(mode="after")
+    def _summary_bound_exceeds_recent_turns(self) -> Settings:
+        """Refused at boot rather than at the first summary.
+
+        A bound at or below the verbatim window condenses nothing, and would
+        otherwise surface as a background error on somebody's tenth question.
+        """
+        if self.memory_summarise_after_turns <= self.memory_recent_turns:
+            raise ValueError(
+                "memory_summarise_after_turns must exceed memory_recent_turns"
+            )
+        return self
 
     @field_validator("ask_stale_after_days", "ask_extraction_window_messages")
     @classmethod

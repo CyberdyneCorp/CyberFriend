@@ -46,7 +46,6 @@ from chatmemory.app.asks.model import (
 from chatmemory.app.asks.resolution import ObservedDirectory
 from chatmemory.app.asks.state import AskStateService
 from chatmemory.app.asks.worker import ExtractionWorker
-from chatmemory.app.conversation import ConversationStore
 from chatmemory.app.ingest import IngestService
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.windowing import WindowBuilder
@@ -230,7 +229,6 @@ class Pipeline:
             audiences=None,  # type: ignore[arg-type]
             answers=None,  # type: ignore[arg-type]
             limiter=RateLimiter(),
-            conversations=ConversationStore(),
         )
         # Built through `ask_policy` rather than by hand: the confidence the
         # extractor writes and the one the menu refuses to offer are the same

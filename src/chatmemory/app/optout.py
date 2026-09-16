@@ -16,6 +16,14 @@ Three things have to hold for this to be an opt-out rather than a gesture.
     issued the INSERT. `excludes` and `filter_messages` below are a courtesy to
     the ingestion loop -- they save the round trip, they are not the guarantee.
 
+*   **It covers what they asked the assistant.** Conversation memory is a
+    record of the person's own questions and the answers they were given. It
+    is purged by a trigger on `person_opt_out` itself (migration 0013), in the
+    same transaction as `record_opt_out` -- so the flag and the memory purge
+    cannot be separated, and no path that records an exclusion can forget the
+    memory half. The same migration drops any turn or summary written for an
+    excluded person, as 0008 does for messages.
+
 *   **The flag lands before the purge.** In the other order there is a window
     between "content deleted" and "exclusion recorded" in which a backfill page
     re-imports exactly what was just removed, and the opt-out reports success.

@@ -25,6 +25,14 @@ question started this ask -- so their private channel is made current for the
 length of the run and taken down again afterwards. Everything about how the
 asking looks belongs to the adapter; what belongs here is that the channel is
 bound to `request.asker` and to nobody else.
+
+And it is where a question joins a conversation. Before answering, the asker's
+own profile and their own earlier turns *in this location* are attached to the
+question; after answering, the turn is stored with the channels it drew on.
+Both halves are keyed by the authenticated asker and the delivery location,
+never by the location alone, and the recall runs under the same narrowed view
+retrieval will: a remembered answer from a channel the room cannot read is not
+put in front of a model writing a reply to that room.
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import structlog
 
@@ -48,13 +56,20 @@ from chatmemory.app.confirmation import (
     ConfirmationSurface,
     attending,
 )
-from chatmemory.app.conversation import ConversationStore
+from chatmemory.app.conversation import Conversations
 from chatmemory.app.disclosure import ScopedAnswer, WithheldEvidenceProbe, enforce_audience
 from chatmemory.app.limits import RateLimiter
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.acl import AclResolver, AudienceResolver
-from chatmemory.ports.answers import Answer, AnswerService, Question
+from chatmemory.ports.answers import (
+    Answer,
+    AnswerService,
+    AskerProfile,
+    AskerProfileResolver,
+    Question,
+)
+from chatmemory.ports.memory import ConversationLocation, MemoryPurge, Recollection
 
 log = structlog.get_logger()
 
@@ -71,6 +86,41 @@ class AskRequest:
     text: str
     destination: ChannelRef | None
     location_id: int
+
+    @property
+    def location(self) -> ConversationLocation:
+        """The conversation this question belongs to, for this asker.
+
+        A direct message is part of the key, not a label on it: a DM answer
+        was scoped to one person and a channel answer to everyone present.
+        """
+        return conversation_location(
+            self.asker, self.location_id, direct=self.destination is None
+        )
+
+
+def conversation_location(
+    asker: PersonRef, location_id: int, *, direct: bool
+) -> ConversationLocation:
+    """One place, spelled the same way by asking and by forgetting.
+
+    `/forget here` must name exactly the location `/ask` remembered under, or
+    it reports success over a conversation it never touched.
+    """
+    return ConversationLocation(asker.platform, location_id, direct=direct)
+
+
+@dataclass(frozen=True, slots=True)
+class ForgetRequest:
+    """A person asking to erase their own conversation.
+
+    `requester` comes from the platform event, like every actor here; there is
+    no field naming whose history to delete, because the only history anyone
+    may erase is their own. `location` None means everywhere.
+    """
+
+    requester: PersonRef
+    location: ConversationLocation | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,16 +161,22 @@ class AskService:
         audiences: AudienceResolver,
         answers: AnswerService,
         limiter: RateLimiter,
-        conversations: ConversationStore,
         withheld: WithheldEvidenceProbe | None = None,
         desk: ConfirmationDesk | None = None,
         corrections: CorrectionService | None = None,
+        conversations: Conversations | None = None,
+        profiles: AskerProfileResolver | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
         self._answers = answers
         self._limiter = limiter
+        # Optional so a surface under test answers exactly as a first question
+        # would. The bot process passes both, and `test_memory_integration`
+        # reads that chain from the entrypoint down: an optional collaborator
+        # is only honest if something proves the running process supplies it.
         self._conversations = conversations
+        self._profiles = profiles
         # Optional because the notice is the only thing that needs it: a
         # deployment without one answers exactly as before, and simply never
         # tells anyone that asking privately would get them more.
@@ -163,11 +219,23 @@ class AskService:
         else:
             audience = await self._audiences.resolve_for_channel(request.destination)
 
+        # What memory is judged against: the asker narrowed by the audience,
+        # the same view retrieval runs under. The person's own access is the
+        # rule; the narrowing keeps a DM-scoped channel out of a public prompt.
+        scope = Viewer(
+            person=viewer.person,
+            visible_channels=viewer.visible_channels & audience.readable_channels,
+        )
+        location = request.location
+        memory, profile = await asyncio.gather(
+            self._recall(scope, location), self._profile(request.asker)
+        )
         question = Question(
             text=request.text,
             asker=viewer,
             audience=audience,
-            history=self._conversations.history(request.location_id),
+            memory=memory,
+            asker_profile=profile,
         )
         # Concurrent, and not merely for speed. Run after the answer, the
         # probe would add its latency only for askers who have channels the
@@ -186,7 +254,7 @@ class AskService:
             )
         scoped = enforce_audience(answer, audience, viewer, withheld_by_scoping=withheld)
 
-        self._conversations.record(request.location_id, request.text)
+        await self._remember(scope, location, request.text, answer, scoped, memory)
 
         log.info(
             "ask.answered",
@@ -195,8 +263,77 @@ class AskService:
             citations=len(scoped.answer.citations),
             withheld=len(scoped.withheld_from_audience),
             abstained=scoped.answer.abstained,
+            remembered_turns=len(memory.turns),
+            remembered_summaries=len(memory.summaries),
         )
         return AskOutcome(scoped)
+
+    async def forget(self, request: ForgetRequest) -> MemoryPurge | None:
+        """Erase the requester's own conversation, here or everywhere.
+
+        None when this deployment keeps no memory, so a surface can say so
+        rather than report a deletion of nothing as a success.
+        """
+        if self._conversations is None:
+            return None
+        purge = await self._conversations.forget(request.requester, request.location)
+        log.info(
+            "ask.forgotten",
+            requester=str(request.requester),
+            everywhere=request.location is None,
+            turns=purge.turns,
+            summaries=purge.summaries,
+        )
+        return purge
+
+    async def _recall(self, scope: Viewer, location: ConversationLocation) -> Recollection:
+        if self._conversations is None:
+            return Recollection()
+        return await self._conversations.recall(scope, location)
+
+    async def _profile(self, asker: PersonRef) -> AskerProfile | None:
+        """The asker's own profile. Only ever looked up for `request.asker`."""
+        if self._profiles is None:
+            return None
+        try:
+            return await self._profiles.resolve_profile(asker)
+        except Exception:
+            # The port says it must not raise; this is the boundary that holds
+            # if an implementation forgets. No profile is never a failure.
+            log.exception("ask.profile_failed", asker=str(asker))
+            return None
+
+    async def _remember(
+        self,
+        scope: Viewer,
+        location: ConversationLocation,
+        text: str,
+        produced: Answer,
+        scoped: ScopedAnswer,
+        shown: Recollection,
+    ) -> None:
+        """Store the turn: the text that was delivered, the provenance that was used.
+
+        Delivered text, because a reply the audience guard suppressed must not
+        come back as memory in its unsuppressed form. Provenance from what was
+        produced, before the guard dropped any citation: a dropped citation was
+        still evidence the model read. And from `shown`, the exact recollection
+        put in `Question.memory`: the answer may restate it, so the new turn
+        must stop being recalled when any channel behind it does.
+        """
+        if self._conversations is None:
+            return
+        await self._conversations.remember(
+            scope,
+            location,
+            text,
+            replace(
+                scoped.answer,
+                citations=produced.citations,
+                consulted_channels=produced.consulted_channels,
+            ),
+            informed_by=shown,
+        )
 
     async def correctable(self, person: PersonRef, limit: int = 25) -> Sequence[ReportedAsk]:
         """The asks `person` could close, scoped to what `person` may read.
