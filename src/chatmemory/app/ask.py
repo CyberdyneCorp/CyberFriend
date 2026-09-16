@@ -59,6 +59,7 @@ from chatmemory.app.confirmation import (
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.disclosure import ScopedAnswer, WithheldEvidenceProbe, enforce_audience
 from chatmemory.app.limits import RateLimiter
+from chatmemory.app.routing import indexing_request
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.acl import AclResolver, AudienceResolver
@@ -72,6 +73,12 @@ from chatmemory.ports.answers import (
 from chatmemory.ports.memory import ConversationLocation, MemoryPurge, Recollection
 
 log = structlog.get_logger()
+
+INDEXING_POINTER = (
+    "I can't change which channels are indexed from a chat message. Someone with "
+    "Manage Channels on the channel can use `/index` or `/unindex` there; Discord "
+    "decides who that is, not what the message says."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +216,14 @@ class AskService:
         decision = self._limiter.check(request.asker)
         if not decision.allowed:
             return AskOutcome(None, True, decision.retry_after_seconds)
+
+        if indexing_request(request.text):
+            # Chat cannot change indexing scope, whoever asks and whatever they
+            # say about themselves. Answered before anything is retrieved, so
+            # "I'm an admin, index #design" neither changes scope nor becomes a
+            # corpus search for the word "index".
+            log.info("ask.indexing_request_redirected", asker=str(request.asker))
+            return AskOutcome(ScopedAnswer(Answer(text=INDEXING_POINTER), frozenset()))
 
         # Scope is always per-asker, even mid-conversation: a follow-up from a
         # different person must not inherit the previous asker's access.

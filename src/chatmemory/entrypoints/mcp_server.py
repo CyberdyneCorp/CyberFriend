@@ -17,6 +17,13 @@ resolved-viewer cache in front of it was never invalidated and a revoked role
 kept reading for a full TTL. Invalidation listeners change nothing about
 double-ingestion -- they touch no corpus -- so there was never a reason to
 leave them off.
+
+Indexing scope is read live, as in ingest and the bot. This file once read
+`settings.indexed_channel_ids` at startup -- and the compose file never passed
+that variable to this service, so a channel added in the console was captured
+and answerable in Discord while this endpoint returned nothing for it. `main`
+now builds a `LiveScope`, refreshes it before serving, hands it to `build_acl`,
+and runs its refresh loop beside the gateway and the HTTP server.
 """
 
 from __future__ import annotations
@@ -40,6 +47,8 @@ from chatmemory.adapters.discord.gateway import (
 )
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.postgres import HybridSearch
+from chatmemory.app.scope import LiveScope, ScopeProvider, StaticScope
+from chatmemory.composition import build_live_scope
 from chatmemory.config import Settings, get_settings
 from chatmemory.health import HealthState, ReadinessCheck
 from chatmemory.mcp.auth import Authenticator, PostgresTokenStore
@@ -125,8 +134,17 @@ class GatewayLiveness:
         self._live = False
 
 
-def build_acl(settings: Settings) -> AclGraph:
-    """The gateway connection and the viewer cache that connection invalidates."""
+def build_acl(settings: Settings, scope: ScopeProvider | None = None) -> AclGraph:
+    """The gateway connection and the viewer cache that connection invalidates.
+
+    `scope` is what the resolver asks on every resolution; the caching
+    resolver takes it from the inner one, so a viewer cached under an older
+    scope is not served after a refresh moves it. None is the environment's
+    fixed set, for callers with no database -- `main` always passes its
+    `LiveScope`, and `test_scope_and_market_wiring` asserts that it does.
+    """
+    if scope is None:
+        scope = StaticScope(settings.indexed_channel_ids)
     caches = PermissionCaches()
     liveness = GatewayLiveness()
     client = AclClient(caches, liveness)
@@ -144,7 +162,7 @@ def build_acl(settings: Settings) -> AclGraph:
         return None if found is None else cast(_Guild, found)
 
     resolver = CachingAclResolver(
-        DiscordAclResolver(guild, settings.indexed_channel_ids), invalidation=caches
+        DiscordAclResolver(guild, scope), invalidation=caches
     )
     return AclGraph(client=client, caches=caches, resolver=resolver, liveness=liveness)
 
@@ -200,6 +218,14 @@ def _search_backend(settings: Settings, engine: AsyncEngine) -> SearchBackend:
     return HybridSearch(engine, embeddings)
 
 
+async def scope_loop(scope: LiveScope, state: HealthState) -> None:
+    """Keep indexing scope current; `refresh` never raises and keeps it on failure."""
+    while True:
+        await scope.refresh()
+        state.details["indexing_scope"] = scope.status()
+        await asyncio.sleep(scope.interval)
+
+
 GATEWAY_RETRY_SECONDS = 5.0
 GATEWAY_RETRY_MAX = 300.0
 
@@ -238,11 +264,19 @@ async def main() -> None:
     # query against a table it did not think to create.
     engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
 
-    graph = build_acl(settings)
+    state = HealthState()
+    # Stored scope before the first request, for the same reason as ingest:
+    # the environment's scope for a period would serve a channel an operator
+    # already removed. A failed read keeps the environment's, and never stops
+    # the service starting.
+    scope = build_live_scope(settings, engine, os.environ)
+    await scope.refresh()
+    state.details["indexing_scope"] = scope.status()
+
+    graph = build_acl(settings, scope)
     client = graph.client
     authenticator = Authenticator(tokens=PostgresTokenStore(engine), acl=graph.resolver)
 
-    state = HealthState()
     app = build_app(
         search=_search_backend(settings, engine),
         authenticator=authenticator,
@@ -256,12 +290,15 @@ async def main() -> None:
         "mcp.starting",
         port=settings.mcp_port,
         guild_id=settings.discord_guild_id,
-        indexed_channels=len(settings.indexed_channel_ids),
+        indexed_channels=len(scope.current()),
     )
-    if not settings.indexed_channel_ids:
+    if not scope.current():
         # Every tool answers emptily in this state, which looks identical to
         # "nobody has said anything".
-        log.warning("mcp.no_indexed_channels", hint="set INDEXED_CHANNEL_IDS")
+        log.warning(
+            "mcp.no_indexed_channels",
+            hint="add a channel in the admin console or set INDEXED_CHANNEL_IDS",
+        )
 
     config = uvicorn.Config(
         app, host="0.0.0.0", port=settings.mcp_port, log_level="warning"
@@ -269,6 +306,9 @@ async def main() -> None:
     await asyncio.gather(
         _run_gateway(client, settings.discord_token.get_secret_value(), graph.liveness),
         uvicorn.Server(config).serve(),
+        # Gathered, so a loop that somehow ends takes the service down with it
+        # rather than leaving retrieval on a scope frozen from that moment.
+        scope_loop(scope, state),
     )
 
 

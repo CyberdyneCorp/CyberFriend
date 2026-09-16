@@ -13,6 +13,7 @@ from typing import Protocol
 
 import structlog
 
+from chatmemory.app.scope import ScopeProvider, as_scope
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
@@ -47,19 +48,26 @@ class IngestService:
         source: ChatSource,
         store: Store,
         windows: WindowBuilder,
-        indexed_channels: frozenset[int],
+        indexed_channels: ScopeProvider | frozenset[int],
         page_size: int = 100,
         documents: DocumentSink | None = None,
     ) -> None:
         self._source = source
         self._store = store
         self._windows = windows
-        self._indexed = indexed_channels
+        # A provider, read on every decision, never a copy. A set captured
+        # here is a channel an operator removed still being captured, and one
+        # they added never being captured, until somebody restarts ingest.
+        self._scope = as_scope(indexed_channels)
         self._page_size = page_size
         self._documents = documents
 
+    @property
+    def scope(self) -> ScopeProvider:
+        return self._scope
+
     def is_indexed(self, channel: ChannelRef) -> bool:
-        return channel.platform_channel_id in self._indexed
+        return channel.platform_channel_id in self._scope.current()
 
     async def capture(self, message: Message) -> bool:
         """Persist one live message. Returns whether it was in scope."""

@@ -108,7 +108,14 @@ WITH w AS (DELETE FROM conversation_window WHERE channel_id = :channel_id RETURN
      -- re-ingested into a de-scoped channel (capture refuses it), and if the
      -- channel returns to scope its backfill re-reads live history, which no
      -- longer contains the deleted messages -- so this cannot resurrect one.
-     t AS (DELETE FROM message_tombstone WHERE channel_id = :channel_id RETURNING message_id)
+     t AS (DELETE FROM message_tombstone WHERE channel_id = :channel_id RETURNING message_id),
+     -- And so does the backfill cursor. It only ever moves older (LEAST), so
+     -- one left behind points at the oldest message already imported: a
+     -- channel returning to scope would resume from there, find nothing
+     -- older, report itself complete, and never re-import the history just
+     -- deleted. The dirty-window watermark on the same row describes windows
+     -- this statement deletes, so nothing on the row outlives the purge.
+     c AS (DELETE FROM ingest_cursor WHERE channel_id = :channel_id RETURNING channel_id)
 DELETE FROM message WHERE channel_id = :channel_id
 """)
 

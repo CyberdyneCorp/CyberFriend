@@ -23,6 +23,7 @@ cannot read, and refusing would make a new channel impossible to add.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import structlog
@@ -54,19 +55,28 @@ that turns out to be wrong stops believing the next one.
 """
 
 
+STALE_SCOPE = (
+    "the stored indexing scope could not be read, so nothing was changed; try again shortly"
+)
+
+
 def routes(services: AdminServices) -> list[Route]:
+    # Serialises this console's own read-refresh-write cycles, so two requests
+    # in flight here cannot each start from the same scope and lose one edit.
+    scope_lock = asyncio.Lock()
+
     async def list_channels(_: Request) -> JSONResponse:
         return JSONResponse(await _channel_views(services))
 
     async def add_channel(request: Request) -> JSONResponse:
         operator = acting_operator()
         channel_id = account_id(await body_of(request), "id")
-        scope = _scope(services)
-        if channel_id in scope:
-            raise Refused(f"{channel_id} is already indexed", status=409)
-
         evidence = await services.channels.channel(channel_id)
-        await _store_scope(services, [*sorted(scope), channel_id])
+        async with scope_lock:
+            scope = await _fresh_scope(services)
+            if channel_id in scope:
+                raise Refused(f"{channel_id} is already indexed", status=409)
+            await _store_scope(services, [*sorted(scope), channel_id])
         log.info(
             "admin.channel_added",
             channel_id=channel_id,
@@ -83,11 +93,11 @@ def routes(services: AdminServices) -> list[Route]:
 
     async def remove_channel(request: Request) -> JSONResponse:
         channel_id = path_int(request, "id")
-        scope = _scope(services)
-        if channel_id not in scope:
-            raise Refused(f"{channel_id} is not in indexing scope", status=404)
-
-        await _store_scope(services, sorted(scope - {channel_id}))
+        async with scope_lock:
+            scope = await _fresh_scope(services)
+            if channel_id not in scope:
+                raise Refused(f"{channel_id} is not in indexing scope", status=404)
+            await _store_scope(services, sorted(scope - {channel_id}))
         log.info("admin.channel_removed", channel_id=channel_id)
         return Ok(
             changed=INDEXED_CHANNEL_IDS.key,
@@ -109,6 +119,23 @@ def routes(services: AdminServices) -> list[Route]:
 
 def _scope(services: AdminServices) -> frozenset[int]:
     return services.configuration.current.get(INDEXED_CHANNEL_IDS)
+
+
+async def _fresh_scope(services: AdminServices) -> frozenset[int]:
+    """Stored scope as of now, for a write that replaces the whole set.
+
+    `current` is a copy refreshed on a period, and Discord's `/index` and
+    `/unindex` write the same row between refreshes. Writing from that copy
+    would put back a channel a moderator with Manage Channels just removed --
+    with no permission check, no notice and nothing naming that channel -- or
+    drop one they just added. So the console re-reads first, as the indexing
+    service does. A read that fails changes nothing: a write from a copy that
+    cannot be confirmed current is exactly the stale write this prevents.
+    """
+    report = await services.configuration.refresh()
+    if not report.applied:
+        raise Refused(STALE_SCOPE, status=503)
+    return _scope(services)
 
 
 async def _store_scope(services: AdminServices, channel_ids: list[int]) -> None:

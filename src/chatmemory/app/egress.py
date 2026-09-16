@@ -38,6 +38,17 @@ synonym the asker did not use is refused, and recall suffers. A rule that
 holds against an adversary is worth more here than one that reads well and
 yields under one.
 
+There is exactly one exception to rooting, and it is narrower than rooting
+rather than looser: a provider listed in `CLOSED_VOCABULARIES`. Its arguments
+are instruments or ISO 4217 codes, so someone asking about "ETH" or "reais"
+needs "ETH" or "BRL" to leave, and those are words the asker may never have
+typed. For those providers alone, rooting is replaced by *membership*: every
+token must be a member of the provider's fixed set, the number of tokens is
+capped, and anything else is refused outright -- never trimmed. A fixed list
+cannot carry free text, which is the thing rooting exists to stop. The table
+is a constant here, at the boundary, and not something an adapter registers:
+a declaration a caller could make is a declaration a caller could widen.
+
 Every call is audited -- allowed or refused -- with who asked, what they
 asked, what was sent and to which provider. A refusal is the more interesting
 record of the two: it is what an attempted exfiltration looks like from the
@@ -47,11 +58,12 @@ outside.
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Protocol, TypeVar
 
 import structlog
@@ -183,6 +195,90 @@ class ProvenancedQuery:
         return bool(words) and words <= _words(self.question)
 
 
+@dataclass(frozen=True, slots=True)
+class ClosedVocabulary:
+    """A fixed set of terms, the only things a provider may be sent.
+
+    `admits` splits on whitespace, not on the word pattern rooting uses, and
+    compares whole tokens: `USD;` or `USD-EUR` is not a member, so punctuation
+    cannot ride along beside a valid code. Case is folded because a model may
+    write `eth`; the provider sends its canonical spelling, so case never
+    leaves and cannot carry anything either.
+
+    `max_terms` bounds how many members one call may carry. A sequence of
+    codes is still an alphabet, and the cap is what keeps the channel it
+    leaves open to a handful of bits per call.
+    """
+
+    terms: frozenset[str]
+    max_terms: int
+
+    def __post_init__(self) -> None:
+        if not self.terms or self.max_terms < 1:
+            raise ValueError("a closed vocabulary needs terms and a positive term cap")
+
+    def admits(self, text: str) -> bool:
+        tokens = text.split()
+        if not tokens or len(tokens) > self.max_terms:
+            return False
+        members = {term.casefold() for term in self.terms}
+        return all(token.casefold() in members for token in tokens)
+
+
+CRYPTO_ASSETS = frozenset({"BTC", "ETH"})
+MARKET_INDICES = frozenset({"SPX"})
+
+_ISO_4217_TABLE = """
+    AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB
+    BRL BSD BTN BWP BYN BZD CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP
+    DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF
+    IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK
+    LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN
+    NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF
+    SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND
+    TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VED VES VND VUV WST XAF XCD XCG XOF
+    XPF YER ZAR ZMW ZWG
+"""
+
+ISO_4217_CODES = frozenset(_ISO_4217_TABLE.split())
+"""ISO 4217 currency codes a person could mean by "convert".
+
+The active circulating currencies only. Fund codes (USN, CLF, ...), precious
+metals (XAU), bond-market units and the testing codes (XTS, XXX) are ISO 4217
+too, but no one converts into them, and every member left out is one fewer
+symbol a call can carry. Withdrawn codes are absent too: ANG (replaced by
+XCG in 2025) and BGN (Bulgaria joined the euro in 2026). A valid code the rate
+source does not publish is reported as unsupported by that source, after the
+check, not before it."""
+
+MARKET_CRYPTO_PROVIDER = "market_crypto"
+MARKET_FX_PROVIDER = "market_fx"
+MARKET_INDEX_PROVIDER = "market_index"
+
+CLOSED_VOCABULARIES: Mapping[str, ClosedVocabulary] = MappingProxyType(
+    {
+        # One provider per vocabulary rather than one "market" provider with
+        # the union: clearance is issued per provider, so a crypto lookup
+        # cannot be cleared to carry a currency code, and each cap is the
+        # exact arity of the one tool behind it.
+        MARKET_CRYPTO_PROVIDER: ClosedVocabulary(CRYPTO_ASSETS, max_terms=1),
+        MARKET_INDEX_PROVIDER: ClosedVocabulary(MARKET_INDICES, max_terms=1),
+        MARKET_FX_PROVIDER: ClosedVocabulary(ISO_4217_CODES, max_terms=2),
+    }
+)
+"""Providers checked by membership instead of rooting. Nothing else is.
+
+Keyed by provider because the provider is what the guard is told about; every
+tool a listed provider offers must take only closed-vocabulary text arguments.
+Numbers are not text and are not checked here -- which is why a conversion
+amount is applied locally and never sent (see `adapters.market`)."""
+
+
+def closed_vocabulary_for(provider: str) -> ClosedVocabulary | None:
+    """The vocabulary a provider is held to, or None when rooting applies."""
+    return CLOSED_VOCABULARIES.get(provider)
+
+
 class RefusalReason(StrEnum):
     """Why a call did not leave. Recorded; never rendered to a requester."""
     UNAUTHORIZED = "unauthorized"
@@ -192,14 +288,30 @@ class RefusalReason(StrEnum):
     EMPTY_QUERY = "empty_query"
     CONTENT_DERIVED = "content_derived"
     NOT_ROOTED_IN_QUESTION = "not_rooted_in_question"
+    OUTSIDE_CLOSED_VOCABULARY = "outside_closed_vocabulary"
+    """A closed-vocabulary provider was handed something not in its set.
+
+    Deliberately a different reason from NOT_ROOTED_IN_QUESTION: the invoker
+    retries a not-rooted read-only call with the unrooted words trimmed, and a
+    closed-vocabulary argument must be refused outright, not trimmed into
+    whatever part of it happened to be a member."""
 
 
-def refusal_for(query: ProvenancedQuery) -> RefusalReason | None:
-    """The one check. Pure, total, and the only thing that authorises egress."""
+def refusal_for(
+    query: ProvenancedQuery, vocabulary: ClosedVocabulary | None = None
+) -> RefusalReason | None:
+    """The one check. Pure, total, and the only thing that authorises egress.
+
+    `vocabulary` replaces rooting and nothing else: the empty and
+    content-derived gates apply to a closed-vocabulary provider exactly as to
+    any other.
+    """
     if not query.text.strip():
         return RefusalReason.EMPTY_QUERY
     if query.content_derived:
         return RefusalReason.CONTENT_DERIVED
+    if vocabulary is not None:
+        return None if vocabulary.admits(query.text) else RefusalReason.OUTSIDE_CLOSED_VOCABULARY
     if not query.rooted_in_asker:
         return RefusalReason.NOT_ROOTED_IN_QUESTION
     return None
@@ -289,6 +401,9 @@ class EgressRecord:
     origin: QueryOrigin
     allowed: bool
     refusal: RefusalReason | None = None
+    closed_vocabulary: bool = False
+    """Whether membership, not rooting, decided this call. An operator
+    reading a record needs to know which rule let the words out."""
 
 
 class EgressAudit(Protocol):
@@ -308,6 +423,7 @@ class LoggingEgressAudit:
             origin=str(entry.origin),
             allowed=entry.allowed,
             refusal=str(entry.refusal) if entry.refusal else None,
+            closed_vocabulary=entry.closed_vocabulary,
         )
 
 
@@ -367,7 +483,8 @@ class EgressGuard:
         that never left is as visible to an operator as one that did -- a
         boundary nobody can see being tested is a boundary nobody maintains.
         """
-        refusal = refusal_for(request.query)
+        vocabulary = closed_vocabulary_for(request.provider)
+        refusal = refusal_for(request.query, vocabulary)
         self._audit.record(
             EgressRecord(
                 provider=request.provider,
@@ -377,6 +494,7 @@ class EgressGuard:
                 origin=request.query.origin,
                 allowed=refusal is None,
                 refusal=refusal,
+                closed_vocabulary=vocabulary is not None,
             )
         )
         if refusal is not None:

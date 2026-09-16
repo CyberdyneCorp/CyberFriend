@@ -728,6 +728,52 @@ async def test_removing_a_channel_that_is_not_in_scope_is_a_404() -> None:
     assert console.client.delete("/api/channels/999", headers=console.auth()).status_code == 404
 
 
+def _stored_scope(console: Console) -> list[str]:
+    return [r.raw for r in console.store.rows if r.key == "indexed_channel_ids"][0].split()
+
+
+async def test_adding_a_channel_does_not_restore_one_unindexed_from_discord_since() -> None:
+    # The console's copy is refreshed on a period. A `/unindex #200` from Discord
+    # lands in the store between two refreshes; an unrelated console edit made
+    # from the stale copy would write #200 back into scope with nobody holding
+    # Manage Channels having agreed to it.
+    console = await build_console()
+    await console.store.put("indexed_channel_ids", "100", "discord:7")
+
+    response = console.client.post("/api/channels", json={"id": 900}, headers=console.auth())
+
+    assert response.status_code == 200
+    assert _stored_scope(console) == ["100", "900"]
+
+
+async def test_removing_a_channel_does_not_drop_one_indexed_from_discord_since() -> None:
+    console = await build_console()
+    await console.store.put("indexed_channel_ids", "100 200 300", "discord:7")
+
+    response = console.client.delete("/api/channels/100", headers=console.auth())
+
+    assert response.status_code == 200
+    assert _stored_scope(console) == ["200", "300"]
+
+
+async def test_a_scope_edit_is_refused_when_stored_scope_cannot_be_read() -> None:
+    console = await build_console()
+    await console.store.put("indexed_channel_ids", "100", "discord:7")
+
+    async def unreachable() -> Sequence[StoredSetting]:
+        raise ConnectionError("database unavailable")
+
+    console.store.load = unreachable  # type: ignore[method-assign]
+
+    added = console.client.post("/api/channels", json={"id": 900}, headers=console.auth())
+    removed = console.client.delete("/api/channels/100", headers=console.auth())
+
+    assert added.status_code == 503
+    assert removed.status_code == 503
+    # Nothing written from a copy that could not be confirmed current.
+    assert _stored_scope(console) == ["100"]
+
+
 # --- opt-outs ----------------------------------------------------------
 
 
