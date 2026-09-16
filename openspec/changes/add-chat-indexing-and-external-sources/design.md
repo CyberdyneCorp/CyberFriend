@@ -31,7 +31,40 @@ Scope is the first setting read live. It goes through the existing runtime
 configuration store, keeps current values on a failed refresh, and is the
 mechanism the admin console's channel screen already assumes.
 
+### Market data uses closed vocabularies instead of word rooting
+
+The egress guard admits a query only if every word came from the asker. That
+fits a free-text search and breaks a structured lookup: someone asks about
+"ETH", CoinGecko needs "ethereum", and the guard trims the unrooted word to
+nothing and refuses the call.
+
+Rooting exists to stop free text leaving. An argument that must be one of a
+fixed set of instruments, or a valid ISO 4217 code, cannot carry free text, so
+for these tools the guard checks membership in the closed set instead. It is
+enforced before any request is made, and anything outside the set is refused
+rather than trimmed.
+
+### Sources
+
+- Crypto: CoinGecko, no key, with a quote timestamp.
+- Exchange rates: Frankfurter over ECB reference rates, no key, published once
+  per business day. They are stated as daily reference rates with their date,
+  not as live rates.
+- S&P 500: Google Finance through the existing SerpApi key. It returns no quote
+  time, so the retrieval time is reported and labelled as such. It spends
+  SerpApi quota, so results are cached briefly.
+
+### Price questions skip the corpus
+
+A channel message quoting a price is a record of what someone said, not a price.
+Routing price questions straight to market data prevents a stale figure being
+presented as current.
+
 ## Risks
+
+- Free tiers rate-limit. A short cache absorbs bursts; a provider outage degrades
+  to saying the figure is unavailable, never to an older figure.
+- Reference rates lag the market. Stating that plainly is the mitigation.
 
 - A person with Manage Channels can archive a channel its members would rather
   keep ephemeral. The notice makes that visible; it does not prevent it.
