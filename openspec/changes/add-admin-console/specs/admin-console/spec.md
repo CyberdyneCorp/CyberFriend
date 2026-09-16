@@ -23,6 +23,13 @@ SHALL NOT be accepted.
 - THEN the system SHALL refuse it
 - AND the refusal SHALL be indistinguishable between those cases
 
+#### Scenario: Console served under a path prefix
+- WHEN the console is served behind a path prefix, so that the request path
+  carries the prefix and the router resolves routes without it
+- THEN any request the router dispatches to a console route SHALL be
+  authenticated first
+- AND the prefix SHALL NOT make any route reachable without a credential
+
 #### Scenario: Operator named in the request
 - WHEN a request states which operator it is acting as
 - THEN that SHALL have no effect; only the credential decides
@@ -46,6 +53,12 @@ what was changed, and the values before and after.
 - WHEN a change is refused
 - THEN the system SHALL record the attempt and the reason
 
+#### Scenario: Refused value the system did not recognise
+- WHEN a refused change names a server, tool or setting value that the system
+  does not already hold
+- THEN neither the refusal nor the record SHALL repeat that value
+- AND the record SHALL still name the setting, the operator and the reason
+
 #### Scenario: Record is append-only
 - WHEN a record has been written
 - THEN the console SHALL provide no means of altering or removing it
@@ -63,6 +76,23 @@ on.
 #### Scenario: Attempting to set a secret
 - WHEN a request tries to set one of those values
 - THEN the system SHALL refuse it
+
+### Requirement: The console cannot grant access to the corpus
+
+The console SHALL NOT create a credential that reads the corpus. Credentials
+that bind a viewer are issued outside the console, from a shell holding the
+agent's own environment.
+
+#### Scenario: Requesting a new corpus credential
+- WHEN a request asks the console to issue a credential for a platform account
+- THEN the system SHALL refuse it
+- AND no credential SHALL be created
+
+#### Scenario: Reviewing and withdrawing
+- WHEN an operator reviews issued credentials
+- THEN the system SHALL report the person, label and timestamps and SHALL NOT
+  return the credential or its stored hash
+- AND the operator SHALL be able to revoke one, which only narrows access
 
 ### Requirement: The corpus is not reachable through the console
 

@@ -1,15 +1,18 @@
 # Coolify `dockercompose` build pack.
 #
-# Two services share one image:
+# Four services share one image:
 #   ingest - Discord gateway client plus background workers. No domain.
-#   mcp    - HTTP retrieval interface. The only service given an FQDN.
+#   bot    - answers questions in Discord. No domain.
+#   mcp    - HTTP retrieval interface. Published.
+#   admin  - the operator console: API plus its static interface. Published,
+#            on its own domain, and holding database credentials ONLY.
 #
 # The database is NOT defined here: production uses a Coolify-managed
 # "PostgreSQL with pgvector" resource so that scheduled backups apply.
 services:
   # Runs once per deploy and exits. Everything else waits on it, so the
   # schema exists before anything queries it. Only this service migrates:
-  # three long-running containers racing the same DDL on every deploy is a
+  # four long-running containers racing the same DDL on every deploy is a
   # real race, not a theoretical one -- alembic takes no lock of its own.
   migrate:
     build: .
@@ -51,11 +54,19 @@ services:
       - WINDOW_GAP_SECONDS=${WINDOW_GAP_SECONDS}
       - HEALTH_PORT=8080
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=5).status==200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/ready', timeout=5).status==200 else 1)\""]
+      # /ready, not /health: liveness is deliberately dependency-free, so a
+      # process that serves HTTP while failing to reach Discord reported 200
+      # for as long as it stayed up -- which is precisely how a crash-looping
+      # bot went an hour looking healthy. Readiness reflects the gateway.
+      #
+      # Five retries over a 90s grace tolerates a reconnect without thrashing,
+      # and still marks a service that never connects as unhealthy in ~4
+      # minutes rather than never.
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
   bot:
     build: .
@@ -93,11 +104,19 @@ services:
       - WEB_TIMEOUT_SECONDS=${WEB_TIMEOUT_SECONDS}
       - HEALTH_PORT=8082
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8082/health', timeout=5).status==200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8082/ready', timeout=5).status==200 else 1)\""]
+      # /ready, not /health: liveness is deliberately dependency-free, so a
+      # process that serves HTTP while failing to reach Discord reported 200
+      # for as long as it stayed up -- which is precisely how a crash-looping
+      # bot went an hour looking healthy. Readiness reflects the gateway.
+      #
+      # Five retries over a 90s grace tolerates a reconnect without thrashing,
+      # and still marks a service that never connects as unhealthy in ~4
+      # minutes rather than never.
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
   mcp:
     build: .
@@ -118,7 +137,69 @@ services:
       - MCP_PORT=8081
       - SERVICE_FQDN_MCP_8081
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/health', timeout=5).status==200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/ready', timeout=5).status==200 else 1)\""]
+      # Same tolerance as the other gateway holders: readiness dips during a
+      # normal reconnect, and restarting on the first dip turns a Discord
+      # blip into a restart loop.
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # The operator console. Note what is absent from its environment: no
+  # DISCORD_TOKEN, no LLM_API_KEY, no SERPAPI_KEY, no platform credential of
+  # any kind. It changes configuration in the database, which is why stored
+  # configuration exists at all -- a console that could redeploy would need
+  # platform access, which is far more authority than the job requires, and a
+  # console holding the bot token could impersonate the bot everywhere it is
+  # installed.
+  #
+  # The editable settings ARE passed, although this service never acts on
+  # them. They are its environment baseline: the console shows whether a value
+  # came from the database, the environment or a default, and a container that
+  # cannot see the environment would report every unedited setting as
+  # "default" on the one screen built to explain where values come from.
+  # Coolify also only accepts variables a compose file declares, so a setting
+  # missing here is one an operator sets and silently does not get.
+  admin:
+    build: .
+    command: ["python", "-m", "chatmemory.entrypoints.admin"]
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # One replica. Nothing breaks with two -- it holds no gateway connection
+    # and no queue -- but two operators editing one list through two replicas
+    # is a read-modify-write race on a setting, and the losing edit is silent.
+    deploy:
+      replicas: 1
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - INDEXED_CHANNEL_IDS=${INDEXED_CHANNEL_IDS}
+      - FEDERATION_SERVERS=${FEDERATION_SERVERS}
+      - FEDERATION_TOOL_ALLOWLIST=${FEDERATION_TOOL_ALLOWLIST}
+      - FEDERATION_CREDENTIAL_HOLDERS=${FEDERATION_CREDENTIAL_HOLDERS}
+      - FEDERATION_MAX_TOOLS_PER_RUN=${FEDERATION_MAX_TOOLS_PER_RUN}
+      - WEB_TOOLS_ENABLED=${WEB_TOOLS_ENABLED}
+      - WEB_MAX_CALLS_PER_RUN=${WEB_MAX_CALLS_PER_RUN}
+      - WEB_TIMEOUT_SECONDS=${WEB_TIMEOUT_SECONDS}
+      - ASK_EXTRACTION_ENABLED=${ASK_EXTRACTION_ENABLED}
+      - ASK_MIN_CONFIDENCE=${ASK_MIN_CONFIDENCE}
+      - ASK_STALE_AFTER_DAYS=${ASK_STALE_AFTER_DAYS}
+      - ASK_EXTRACTION_WINDOW_MESSAGES=${ASK_EXTRACTION_WINDOW_MESSAGES}
+      - WINDOW_MAX_MESSAGES=${WINDOW_MAX_MESSAGES}
+      - WINDOW_MAX_TOKENS=${WINDOW_MAX_TOKENS}
+      - WINDOW_GAP_SECONDS=${WINDOW_GAP_SECONDS}
+      - ADMIN_PORT=8083
+      # Where the image puts the built interface. Absent, the API still serves
+      # and the root page says the bundle is missing -- a deploy that forgot to
+      # build it reads as that rather than as a broken API.
+      - ADMIN_CONSOLE_DIR=/app/console
+      # Its own domain. Separate from the MCP one so the console can be closed
+      # to the internet without taking retrieval with it.
+      - SERVICE_FQDN_ADMIN_8083
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8083/health', timeout=5).status==200 else 1)\""]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -360,11 +360,28 @@ async def test_routing_offers_a_web_tool_from_the_question_alone() -> None:
     assert "wikipedia:search" in routed.names
 
 
-async def test_a_question_with_no_web_bearing_offers_nothing() -> None:
+async def test_a_web_tool_is_offered_and_the_guard_bounds_what_leaves() -> None:
+    """Offering is not calling, and the router is the wrong place to decide.
+
+    This used to assert that an internal-sounding question offered no web
+    tool, on a keyword match against the tool's DESCRIPTION. That signal is
+    the one that made federation unusable: "who wrote the novel Dune" shares
+    no words with "search Wikipedia articles" either, so enforcing relevance
+    here withholds the tool from exactly the questions it exists for.
+
+    What actually prevents an unwanted outbound call is downstream and
+    stronger: the model decides whether to call at all, and the egress guard
+    admits a query only when every word came from the asker. The cost of
+    this trade is real -- a model may make a needless web call on an internal
+    question -- and it is paid in a wasted call, not in a leak.
+    """
     fake = FakeWeb(WIKI_SEARCH)
     federation, _, _ = await stack(fake)
 
-    assert ToolRouter(5).route("who deployed yesterday", federation.registration).is_empty
+    routed = ToolRouter(5).route("who deployed yesterday", federation.registration)
+
+    assert not routed.is_empty, "a read-only tool must reach the model"
+    assert all(not t.permit.effect.mutates for t in routed.tools)
 
 
 # --- merging into an existing federation ---------------------------------

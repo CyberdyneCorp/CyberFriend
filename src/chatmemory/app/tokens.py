@@ -82,12 +82,40 @@ class TokenRecord:
         return self.revoked_at is None
 
 
-class TokenStore(Protocol):
+class TokenDirectory(Protocol):
+    """Reviewing and withdrawing credentials, without the power to mint one.
+
+    This is the half of the token store a surface may hold when it is not
+    trusted with the corpus. Minting a credential is a grant of read access
+    to one person's whole view of Discord, so the ability to do it is kept out
+    of the *type* a caller such as the admin console receives rather than out
+    of its handlers: a route that tried to mint would then fail to type-check
+    instead of shipping and being found by an audit.
+
+    Both operations here are safe in that sense. `active_tokens` returns
+    hashes and labels, never a credential, and `revoke` can only narrow what
+    exists.
+    """
+
+    async def revoke(self, person: PersonRef) -> int:
+        """Revoke every live credential of one person. Returns how many."""
+        ...
+
+    async def active_tokens(self) -> Sequence[TokenRecord]:
+        """Live credentials, for an operator audit. Hashes only."""
+        ...
+
+
+class TokenStore(TokenDirectory, Protocol):
     """The token -> person mapping.
 
     Note what is absent: there is no method that takes a person and returns
     content, and none that takes a token and returns anything but the one
     person it was issued to. Impersonation has no entry point here.
+
+    The minting half is held only by the MCP surface and by the shell that
+    runs `python -m chatmemory.mcp.issue_token`; see `TokenDirectory` for what
+    the console gets instead.
     """
 
     async def person_for_token(self, token: str) -> PersonRef | None:
@@ -102,10 +130,6 @@ class TokenStore(Protocol):
         """Mint an additional credential for one person."""
         ...
 
-    async def revoke(self, person: PersonRef) -> int:
-        """Revoke every live credential of one person. Returns how many."""
-        ...
-
     async def rotate(self, person: PersonRef, label: str = "") -> IssuedToken:
         """Replace one person's credentials, leaving everyone else's alone.
 
@@ -113,10 +137,6 @@ class TokenStore(Protocol):
         lost, someone leaves a token in a shell history), and a rotation that
         forced everyone else to re-key would simply not be done.
         """
-        ...
-
-    async def active_tokens(self) -> Sequence[TokenRecord]:
-        """Live credentials, for an operator audit. Hashes only."""
         ...
 
 

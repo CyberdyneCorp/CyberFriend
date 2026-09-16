@@ -130,3 +130,50 @@ def test_a_blank_required_setting_reports_it_as_missing(
 
     with pytest.raises(ValidationError, match="Field required"):
         Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_declaring_a_capability_does_not_withdraw_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The value ADDS to what the model is known to do.
+
+    Replacing the set meant that enabling tool calling silently withdrew
+    `chat`, and the punishment arrived three stages later as "model gpt-4o is
+    missing required capability: chat" -- a crash loop from one env var.
+    """
+    from chatmemory.composition import declared_capabilities
+
+    for key, value in {
+        "DISCORD_TOKEN": SECRET,
+        "DISCORD_GUILD_ID": "1",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@h/d",
+        "LLM_API_KEY": "k",
+        "CHAT_MODEL": "gpt-4o",
+        "CHAT_MODEL_CAPABILITIES": "tool_calling",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    declared = declared_capabilities(Settings(_env_file=None))  # type: ignore[call-arg]
+    assert declared is not None
+    names = {c.value for c in declared}
+    assert "tool_calling" in names, "the declared capability was lost"
+    assert "chat" in names, "declaring one capability withdrew chat"
+
+
+def test_an_unknown_capability_is_still_a_boot_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extending must not turn a typo into a silent no-op."""
+    from chatmemory.composition import ConfigurationError, declared_capabilities
+
+    for key, value in {
+        "DISCORD_TOKEN": SECRET,
+        "DISCORD_GUILD_ID": "1",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@h/d",
+        "LLM_API_KEY": "k",
+        "CHAT_MODEL_CAPABILITIES": "tool_callling",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(ConfigurationError, match="unknown model capability"):
+        declared_capabilities(Settings(_env_file=None))  # type: ignore[call-arg]

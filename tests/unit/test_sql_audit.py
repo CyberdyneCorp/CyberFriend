@@ -30,7 +30,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.sql.elements import TextClause
 
-SQL_MODULES = ("sql", "asks_sql", "documents_sql", "retention_sql")
+SQL_MODULES = (
+    "sql",
+    "asks_sql",
+    "documents_sql",
+    "retention_sql",
+    "admin_sql",
+    "config_sql",
+)
 
 VIEWER_BIND = ":channel_ids"
 
@@ -204,6 +211,72 @@ UNSCOPED: dict[str, str] = {
     "retention_sql.PURGE_PERSON_ASKS": "write; opt-out",
     "retention_sql.PURGE_PERSON_REACTIONS": "write; opt-out",
     "retention_sql.PURGE_PERSON_MENTIONS": "write; opt-out",
+    # --- admin_sql -------------------------------------------------------
+    #
+    # The admin console configures the agent and cannot reach the corpus.
+    # There is no message, chunk or ask column in any statement below, so
+    # there is no viewer to scope them to -- and giving the console one would
+    # create the second path into private channels the capability exists to
+    # not create. If a content-returning SELECT ever appears in `admin_sql`,
+    # it lands here unregistered and this file fails.
+    "admin_sql.INSERT_ADMIN_TOKEN": (
+        "write; stores the hash of one operator's console credential. Returns "
+        "no row, and no corpus table is named"
+    ),
+    "admin_sql.LOOKUP_ADMIN_TOKEN": (
+        "authentication; exchanges a credential hash for the operator it names. "
+        "This is what *establishes* an identity, so it cannot be scoped to one: "
+        "it returns an operator name and nothing else, and no request field "
+        "feeds it -- only the presented credential does"
+    ),
+    "admin_sql.REVOKE_OPERATOR_TOKENS": (
+        "write; withdraws one operator's credentials, keyed on that operator so "
+        "no one else's access is touched"
+    ),
+    "admin_sql.COUNT_LIVE_OPERATOR_TOKENS": (
+        "a count of one operator's live credentials, so a grant or a withdrawal "
+        "can be recorded with a before and an after. No content"
+    ),
+    "admin_sql.ACTIVE_ADMIN_TOKENS": (
+        "operator review; credential hashes, operator names and labels. No "
+        "plaintext credential is stored, so none can be returned, and no "
+        "corpus table is named"
+    ),
+    "admin_sql.APPEND_CONFIG_AUDIT": (
+        "write; the configuration change record. Append-only -- there is "
+        "deliberately no UPDATE or DELETE counterpart in admin_sql, and "
+        "migration 0012 adds a trigger refusing both"
+    ),
+    "admin_sql.RECENT_CONFIG_AUDIT": (
+        "operator report; who changed which setting, from what to what, and "
+        "when. Settings and their values, never message, document or ask "
+        "content -- and `admin.audit` refuses to record a change naming an "
+        "environment-only secret, so one cannot arrive through this column"
+    ),
+    # --- config_sql ------------------------------------------------------
+    "config_sql.LOAD_SETTINGS": (
+        "operator configuration; the settings an operator has stored and who "
+        "stored them. No viewer, and none possible: this is read by every "
+        "long-running process on a refresh cadence, on behalf of nobody. "
+        "Holds no message, document or ask content, and resolves no secret -- "
+        "the platform token, the model key and the database URL are read from "
+        "the environment and a row stored under one of those names is "
+        "reported and ignored"
+    ),
+    "config_sql.UPSERT_SETTING": (
+        "write; stores one setting and, in the same statement, the record of "
+        "who changed it and what it replaced. Returns no row"
+    ),
+    "config_sql.CLEAR_SETTING": (
+        "write; removes a stored setting so the environment takes it back, "
+        "recording what was removed. Returns no row"
+    ),
+    "config_sql.RECORD_REFUSAL": (
+        "write; records a configuration change that was refused and why. "
+        "Carries no before and no after: the likeliest refusal is a "
+        "credential pasted into a settings field, and keeping the rejected "
+        "text would store the secret the refusal exists to keep out"
+    ),
 }
 
 # Viewer-scoped statements that do not filter tombstones, and why. Kept

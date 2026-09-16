@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from chatmemory.app.configuration import SECRETS, SETTINGS
+
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = (ROOT / "docker-compose.yml").read_text()
 
@@ -20,8 +22,8 @@ COMPOSE = (ROOT / "docker-compose.yml").read_text()
 DEPLOYMENT_SETTINGS = {
     "DISCORD_TOKEN": ("ingest", "bot", "mcp"),
     "DISCORD_GUILD_ID": ("ingest", "bot", "mcp"),
-    "INDEXED_CHANNEL_IDS": ("ingest", "bot"),
-    "DATABASE_URL": ("ingest", "bot", "mcp"),
+    "INDEXED_CHANNEL_IDS": ("ingest", "bot", "admin"),
+    "DATABASE_URL": ("ingest", "bot", "mcp", "admin"),
     "LLM_BASE_URL": ("ingest", "bot", "mcp"),
     "LLM_API_KEY": ("ingest", "bot", "mcp"),
     "EMBEDDING_MODEL": ("ingest", "bot", "mcp"),
@@ -31,18 +33,18 @@ DEPLOYMENT_SETTINGS = {
     # Federation and the web tools decide what the agent may reach; asks
     # decide what it extracts. All of them are settings an operator changes
     # per deployment, so the platform has to accept them.
-    "FEDERATION_SERVERS": ("bot",),
-    "FEDERATION_TOOL_ALLOWLIST": ("bot",),
+    "FEDERATION_SERVERS": ("bot", "admin"),
+    "FEDERATION_TOOL_ALLOWLIST": ("bot", "admin"),
     # The other half of enabling a state-changing tool. Undeclared here, an
     # operator naming holders in the platform gets an empty broker and every
     # mutating call is refused for want of a credential -- the confirmation
     # gate would be configured, reported at startup, and still unreachable.
-    "FEDERATION_CREDENTIAL_HOLDERS": ("bot",),
-    "FEDERATION_MAX_TOOLS_PER_RUN": ("bot",),
-    "WEB_TOOLS_ENABLED": ("bot",),
+    "FEDERATION_CREDENTIAL_HOLDERS": ("bot", "admin"),
+    "FEDERATION_MAX_TOOLS_PER_RUN": ("bot", "admin"),
+    "WEB_TOOLS_ENABLED": ("bot", "admin"),
     "SERPAPI_KEY": ("bot",),
-    "ASK_EXTRACTION_ENABLED": ("ingest",),
-    "ASK_MIN_CONFIDENCE": ("ingest",),
+    "ASK_EXTRACTION_ENABLED": ("ingest", "admin"),
+    "ASK_MIN_CONFIDENCE": ("ingest", "admin"),
 }
 
 
@@ -71,9 +73,15 @@ def test_ingest_runs_exactly_one_replica() -> None:
     assert "replicas: 1" in service_block("ingest")
 
 
-def test_only_the_mcp_service_is_published() -> None:
+@pytest.mark.parametrize("service", ["mcp", "admin"])
+def test_the_published_services_each_get_their_own_domain(service: str) -> None:
+    """Separate domains, so the console can be closed to the internet without
+    taking retrieval down with it."""
+    assert "SERVICE_FQDN" in service_block(service)
+
+
+def test_the_gateway_services_are_not_published() -> None:
     """ingest and bot hold gateway connections and must not be reachable."""
-    assert "SERVICE_FQDN" in service_block("mcp")
     for private in ("ingest", "bot"):
         assert "SERVICE_FQDN" not in service_block(private)
 
@@ -93,7 +101,7 @@ def test_migrate_runs_once_and_exits() -> None:
     assert "chatmemory.entrypoints.migrate" in block
 
 
-@pytest.mark.parametrize("service", ["ingest", "bot", "mcp"])
+@pytest.mark.parametrize("service", ["ingest", "bot", "mcp", "admin"])
 def test_long_running_services_wait_for_the_migration(service: str) -> None:
     block = service_block(service)
     assert "service_completed_successfully" in block, (
@@ -105,7 +113,7 @@ def test_only_one_service_migrates() -> None:
     """Three containers racing the same DDL is a real race: alembic takes no
     lock of its own, so concurrent upgrades can both try to create a table."""
     migrating = [
-        s for s in ("migrate", "ingest", "bot", "mcp")
+        s for s in ("migrate", "ingest", "bot", "mcp", "admin")
         if "entrypoints.migrate" in service_block(s)
     ]
     assert migrating == ["migrate"], f"more than one service migrates: {migrating}"
@@ -137,3 +145,97 @@ def test_migrations_do_not_load_application_settings(path: Path) -> None:
         f"{path.name} loads application settings; migrations must need only "
         "DATABASE_URL, or a missing unrelated credential blocks the schema"
     )
+
+
+# --- the console -------------------------------------------------------
+
+
+def test_the_console_service_exists_and_runs_its_own_entrypoint() -> None:
+    block = service_block("admin")
+    assert "chatmemory.entrypoints.admin" in block
+
+
+def test_every_editable_setting_reaches_the_console() -> None:
+    """Derived from the setting registry, not from a list kept beside it.
+
+    The console reports whether each value came from the database, the
+    environment or a default. A setting the platform never passes to this
+    container reads as "default" there while the agent is using the
+    operator's environment value -- which is the screen lying about the one
+    thing it exists to explain. Adding a setting and forgetting the compose
+    file fails here rather than three months later on a support call.
+    """
+    block = service_block("admin")
+    missing = [
+        key.upper()
+        for key in SETTINGS
+        if f"{key.upper()}=${{{key.upper()}}}" not in block
+    ]
+    assert not missing, (
+        f"the console never receives {missing}; it will report them as defaults "
+        "while the agent runs on the operator's values"
+    )
+
+
+def test_the_console_holds_database_credentials_and_no_others() -> None:
+    """The point of the whole change.
+
+    A console that could redeploy would need platform access, which is far
+    more authority than configuring the agent requires -- and one holding the
+    bot token could impersonate the bot everywhere it is installed.
+    """
+    block = service_block("admin")
+    held = [
+        secret.env_var for secret in SECRETS.values() if secret.env_var in block
+    ]
+    assert held == ["DATABASE_URL"], f"the console is given {held}"
+
+
+def test_the_console_is_not_given_the_model_endpoint_either() -> None:
+    """It neither embeds nor answers, so it has no reason to reach the model.
+
+    Named separately from the credentials because LLM_BASE_URL is not a
+    secret -- it is the *reachability*, and a service with no reason to hold
+    a route to the model endpoint should not be given one.
+    """
+    block = service_block("admin")
+    for variable in ("LLM_BASE_URL", "EMBEDDING_MODEL", "CHAT_MODEL", "DISCORD_GUILD_ID"):
+        assert variable not in block
+
+
+def test_the_console_serves_its_interface_from_the_same_container() -> None:
+    """One container: no second domain, no certificate, and no CORS policy on
+    the highest-privilege surface in the system."""
+    assert "ADMIN_CONSOLE_DIR=" in service_block("admin")
+
+
+def test_the_console_runs_exactly_one_replica() -> None:
+    """Two replicas make editing a list-shaped setting a read-modify-write
+    race between operators, and the losing edit is silent."""
+    assert "replicas: 1" in service_block("admin")
+
+
+# --- a dead service must not report healthy ----------------------------
+
+
+@pytest.mark.parametrize("service", ["ingest", "bot", "mcp"])
+def test_gateway_services_are_checked_on_readiness(service: str) -> None:
+    """`/health` is liveness and deliberately dependency-free.
+
+    A process that serves HTTP while failing to reach Discord answered it
+    200 for as long as it stayed up, so a crash-looping bot went an hour
+    reporting healthy. These three hold gateway connections; readiness is
+    what says whether they can do their job.
+    """
+    block = service_block(service)
+    assert "/ready" in block, f"{service} is checked on liveness only"
+    assert "/health'" not in block
+
+
+@pytest.mark.parametrize("service", ["ingest", "bot", "mcp"])
+def test_the_check_tolerates_a_reconnect(service: str) -> None:
+    """Readiness dips during a normal reconnect; restarting on the first dip
+    would turn a Discord blip into a restart loop."""
+    block = service_block(service)
+    assert "retries: 5" in block
+    assert "start_period: 90s" in block

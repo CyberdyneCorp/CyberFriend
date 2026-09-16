@@ -92,19 +92,52 @@ class ToolRouter:
         self._limit = limit
 
     def route(self, question: str, registration: Registration) -> RoutedTools:
-        asked = _terms(question)
-        scored = [
-            _Scored(tool=tool, score=len(asked & _terms(f"{tool.permit.tool} {tool.description}")))
-            for tool in registration.tools
-        ]
-        # Zero overlap means "no federated tool is relevant to this question",
-        # which is answered from the corpus alone rather than by offering the
-        # loop a tool it has no reason to call.
-        relevant = sorted((s for s in scored if s.score > 0), key=lambda s: s.key)
-        chosen = tuple(s.tool for s in relevant[: self._limit])
+        tools = tuple(registration.tools)
+
+        # Routing exists to bound the prompt, not to be clever. When every
+        # registered tool fits inside the per-run limit there is nothing to
+        # choose between, and choosing anyway was actively harmful: the score
+        # is word overlap against a tool's DESCRIPTION, and a description
+        # names a category ("resolves a package name to a library id") while
+        # a question names an instance ("fastapi dependency injection").
+        # Those share no words, so a real question scored zero against a tool
+        # that was exactly right and the run was offered nothing at all.
+        # Split by effect, because the two kinds of mistake are not
+        # comparable. Offering a read-only tool that turns out to be
+        # irrelevant costs a wasted call the model usually does not make;
+        # offering a MUTATING one puts a destructive action in front of a
+        # possibly-steered loop, with only the confirmation between them.
+        # So read-only tools are offered whenever they fit, and a mutating
+        # tool must still earn its place by matching the question.
+        read_only = tuple(t for t in tools if not t.permit.effect.mutates)
+        mutating = tuple(t for t in tools if t.permit.effect.mutates)
+        asked_terms = _terms(question)
+        earned = tuple(
+            t
+            for t in mutating
+            if asked_terms & _terms(f"{t.permit.tool} {t.description}")
+        )
+        tools = read_only + earned
+
+        if len(tools) <= self._limit:
+            chosen = tools
+        else:
+            asked = _terms(question)
+            scored = [
+                _Scored(
+                    tool=tool,
+                    score=len(asked & _terms(f"{tool.permit.tool} {tool.description}")),
+                )
+                for tool in tools
+            ]
+            # Above the limit something has to be dropped. Overlap is a poor
+            # ranking for the reason above, so a tool that scores zero is kept
+            # as a candidate rather than excluded -- ordering is the job here,
+            # not exclusion.
+            chosen = tuple(s.tool for s in sorted(scored, key=lambda s: s.key)[: self._limit])
         log.info(
             "federation.routed",
-            considered=len(scored),
+            considered=len(tools),
             offered=len(chosen),
             limit=self._limit,
         )

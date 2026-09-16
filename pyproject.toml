@@ -68,3 +68,10 @@ packages = ["chatmemory"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    # The retrieval golden set. Opted into rather than run by default: it
+    # seeds a corpus and asks every question as every viewer against the real
+    # embedding endpoint, so an ordinary `pytest` must not spend that money.
+    # See tests/evaluation/BASELINE.md.
+    "goldens: retrieval quality measurement; costs embedding calls",
+]
