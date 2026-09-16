@@ -10,15 +10,30 @@ the answer itself carries no trace of what it could not look at, so a
 separate probe has to go and see -- and it runs concurrently with the answer
 so that a privileged asker's public reply is not measurably slower than a
 restricted one's.
+
+This is also where the requester stops being a value and becomes someone who
+can be spoken to. A run that wants to change something on a federated system
+has to ask them first, and the only person it may ask is the one whose
+question started this ask -- so their private channel is made current for the
+length of the run and taken down again afterwards. Everything about how the
+asking looks belongs to the adapter; what belongs here is that the channel is
+bound to `request.asker` and to nobody else.
 """
 
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 
 import structlog
 
+from chatmemory.app.confirmation import (
+    ConfirmationChannel,
+    ConfirmationDesk,
+    ConfirmationSurface,
+    attending,
+)
 from chatmemory.app.conversation import ConversationStore
 from chatmemory.app.disclosure import ScopedAnswer, WithheldEvidenceProbe, enforce_audience
 from chatmemory.app.limits import RateLimiter
@@ -64,6 +79,7 @@ class AskService:
         limiter: RateLimiter,
         conversations: ConversationStore,
         withheld: WithheldEvidenceProbe | None = None,
+        desk: ConfirmationDesk | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
@@ -74,8 +90,15 @@ class AskService:
         # deployment without one answers exactly as before, and simply never
         # tells anyone that asking privately would get them more.
         self._withheld = withheld
+        # Optional for the same reason, and with a stricter failure: without
+        # a desk no confirmation can be obtained, so a mutating tool stays
+        # refused. "Unable to ask" is the safe half of this feature, which is
+        # why it is the half that survives a deployment that wires nothing.
+        self._desk = desk
 
-    async def ask(self, request: AskRequest) -> AskOutcome:
+    async def ask(
+        self, request: AskRequest, confirm: ConfirmationSurface | None = None
+    ) -> AskOutcome:
         decision = self._limiter.check(request.asker)
         if not decision.allowed:
             return AskOutcome(None, True, decision.retry_after_seconds)
@@ -99,10 +122,17 @@ class AskService:
         # probe would add its latency only for askers who have channels the
         # room does not -- which makes "this person can see more than you" a
         # property of how long the bot took to reply.
-        answer, withheld = await asyncio.gather(
-            self._answers.answer(question),
-            self._withheld_channels(viewer, audience, request.text),
-        )
+        # The channel is opened around the whole of answer production, and
+        # closed the moment it ends: a confirmation cannot be collected for a
+        # run that is already over, and the next asker gets their own.
+        # `gather` copies the current context into each task it starts, so a
+        # tool call made deep inside the answer finds this channel and no
+        # other.
+        with self._attending(request.asker, confirm):
+            answer, withheld = await asyncio.gather(
+                self._answers.answer(question),
+                self._withheld_channels(viewer, audience, request.text),
+            )
         scoped = enforce_audience(answer, audience, viewer, withheld_by_scoping=withheld)
 
         self._conversations.record(request.location_id, request.text)
@@ -116,6 +146,21 @@ class AskService:
             abstained=scoped.answer.abstained,
         )
         return AskOutcome(scoped)
+
+    def _attending(
+        self, asker: PersonRef, surface: ConfirmationSurface | None
+    ) -> AbstractContextManager[None]:
+        """Bind the requester's private channel to this run, if there is one.
+
+        Both halves are required. A desk with no surface has nowhere to show
+        a prompt; a surface with no desk has no ledger to write the answer
+        into. Missing either, nothing attends and every mutating call is
+        refused for want of a confirmation -- which is the outcome a
+        deployment that has not thought about this should get.
+        """
+        if self._desk is None or surface is None:
+            return nullcontext()
+        return attending(ConfirmationChannel(self._desk, surface, asker))
 
     async def _withheld_channels(
         self, viewer: Viewer, audience: Audience, text: str

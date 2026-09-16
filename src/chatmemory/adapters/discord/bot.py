@@ -12,18 +12,32 @@ answer at all: it reads as team knowledge and is not. So citations are
 grouped and labelled by source, always -- including when every source is this
 server, because a reader should never have to infer the common case from the
 absence of a warning.
+
+The confirmation prompt below is the other thing this file owes a person. It
+is shown with buttons rather than by asking them to type a word, and the
+reason is the threat model rather than taste: a typed "yes" arrives as message
+content, in the same channel the agent indexes, and telling a confirmation
+apart from a quotation of one then becomes a parsing problem nobody wins. A
+button press arrives as an interaction carrying the account that pressed it,
+which is the one thing retrieved text can never forge. It is also always
+private -- ephemeral for a slash command, a direct message otherwise --
+because a prompt shown in a channel asks everyone present to approve on the
+requester's behalf, and the fastest clicker decides.
 """
 
 from __future__ import annotations
 
+import asyncio
 from itertools import zip_longest
-from typing import Any
+from typing import Any, Protocol
 
 import discord
 import structlog
 from discord import app_commands
 
 from chatmemory.app.ask import AskRequest, AskService
+from chatmemory.app.authorization import ConfirmationPrompt
+from chatmemory.app.confirmation import ConfirmationReply, Undeliverable
 from chatmemory.app.disclosure import ScopedAnswer, withheld_notice
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.domain.identity import ChannelRef, PersonRef
@@ -35,6 +49,17 @@ PLATFORM = "discord"
 MAX_REPLY_CHARS = 1900  # Discord's limit is 2000; leave room for citations.
 MAX_CITATIONS = 5
 MAX_EXCERPT_CHARS = 140
+MAX_ARGUMENT_CHARS = 1200  # Leaves room for the rest of the prompt.
+
+NOT_YOUR_CONFIRMATION = (
+    "That's not yours to approve — only the person who asked can confirm it."
+)
+
+APPROVED_NOTE = "Approved. Running it now."
+DECLINED_NOTE = "Declined. Nothing was changed."
+EXPIRED_NOTE = (
+    "This request timed out and nothing was changed. Ask again if you still want it."
+)
 
 SOURCE_HEADINGS = {
     SOURCE_DISCORD: "**From this server:**",
@@ -70,13 +95,30 @@ def _source_of(citation: Citation) -> str:
     return citation.source_system if isinstance(citation, SourcedCitation) else SOURCE_DISCORD
 
 
+def _clip(text: str, limit: int) -> str:
+    """Cut at a word boundary, and say that it was cut.
+
+    A hard slice ends mid-word -- "is schedu" -- which reads as a rendering
+    fault rather than an excerpt, and invites the reader to wonder whether
+    the source itself is damaged. The ellipsis is the difference between a
+    quotation and a glitch.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    spaced = cut.rsplit(" ", 1)[0]
+    # A single very long token has no boundary to fall back to; clip it
+    # rather than return nothing.
+    return (spaced if len(spaced) >= limit // 2 else cut).rstrip(" ,.;:") + "\u2026"
+
+
 def _citation_line(number: int, citation: Citation) -> str:
     source = _source_of(citation)
     # Never an empty label: markdown renders `[]( url )` as a bare URL, and a
     # window spans several people, so naming one author is wrong even when a
     # name is known.
     label = citation.author_display.strip() or SOURCE_FALLBACK_LABELS.get(source, source)
-    excerpt = " ".join(citation.excerpt.split())[:MAX_EXCERPT_CHARS]
+    excerpt = _clip(" ".join(citation.excerpt.split()), MAX_EXCERPT_CHARS)
     # The heading above already says where this came from; the inline tag
     # repeats it for every non-corpus line, because a line quoted, screenshot
     # or read on its own loses the heading and keeps the claim.
@@ -129,6 +171,230 @@ def _render(scoped: ScopedAnswer) -> str:
     return "\n".join(lines)
 
 
+def _prompt_text(prompt: ConfirmationPrompt) -> str:
+    """What the requester reads before approving a change to another system.
+
+    The tool, the system and the exact arguments, because approving "the
+    issue tool" is not approving anything: the argument text is what decides
+    which issue is closed and what is written into it.
+
+    Those arguments are model-written and have just shared a context with
+    retrieved messages, so they are rendered as fenced data with any literal
+    fence in them defanged. A payload that closes the block early would
+    otherwise be reading as prose to the person deciding.
+    """
+    arguments = prompt.arguments_rendered[:MAX_ARGUMENT_CHARS].replace("```", "` ` `")
+    return (
+        f"**{prompt.qualified_name}** on `{prompt.server}` changes something "
+        "outside this server. It would be called with:\n"
+        f"```json\n{arguments}\n```\n"
+        "Approve only if you asked for this. The approval covers these exact "
+        "arguments and this call alone."
+    )
+
+
+class _EditableMessage(Protocol):
+    """The one thing this file does with a sent prompt: redraw it.
+
+    A protocol rather than `Message | WebhookMessage`, because a direct
+    message and an ephemeral followup have no common supertype and the
+    difference does not matter here.
+    """
+
+    async def edit(self, *, content: str, view: discord.ui.View) -> object: ...
+
+
+class _ApprovalView(discord.ui.View):
+    """Two buttons, answerable by one account, for a bounded time.
+
+    `requester_id` is taken from the prompt rather than from whoever the
+    message was sent to: the prompt says whose decision this is, and that is
+    the only account `interaction_check` will accept.
+    """
+
+    def __init__(self, requester_id: int, window_seconds: float) -> None:
+        super().__init__(timeout=window_seconds)
+        self._requester_id = requester_id
+        self._window_seconds = window_seconds
+        # The wait is on an event of our own rather than on `View.wait()`.
+        # discord.py only starts a view's timer once the message reaches its
+        # store, so a view whose send failed -- or one under test -- would
+        # otherwise wait for a timeout that was never scheduled.
+        self._settled = asyncio.Event()
+        # The sent message, once there is one, so the prompt can be retired
+        # when the run stops waiting. None under test and whenever the send
+        # returned nothing; the window is enforced either way.
+        self._message: _EditableMessage | None = None
+        self._closed = False
+        self.reply: ConfirmationReply | None = None
+
+    def sent_as(self, message: _EditableMessage | None) -> None:
+        """Remember what the prompt was posted as, so it can be retired."""
+        self._message = message
+
+    async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
+        """Refuse a click from anyone but the requester.
+
+        Reachable in a way the ephemeral case is not: a direct-message prompt
+        lives in a real message, and a shared or forwarded one could in
+        principle be pressed by another account. Refusing here means a second
+        person's click never becomes a `ConfirmationReply` at all.
+        """
+        if interaction.user.id == self._requester_id:
+            return True
+        log.warning(
+            "confirmation.button.not_requester",
+            requester_id=self._requester_id,
+            clicked_by=interaction.user.id,
+        )
+        try:
+            await interaction.response.send_message(NOT_YOUR_CONFIRMATION, ephemeral=True)
+        except discord.HTTPException:
+            # Saying so is a courtesy; refusing is the requirement.
+            log.info("confirmation.button.refusal_not_shown")
+        return False
+
+    # Approve is styled as the destructive action because it is the one: the
+    # green-button habit is what turns a confirmation into a reflex.
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.danger)
+    async def approve(
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
+    ) -> None:
+        await self._answer(interaction, granted=True)
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.secondary)
+    async def decline(
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
+    ) -> None:
+        await self._answer(interaction, granted=False)
+
+    async def _answer(self, interaction: discord.Interaction, *, granted: bool) -> None:
+        """Record the press and take the buttons away.
+
+        Disabling them is not decoration. One approval authorises one call, and
+        a live button on a settled decision is an invitation to authorise a
+        second one that nobody is watching for.
+
+        A press that arrives after the window is answered honestly instead. It
+        authorises nothing -- the run stopped waiting and would refuse it -- so
+        telling this person "Approved" would have them believe a change
+        happened that cannot now happen.
+        """
+        self._disable_buttons()
+        if self._closed:
+            await self._redraw(interaction, EXPIRED_NOTE)
+            return
+        self.reply = ConfirmationReply(_person(interaction.user), granted)
+        await self._redraw(interaction, APPROVED_NOTE if granted else DECLINED_NOTE)
+        self._settled.set()
+        self.stop()
+
+    def _disable_buttons(self) -> None:
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+    async def _redraw(self, interaction: discord.Interaction, note: str) -> None:
+        try:
+            await interaction.response.edit_message(content=note, view=self)
+        except discord.HTTPException:
+            # The answer is already held; failing to redraw must not lose it.
+            log.info("confirmation.button.edit_failed", note=note)
+
+    async def settled(self) -> ConfirmationReply | None:
+        """The requester's answer, or None if the window closed on silence."""
+        try:
+            await asyncio.wait_for(self._settled.wait(), timeout=self._window_seconds)
+        except TimeoutError:
+            log.info("confirmation.button.window_closed", requester_id=self._requester_id)
+            self._closed = True
+            self.stop()
+            await self._expire()
+            return None
+        return self.reply
+
+    async def _expire(self) -> None:
+        """Retire a prompt the run has stopped waiting on.
+
+        A live Approve button on an abandoned decision is a promise the system
+        can no longer keep: the press would record nothing and change nothing,
+        while reading to the person as consent that was acted on.
+        """
+        if self._message is None or self.reply is not None:
+            return
+        self._disable_buttons()
+        try:
+            await self._message.edit(content=EXPIRED_NOTE, view=self)
+        except discord.HTTPException:
+            # The window is what refuses the call; this is only the notice.
+            log.info("confirmation.button.expiry_not_shown")
+
+
+class EphemeralConfirmation:
+    """The prompt for a slash command: a followup only the requester can see.
+
+    Ephemeral rather than a direct message because the person is already here
+    and waiting on this interaction, and because it needs no open DMs to
+    arrive. The answer is still delivered publicly; only the question about
+    changing something is private.
+    """
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self._interaction = interaction
+
+    async def ask(
+        self, prompt: ConfirmationPrompt, window_seconds: float
+    ) -> ConfirmationReply | None:
+        view = _ApprovalView(prompt.requester.platform_user_id, window_seconds)
+        try:
+            # `wait=True` is what an interaction followup does anyway; asking
+            # for it explicitly is what hands back the message, so an
+            # unanswered prompt can be retired rather than left live.
+            sent = await self._interaction.followup.send(
+                _prompt_text(prompt),
+                view=view,
+                ephemeral=True,
+                wait=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException as exc:
+            raise Undeliverable(f"ephemeral prompt not delivered: {exc}") from exc
+        view.sent_as(sent)
+        return await view.settled()
+
+
+class DirectMessageConfirmation:
+    """The prompt for a mention or a DM: sent to the person, never to the room.
+
+    A mention is answered in the channel, so this is the case the requirement
+    is really about -- posting "shall I close issue 42?" where the question
+    was asked hands the decision to whoever is reading. If their DMs are
+    closed the prompt is undeliverable and the call simply does not happen;
+    the alternative is asking the room, which is the thing being avoided.
+    """
+
+    def __init__(self, user: discord.User | discord.Member) -> None:
+        self._user = user
+
+    async def ask(
+        self, prompt: ConfirmationPrompt, window_seconds: float
+    ) -> ConfirmationReply | None:
+        view = _ApprovalView(prompt.requester.platform_user_id, window_seconds)
+        try:
+            sent = await self._user.send(
+                _prompt_text(prompt),
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden as exc:
+            log.info("confirmation.dm_blocked", user_id=self._user.id)
+            raise Undeliverable("the requester's direct messages are closed") from exc
+        except discord.HTTPException as exc:
+            raise Undeliverable(f"direct message not delivered: {exc}") from exc
+        view.sent_as(sent)
+        return await view.settled()
+
+
 class CyberFriendClient(discord.Client):
     def __init__(self, asks: AskService, guild_id: int) -> None:
         intents = discord.Intents.default()
@@ -169,7 +435,14 @@ class CyberFriendClient(discord.Client):
                     text=question,
                     destination=destination,
                     location_id=interaction.channel_id or interaction.user.id,
-                )
+                ),
+                # Where a mutating tool would ask this person for permission.
+                # Passed for every question, not only ones that look like
+                # they might act: which tools a run reaches is decided inside
+                # the run, and a surface that is only supplied when the
+                # adapter guesses right is a surface that is absent when it
+                # guesses wrong.
+                EphemeralConfirmation(interaction),
             )
             if outcome.rate_limited:
                 await interaction.followup.send(
@@ -210,7 +483,11 @@ class CyberFriendClient(discord.Client):
                     text=text,
                     destination=destination,
                     location_id=message.channel.id,
-                )
+                ),
+                # A DM even when the question was asked in a channel: the
+                # answer's destination is not the prompt's, because a prompt
+                # in the channel would ask the room to decide for the asker.
+                DirectMessageConfirmation(message.author),
             )
 
         if outcome.rate_limited:

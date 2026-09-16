@@ -202,3 +202,30 @@ def test_window_text_uses_a_name_not_an_account_id() -> None:
     window = WindowBuilder().build(GENERAL, [msg])[0]
     assert "leonardoaraujos:" in window.text
     assert "713763086305329162" not in window.text
+
+
+def test_a_citation_excerpt_is_cut_at_a_word_boundary() -> None:
+    """A hard slice ends mid-word -- "is schedu" -- which reads as a
+    rendering fault and makes the reader doubt the source, not the excerpt."""
+    from chatmemory.adapters.discord.bot import _clip
+
+    text = "the espresso machine in the kitchen is scheduled to be repaired"
+    clipped = _clip(text, 40)
+    assert clipped.endswith("…")
+    assert "schedu…" not in clipped, "cut mid-word"
+    assert all(word in text for word in clipped.rstrip("…").split())
+
+
+def test_a_short_excerpt_is_left_alone() -> None:
+    from chatmemory.adapters.discord.bot import _clip
+
+    assert _clip("broken", 40) == "broken"
+
+
+def test_a_single_long_token_is_still_clipped() -> None:
+    """No boundary to fall back to, but returning nothing is worse."""
+    from chatmemory.adapters.discord.bot import _clip
+
+    clipped = _clip("x" * 200, 40)
+    assert len(clipped) <= 41
+    assert clipped.endswith("…")

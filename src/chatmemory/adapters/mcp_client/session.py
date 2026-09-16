@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import structlog
@@ -27,17 +27,27 @@ from mcp.types import TextContent, ToolAnnotations
 
 from chatmemory.adapters.mcp_client.config import ServerConfig
 from chatmemory.app.authorization import ToolEffect
+from chatmemory.app.reasoning.ports import EMPTY_SCHEMA
 
 log = structlog.get_logger()
 
 
 @dataclass(frozen=True, slots=True)
 class DiscoveredTool:
-    """A tool a server says it has. Discovery alone confers nothing."""
+    """A tool a server says it has. Discovery alone confers nothing.
+
+    `input_schema` is the server's JSON Schema for the tool's arguments. It
+    is carried for one reason: a caller that cannot see it has to guess what
+    to send, and a guessed argument name is a call that fails on the wire
+    instead of at a boundary that can explain itself. Like `description` it
+    is a claim, not an authority -- a schema can describe an argument, never
+    grant the right to pass one, and no permission is decided from it.
+    """
 
     name: str
     description: str
     effect: ToolEffect
+    input_schema: Mapping[str, object] = field(default_factory=lambda: EMPTY_SCHEMA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +93,10 @@ class MCPToolSession:
                 name=tool.name,
                 description=tool.description or "",
                 effect=effect_of(tool.annotations),
+                # Copied, not referenced: the SDK's model owns that dict, and
+                # a schema that changed under a registration would describe a
+                # tool nobody allowlisted.
+                input_schema=dict(tool.input_schema),
             )
             for tool in listing.tools
         ]

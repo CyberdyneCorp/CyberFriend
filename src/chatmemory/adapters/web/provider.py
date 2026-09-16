@@ -26,7 +26,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 import httpx
@@ -34,7 +35,7 @@ import structlog
 
 from chatmemory.adapters.mcp_client.session import DiscoveredTool, ToolResult, ToolSession
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
-from chatmemory.adapters.web.query import ARG_ASKED, check_query
+from chatmemory.adapters.web.query import ARG_ASKED, ARG_QUERY, MAX_QUERY_CHARS, check_query
 from chatmemory.adapters.web.results import WebResult, provider_label, render
 from chatmemory.app.authorization import ToolEffect
 from chatmemory.app.egress import EgressRefused, current_authorization
@@ -55,16 +56,72 @@ DEFAULT_MAX_RESULTS = 5
 DEFAULT_MAX_RESULT_CHARS = 3000
 
 
+QUERY_DESCRIPTION = (
+    "The search terms, taken from the question exactly as the person asked "
+    "it. Use only words that appear in their question -- drop words to "
+    "shorten it, never add any. Do not add context, synonyms, spelled-out "
+    "acronyms, product or site names, dates, or anything you read in this "
+    "conversation, in a document, or in another tool's result. Do not include "
+    "names, @mentions or numeric ids."
+)
+"""Why this reads as a prohibition rather than an invitation.
+
+The egress guard admits a reformulation only if every significant word in it
+is a word the asker wrote. A schema saying "a well-formed search query,
+expanded with relevant context" would therefore describe a call that is
+always refused -- the model would obey the schema and be blocked every time,
+and the deployment would look broken rather than guarded. The schema has to
+say the same thing the guard enforces, or the guard is just a refusal
+generator.
+
+The last sentence is not tidiness either. A query is the first thing that
+leaves the process, so an identifier that reaches it has already leaked,
+before any result comes back and before any answer is rendered.
+"""
+
+WEB_QUERY_SCHEMA: Mapping[str, object] = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {
+            ARG_QUERY: {
+                "type": "string",
+                "description": QUERY_DESCRIPTION,
+                "maxLength": MAX_QUERY_CHARS,
+            }
+        },
+        "required": [ARG_QUERY],
+        # `asked` is deliberately absent, and this is the load-bearing part of
+        # the schema. The asker's own words are supplied by the call site
+        # (`query.web_arguments`) and the clearance is minted by EgressGuard
+        # from the question the person actually typed. Showing the model a
+        # field for them would invite it to write both halves of the
+        # comparison, which is no comparison at all -- and that is precisely
+        # the check this boundary replaced.
+        "additionalProperties": False,
+    }
+)
+"""The arguments every web tool takes.
+
+One schema for both providers because they take one argument: the difference
+between "search Wikipedia" and "search Google" lives in the tool's
+description, not in its parameters. A per-provider schema would be a second
+place for the wording above to drift out of step with the guard.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class WebToolSpec:
     """One tool a provider offers.
 
     The description is what the router matches a question against, so it is
-    written in the words a person would use, not in the provider's own.
+    written in the words a person would use, not in the provider's own. The
+    schema is what the *model* fills in, and defaults to the shared web query
+    schema -- a provider that needs a different one says so explicitly.
     """
 
     name: str
     description: str
+    input_schema: Mapping[str, object] = field(default_factory=lambda: WEB_QUERY_SCHEMA)
 
 
 class WebProvider:
@@ -106,7 +163,12 @@ class WebProvider:
         # and the registry treats it as one. What actually makes these tools
         # read-only is the operator's allowlist entry.
         return [
-            DiscoveredTool(name=t.name, description=t.description, effect=ToolEffect.READ_ONLY)
+            DiscoveredTool(
+                name=t.name,
+                description=t.description,
+                effect=ToolEffect.READ_ONLY,
+                input_schema=t.input_schema,
+            )
             for t in self._tools
         ]
 
@@ -144,6 +206,10 @@ class WebProvider:
             )
             return self._refuse(name, str(check.refusal))
 
+        # Supplied by the call site via `query.web_arguments`, never by the
+        # model: it is not in `WEB_QUERY_SCHEMA`, so a caller that forwards
+        # the model's arguments unchanged gets a refusal here rather than an
+        # unattributed call against the per-run budget.
         asked = arguments.get(ARG_ASKED)
         if not isinstance(asked, str) or not self._budget.spend(asked):
             log.warning("web.budget_exhausted", provider=self.server, tool=name)

@@ -13,10 +13,17 @@ The pipeline, in order:
     state       -> open, answered or stale, from observed events only
     corrections -> the addressee's own word, which outranks all of the above
     obligations -> the viewer-scoped read path
+
+and the two ends that make the pipeline reachable from a running process:
+
+    worker      -> the standing pass the ingest service feeds and reports on
+    answering   -> the front door that claims obligation questions before
+                   either retrieval path sees them
 """
 
 from __future__ import annotations
 
+from chatmemory.app.asks.answering import ObligationAnswerService
 from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.asks.extraction import ExtractionReport, ExtractionService
 from chatmemory.app.asks.model import (
@@ -36,8 +43,9 @@ from chatmemory.app.asks.model import (
 )
 from chatmemory.app.asks.obligations import ObligationService, discord_message_url
 from chatmemory.app.asks.ports import AskExtractor, AskStore
-from chatmemory.app.asks.resolution import StaticDirectory
+from chatmemory.app.asks.resolution import ObservedDirectory, StaticDirectory
 from chatmemory.app.asks.state import AskStateService
+from chatmemory.app.asks.worker import ExtractionProgress, ExtractionWorker
 
 __all__ = [
     "UNATTRIBUTED",
@@ -54,10 +62,14 @@ __all__ = [
     "CorrectionOutcome",
     "CorrectionResolution",
     "CorrectionService",
+    "ExtractionProgress",
     "ExtractionReport",
     "ExtractionService",
+    "ExtractionWorker",
+    "ObligationAnswerService",
     "ObligationRequest",
     "ObligationService",
+    "ObservedDirectory",
     "ReportedAsk",
     "StaticDirectory",
     "ask_key",

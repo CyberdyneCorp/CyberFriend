@@ -41,6 +41,17 @@ later is outside the corpus until someone deliberately says otherwise, which
 is the direction a mistake should fall.
 """
 
+EXTERNAL_CHANNEL_ID = 0
+"""The channel id an item that belongs to no channel is filed under.
+
+Paired with the source system as its platform, so an external item's
+`ChannelRef` reads `issues:0` and can never compare equal to a Discord
+channel. Nothing decides a permission from it -- `Citation.is_corpus` is
+false for these, so the delivery guard never tests the channel at all -- but
+a placeholder that *could* collide with a real channel would put that
+guarantee one refactor away from being wrong.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class SourcedCitation(Citation):
@@ -137,6 +148,7 @@ class EvidenceLedger:
     def __init__(self) -> None:
         self._items: dict[int, Evidence] = {}
         self._signatures: set[tuple[object, ...]] = set()
+        self._external = 0
 
     def add(self, items: Iterable[Evidence], source_system: str | None = None) -> int:
         """Add retrieved evidence; return how much of it was new.
@@ -157,6 +169,55 @@ class EvidenceLedger:
             new += 1
         return new
 
+    def add_external(
+        self,
+        text: str,
+        source_system: str,
+        attribution: str = "",
+        url: str = "",
+    ) -> Evidence:
+        """Fold in one result from a system that is not the corpus.
+
+        Not `add`: a retrieved window arrives with an id the store gave it,
+        while a tool result has no window anywhere. It still needs one,
+        because the window id is what the model is shown inside the fence and
+        what it cites back -- an external result without one could be read but
+        never attributed, and an answer that rests on it would look like an
+        answer resting on nothing.
+
+        The minted ids are negative. A corpus window id is a database row id
+        and therefore positive, so an external item can never take the place
+        of a retrieved one in this ledger, and a model that cites `-1` cannot
+        have meant somebody's message.
+
+        `source_system` is required and travels with the item into the
+        citation: this is the one moment where "the internet said" and "a
+        colleague said" could still be conflated, and everything downstream
+        only reads what is recorded here.
+        """
+        if not source_system or source_system in CORPUS_SOURCE_SYSTEMS:
+            raise ValueError(
+                f"external evidence needs a source system outside the corpus, got "
+                f"{source_system!r}"
+            )
+        self._external += 1
+        item = Evidence(
+            window_id=-self._external,
+            channel=ChannelRef(source_system, EXTERNAL_CHANNEL_ID),
+            text=text,
+            # There is no retrieval score: this was not ranked against
+            # anything. Zero, from the least committal source, so that
+            # nothing downstream can read it as a relevance judgement -- the
+            # gate only ever thresholds a `RERANKED` score, which this is not.
+            score=0.0,
+            relevance_source=RelevanceSource.LEXICAL,
+            url=url,
+            author_display=attribution,
+            source_system=source_system,
+        )
+        self._items[item.window_id] = item
+        return item
+
     def note_query(self, query: SearchQuery) -> bool:
         """Record a query about to be issued; False if it is a repeat."""
         signature = query_signature(query)
@@ -172,6 +233,17 @@ class EvidenceLedger:
     @property
     def window_ids(self) -> frozenset[int]:
         return frozenset(self._items)
+
+    @property
+    def external(self) -> tuple[Evidence, ...]:
+        """What this run holds that did not come from the corpus.
+
+        A run whose corpus search found nothing may still hold an external
+        result, and those two facts have to be separable: "nothing was found"
+        is about the corpus, and answering it over evidence the run is holding
+        would be false.
+        """
+        return tuple(item for item in self._items.values() if not item.from_corpus)
 
     def get(self, window_id: int) -> Evidence | None:
         return self._items.get(window_id)

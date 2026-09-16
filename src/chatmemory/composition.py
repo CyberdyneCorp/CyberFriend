@@ -23,6 +23,14 @@ reasoning service derives its viewer from each question's audience through
 `reasoning.scope`; there is no parameter here through which a wider view
 could be composed in.
 
+Obligation questions are the one kind that leaves before retrieval. "What
+did people ask me today" is a filter over extracted `ask` rows by addressee
+and time, so the answer service handed to the bot is a thin front door over
+the reasoning one: it claims those questions, answers them from records with
+no model call and no similarity search, and passes everything else through
+untouched. The ingest process gets the other half of the same feature from
+`build_ask_pipeline`, which is the only place the extraction model is named.
+
 Federation is the one part of the graph that is allowed to be missing. A
 deployment with no external servers configured gets exactly the object graph
 it had before federation existed, and a server that is misconfigured,
@@ -35,7 +43,9 @@ capability that was built, tested, and silently never reached.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from datetime import timedelta
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -44,6 +54,11 @@ from chatmemory.adapters.discord.acl import (
     DiscordAclResolver,
     DiscordAudienceResolver,
     GuildProvider,
+)
+from chatmemory.adapters.llm.asks_extraction import (
+    ExtractorConfig,
+    OpenAICompatibleAskExtractor,
+    UsageMeter,
 )
 from chatmemory.adapters.llm.chat import OpenAICompatibleChat
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
@@ -62,26 +77,55 @@ from chatmemory.adapters.mcp_client.client import SessionFactory
 from chatmemory.adapters.mcp_client.config import (
     ConfigurationError as FederationConfigurationError,
 )
+from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
+from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.postgres import HybridSearch
+from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
+from chatmemory.adapters.web.results import source_system_for
 from chatmemory.app.ask import AskService
+from chatmemory.app.asks.answering import ObligationAnswerService
+from chatmemory.app.asks.candidates import CandidateFilter
+from chatmemory.app.asks.extraction import ExtractionService
+from chatmemory.app.asks.model import AskPolicy
+from chatmemory.app.asks.obligations import ObligationService, discord_message_url
+from chatmemory.app.asks.resolution import ObservedDirectory
+from chatmemory.app.asks.state import AskStateService
+from chatmemory.app.asks.worker import ExtractionWorker
 from chatmemory.app.audit import AuditTrail, InMemoryAuditTrail
 from chatmemory.app.authorization import (
     Authorizer,
     ConfirmationLedger,
     CredentialBroker,
+    InvocationRequest,
     ToolEffect,
 )
+from chatmemory.app.confirmation import ConfirmationDesk, with_confirmation
 from chatmemory.app.conversation import ConversationStore
 from chatmemory.app.limits import RateLimiter
-from chatmemory.app.reasoning.capabilities import LOOP_STAGES, ModelCapability, Stage
+from chatmemory.app.reasoning.capabilities import (
+    LOOP_STAGES,
+    MissingCapabilityError,
+    ModelCapability,
+    Stage,
+)
 from chatmemory.app.reasoning.errors import ConfigurationError
-from chatmemory.app.reasoning.ports import ChatModel, ExternalTool, RetrievalTool, ToolSurface
+from chatmemory.app.reasoning.evidence import SOURCE_WEB
+from chatmemory.app.reasoning.loop import FederatedSurface, ToolOutcome
+from chatmemory.app.reasoning.ports import (
+    ChatModel,
+    ExternalTool,
+    RetrievalTool,
+    ToolCompletion,
+    ToolDefinition,
+    ToolSurface,
+)
 from chatmemory.app.reasoning.retrieval import (
     CorpusRetrieval,
     WithheldRetrieval,
     discord_urls,
 )
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
+from chatmemory.app.reasoning.stages import ModelToolProposer
 from chatmemory.config import Settings
 from chatmemory.ports.answers import AnswerService
 from chatmemory.ports.sources import EmbeddingClient
@@ -118,7 +162,14 @@ class AnswerStack:
     engine: AsyncEngine
     search: SearchBackend
     chat: ChatModel
-    answers: ReasoningAnswerService
+    #: What the bot asks a question of. An `AnswerService` rather than the
+    #: reasoning service itself, because obligation questions are answered
+    #: from `ask` rows and never reach retrieval at all; `reasoning` below is
+    #: the same service seen without that front door, for anything that needs
+    #: the run record.
+    answers: AnswerService
+    reasoning: ReasoningAnswerService
+    obligations: ObligationService
     federation: FederatedTools | None = None
 
 
@@ -206,18 +257,36 @@ operator cannot widen anything by writing something clever.
 
 
 class RoutedToolSurface:
-    """The reasoning layer's `ToolSurface`, backed by the federation router.
+    """The reasoning layer's federated surface, backed by the router and the guard.
 
     It lives in the composition root because this is the one module allowed
     to know both sides. The loop sees a port that answers a question with
-    names; the router sees a registration the loop has no reference to. The
-    only federated type that crosses into the app layer is `ExternalTool`,
-    which carries no session, no permit and no route to a server.
+    names, asks a model for a call, and hands that call back; the router,
+    the permits and the sessions stay on this side. The only federated types
+    that cross into the app layer are `ExternalTool` and `ToolOutcome`, and
+    neither carries a session, a permit or a route to a server.
+
+    Offering and invoking are the same object on purpose. The invoke-time
+    check asks whether this run was offered the tool being called, and it
+    answers that by routing the *question* again -- the same deterministic
+    routing that produced the offer. The loop never holds the offer set that
+    decides its own call.
     """
 
-    def __init__(self, router: ToolRouter, registration: Registration) -> None:
+    def __init__(
+        self,
+        router: ToolRouter,
+        registration: Registration,
+        invoker: GuardedInvoker,
+        proposer: ModelToolProposer | None = None,
+    ) -> None:
         self._router = router
         self._registration = registration
+        self._invoker = invoker
+        # None when the deployed model cannot call tools. The run is still
+        # offered them -- an operator reading the record must see that the
+        # federation is there -- and simply never asks for one.
+        self._proposer = proposer
 
     def offer(self, question: str) -> tuple[ExternalTool, ...]:
         routed = self._router.route(question, self._registration)
@@ -226,9 +295,95 @@ class RoutedToolSurface:
                 qualified_name=tool.qualified_name,
                 server=tool.server,
                 description=tool.description,
+                # Carried, because a name without an argument shape is a tool
+                # the model can only guess at, and a guessed call is one the
+                # egress guard refuses.
+                input_schema=tool.input_schema,
             )
             for tool in routed.tools
         )
+
+    async def propose(
+        self, question: str, tools: Sequence[ToolDefinition]
+    ) -> ToolCompletion:
+        if self._proposer is None:
+            return ToolCompletion()
+        return await self._proposer.propose(question, tools)
+
+    async def invoke(self, request: InvocationRequest) -> ToolOutcome:
+        """Authorize, call, audit -- through the one door, never around it.
+
+        The routed set is recomputed here from the question on the request.
+        Routing is lexical and deterministic, so this is the same set the run
+        was offered; taking it from the caller instead would let the thing
+        being checked supply the check.
+        """
+        routed = self._router.route(request.question, self._registration)
+        call = _with_call_site_arguments(request)
+        # A mutating call comes back refused, carrying a prompt for the person
+        # who asked. Putting that prompt to them -- and then retrying the same
+        # guarded door rather than telling it the answer, so the gate re-checks
+        # the digest of the arguments actually about to be sent -- is the whole
+        # of what makes an enabled mutating tool reachable. Without this, the
+        # prompt is built here and dropped, which reads exactly like a working
+        # feature in any test that drives the desk itself.
+        outcome = await with_confirmation(
+            lambda: self._invoker.invoke(call, routed), lambda pass_: pass_.prompt
+        )
+        if not outcome.invoked or outcome.result is None:
+            return ToolOutcome(detail=_refusal_detail(outcome))
+        fenced = outcome.result.as_evidence()
+        return ToolOutcome(
+            invoked=True,
+            # The system a reader will see this attributed to. Web providers
+            # collapse onto one source system -- what a reader needs to know is
+            # "the internet", not which vendor answered -- and everything else
+            # is named by its own server.
+            source_system=source_system_for(request.qualified_name)
+            or outcome.result.server,
+            # The federation layer's own fencing accessor, which is the only
+            # path out of it that a prompt may reach. Its body is neutralised
+            # text; the reasoning layer fences it again on the way into a
+            # prompt, exactly as it fences a retrieved message.
+            text=fenced.body,
+            attribution=outcome.result.attribution,
+            detail=outcome.result.notice() or "",
+        )
+
+
+def _with_call_site_arguments(request: InvocationRequest) -> InvocationRequest:
+    """Supply the argument a web tool needs and the model is never shown.
+
+    A web provider checks the query it is about to send against the asking
+    person's own words, so it needs both. The model is offered only the query
+    half on purpose -- a model that wrote both halves of a comparison would be
+    comparing nothing -- which leaves the other half to the call site, here.
+
+    Every other federated tool is handed exactly what the model proposed: an
+    argument nobody's schema asked for is noise to the server receiving it,
+    and inventing one is how a call starts failing for reasons no log explains.
+    """
+    if source_system_for(request.qualified_name) != SOURCE_WEB:
+        return request
+    proposed = request.arguments.get(ARG_QUERY)
+    return replace(
+        request,
+        arguments=web_arguments(
+            request.question, proposed if isinstance(proposed, str) else ""
+        ),
+    )
+
+
+def _refusal_detail(outcome: InvocationOutcome) -> str:
+    """Why a call produced nothing, for the operator record only.
+
+    Never returned to a model and never rendered to a requester: a refusal
+    reason is a description of the guard, and the one reader who must not have
+    it is the thing trying to get past it.
+    """
+    if outcome.decision.refusal is not None:
+        return str(outcome.decision.refusal)
+    return outcome.notice() or "no result"
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,7 +397,11 @@ class FederatedTools:
     """
 
     federation: Federation
-    surface: RoutedToolSurface
+    #: Typed as the port rather than the class, so a type check proves the
+    #: object this root hands the reasoning loop really can do what the loop
+    #: asks of it. A surface that only offered would satisfy `ToolSurface` and
+    #: silently never call anything, which is this project's recurring bug.
+    surface: FederatedSurface
     invoker: GuardedInvoker
     audit: AuditTrail
     confirmations: ConfirmationLedger
@@ -330,7 +489,10 @@ def report_federation(config: FederationConfig, registration: Registration) -> N
 
 
 async def build_federation(
-    settings: Settings, factory: SessionFactory | None = None
+    settings: Settings,
+    factory: SessionFactory | None = None,
+    *,
+    proposer: ModelToolProposer | None = None,
 ) -> FederatedTools | None:
     """Connect to the configured servers, or run without any.
 
@@ -371,10 +533,22 @@ async def build_federation(
         return None
 
     report_federation(config, federation.registration)
-    return _federated_tools(config, federation)
+    if proposer is None:
+        # Tools that can be offered and never called. Said out loud, because a
+        # federation wired to a model that cannot call tools looks identical in
+        # every log line except this one.
+        log.warning(
+            "composition.federation.offer_only",
+            hint="no tool-calling model handle; runs will be offered tools but call none",
+        )
+    return _federated_tools(config, federation, proposer)
 
 
-def _federated_tools(config: FederationConfig, federation: Federation) -> FederatedTools:
+def _federated_tools(
+    config: FederationConfig,
+    federation: Federation,
+    proposer: ModelToolProposer | None = None,
+) -> FederatedTools:
     """Assemble the guarded door around a connected federation.
 
     The credential broker starts empty on purpose: a per-requester tool is
@@ -385,22 +559,153 @@ def _federated_tools(config: FederationConfig, federation: Federation) -> Federa
     confirmations = ConfirmationLedger()
     audit = InMemoryAuditTrail()
     authorizer = Authorizer(federation.permits, confirmations, CredentialBroker())
+    invoker = GuardedInvoker(federation, authorizer, audit, confirmations)
     return FederatedTools(
         federation=federation,
+        # The same invoker the surface hands calls to, so there is one guarded
+        # door rather than one for the loop and another for anything else that
+        # reaches in here.
         surface=RoutedToolSurface(
-            ToolRouter(config.max_tools_per_run), federation.registration
+            ToolRouter(config.max_tools_per_run),
+            federation.registration,
+            invoker,
+            proposer,
         ),
-        invoker=GuardedInvoker(federation, authorizer, audit, confirmations),
+        invoker=invoker,
         audit=audit,
         confirmations=confirmations,
     )
 
 
 def build_answers(
-    retrieval: RetrievalTool, chat: ChatModel, tools: ToolSurface | None = None
+    retrieval: RetrievalTool,
+    chat: ChatModel,
+    tools: ToolSurface | FederatedSurface | None = None,
 ) -> ReasoningAnswerService:
-    """The real answer service: both paths, over one retrieval tool."""
+    """The real answer service: both paths, over one retrieval tool.
+
+    `tools` is the loop's whole federated capability. A `FederatedSurface`
+    reaches the loop as one object that offers, proposes and invokes, so the
+    thing that decides what a run may call is the thing that calls it.
+    """
     return build_answer_service(retrieval, chat, tools=tools)
+
+
+def build_tool_proposer(
+    settings: Settings, chat: OpenAICompatibleChat
+) -> ModelToolProposer | None:
+    """The stage that asks the model whether a federated tool should be called.
+
+    None for a deployment that federates nothing -- there is no question to
+    ask -- and None, loudly, for one whose model cannot call tools. The second
+    is deliberately not a boot failure: federation widens where answers may
+    come from, and taking the bot down over it would make somebody else's
+    capability a prerequisite for answering questions about Discord.
+    """
+    if not settings.federation_servers:
+        return None
+    try:
+        # Raises here, naming `tool_calling`, rather than as an endpoint's 400
+        # on the first question that happens to route a tool.
+        caller = chat.tool_caller()
+    except MissingCapabilityError as exc:
+        log.error("composition.federation.tool_calling_unavailable", error=str(exc))
+        return None
+    return ModelToolProposer(caller)
+
+
+def ask_policy(settings: Settings) -> AskPolicy:
+    """The thresholds both halves of the feature are tuned by.
+
+    Built once and shared: the confidence the extractor writes below is the
+    confidence the answer path refuses to report above, and two copies of that
+    number drift into a store full of asks nothing will ever show.
+    """
+    return AskPolicy(
+        min_confidence=settings.ask_min_confidence,
+        stale_after=timedelta(days=settings.ask_stale_after_days),
+    )
+
+
+def build_obligations(settings: Settings, engine: AsyncEngine) -> ObligationService:
+    """The read path for "what did people ask me".
+
+    Takes the engine the rest of the graph already holds, so obligations are
+    read through the same pool as everything else rather than opening a second
+    one for a question that is a filter over a few rows.
+    """
+    return ObligationService(
+        PostgresAskStore(engine),
+        policy=ask_policy(settings),
+        # Citations are the whole defence against an inferred obligation: an
+        # ask is a claim the system made about a person, so the reader has to
+        # be able to open the message it came from in one click.
+        message_url=discord_message_url(settings.discord_guild_id),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AskPipeline:
+    """The ingest-side half of the feature, assembled as one piece.
+
+    Returned together because they are only correct together: the worker
+    writes through the same store the state pass reads, and the directory the
+    worker teaches is the one resolution asks who a name refers to. Building
+    them apart is how the worker ends up resolving every name to nobody.
+
+    `usage` is carried so the standing cost can be reported rather than
+    guessed -- extraction is billed per message of traffic, not per question.
+    """
+
+    store: PostgresAskStore
+    worker: ExtractionWorker
+    state: AskStateService
+    directory: ObservedDirectory
+    usage: UsageMeter
+
+
+def build_ask_pipeline(settings: Settings, engine: AsyncEngine) -> AskPipeline:
+    """Assemble the extraction pass for the ingest process.
+
+    On the cheap model, deliberately: extraction runs over traffic rather than
+    over questions, so a frontier model here is a standing bill nobody asked
+    for.
+    """
+    store = PostgresAskStore(engine)
+    directory = ObservedDirectory()
+    usage = UsageMeter()
+    extraction = ExtractionService(
+        extractor=OpenAICompatibleAskExtractor(
+            ExtractorConfig(
+                api_key=settings.llm_api_key.get_secret_value(),
+                base_url=settings.llm_base_url,
+                model=settings.extraction_model,
+            ),
+            usage,
+        ),
+        store=store,
+        directory=directory,
+        candidates=CandidateFilter(),
+        policy=ask_policy(settings),
+    )
+    log.info(
+        "composition.ask_extraction",
+        extraction_model=settings.extraction_model,
+        window_messages=settings.ask_extraction_window_messages,
+        min_confidence=settings.ask_min_confidence,
+        stale_after_days=settings.ask_stale_after_days,
+    )
+    return AskPipeline(
+        store=store,
+        worker=ExtractionWorker(
+            extraction,
+            window_messages=settings.ask_extraction_window_messages,
+            directory=directory,
+        ),
+        state=AskStateService(store, ask_policy(settings)),
+        directory=directory,
+        usage=usage,
+    )
 
 
 async def build_answer_stack(settings: Settings) -> AnswerStack:
@@ -420,10 +725,12 @@ async def build_answer_stack(settings: Settings) -> AnswerStack:
     search = HybridSearch(engine, embeddings)
 
     retrieval = CorpusRetrieval(search, discord_urls(settings.discord_guild_id))
+    obligations = build_obligations(settings, engine)
     # After the two checks that can refuse the deployment: a federated server
     # is reached over the network, and a slow handshake must not sit in front
     # of the failures that stop the process.
-    federation = await build_federation(settings)
+    proposer = build_tool_proposer(settings, chat)
+    federation = await build_federation(settings, proposer=proposer)
     log.info(
         "composition.answer_stack",
         chat_model=settings.chat_model,
@@ -431,14 +738,28 @@ async def build_answer_stack(settings: Settings) -> AnswerStack:
         embedding_dimensions=settings.embedding_dimensions,
         stages=[str(s) for s in ANSWERING_STAGES],
         federated_tools=sorted(federation.federation.registration.names) if federation else [],
+        # Whether a run can actually call one of those, as opposed to being
+        # shown it. The two used to be indistinguishable from the outside, and
+        # the answer was "no" for the whole life of the federation layer.
+        federated_tool_calls=proposer is not None,
+        ask_min_confidence=settings.ask_min_confidence,
+    )
+    reasoning = build_answers(
+        retrieval, chat, tools=federation.surface if federation else None
     )
     return AnswerStack(
         engine=engine,
         search=search,
         chat=chat,
-        answers=build_answers(
-            retrieval, chat, tools=federation.surface if federation else None
-        ),
+        # The obligation path goes in front of the reasoning service rather
+        # than inside it. "What did people ask me today" is a filter over rows
+        # by addressee and time; embedding that sentence and hoping the right
+        # windows surface is exactly how this feature fails, and it is why the
+        # rows exist. Everything it does not claim reaches `reasoning`
+        # unchanged.
+        answers=ObligationAnswerService(obligations, reasoning),
+        reasoning=reasoning,
+        obligations=obligations,
         federation=federation,
     )
 
@@ -448,6 +769,7 @@ def build_ask_service(
     guild: GuildProvider,
     answers: AnswerService,
     search: SearchBackend | None = None,
+    confirmations: ConfirmationLedger | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -467,4 +789,10 @@ def build_ask_service(
         # asker INTERSECT audience, so nothing is ever dropped later for the
         # notice to report. The probe is what actually searches the gap.
         withheld=WithheldRetrieval(search) if search is not None else None,
+        # The desk writes into the federation's own ledger, which is the one
+        # the invoke-time gate reads. A desk over a ledger of its own would
+        # collect approvals nothing ever checks -- and a deployment with no
+        # federation has no mutating tool to confirm, so it gets no desk and
+        # every prompt would be refused for want of one.
+        desk=ConfirmationDesk(confirmations) if confirmations is not None else None,
     )
