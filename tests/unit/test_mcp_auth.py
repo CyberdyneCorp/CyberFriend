@@ -160,6 +160,32 @@ async def test_a_call_with_no_credential_is_refused() -> None:
     assert "www-authenticate" in response.headers
 
 
+async def test_a_prefixed_mount_still_refuses_an_anonymous_call() -> None:
+    """The guard has to answer the same question the router will.
+
+    Starlette resolves routes on the path with `root_path` stripped, so behind
+    a proxy or a mount that sets one, a guard reading the raw path stops
+    matching while the router keeps dispatching -- and the corpus surface runs
+    with no viewer bound, which is the one thing retrieval never does.
+    """
+    client, _ = await _client_for(ALICE)
+    behind = TestClient(client.app, root_path="/agent")
+
+    response = behind.get("/agent/mcp")
+
+    assert response.status_code == 401
+    assert "www-authenticate" in response.headers
+
+
+async def test_a_credential_is_still_bound_behind_a_prefixed_mount() -> None:
+    client, token = await _client_for(ALICE)
+    behind = TestClient(client.app, root_path="/agent")
+
+    body = behind.get("/agent/mcp", headers={"Authorization": f"Bearer {token}"}).json()
+
+    assert body["person"] == str(ALICE)
+
+
 async def test_missing_and_invalid_credentials_are_answered_identically() -> None:
     """The endpoint must not double as an oracle for which tokens exist."""
     client, _ = await _client_for(ALICE)

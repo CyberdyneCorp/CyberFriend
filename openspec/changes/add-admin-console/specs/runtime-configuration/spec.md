@@ -68,3 +68,20 @@ taking down a process that is working.
 - WHEN stored configuration is invalid as a process starts
 - THEN the process SHALL start with the environment configuration and report
   what it could not apply
+
+### Requirement: A refusal names the rule, never the refused value
+
+A refused change SHALL be reported and recorded by naming the setting and what
+it would have accepted. The refused value SHALL NOT appear in the reply, in the
+change record, or in a log line, because the likeliest bad value on this
+surface is a credential pasted into the wrong box and the change record cannot
+be edited afterwards.
+
+#### Scenario: Value refused because it cannot be parsed
+- WHEN a submitted value does not parse as the setting's type
+- THEN the reply and the recorded reason SHALL say what the setting accepts
+- AND SHALL NOT contain the submitted value
+
+#### Scenario: Malformed stored row reported
+- WHEN a stored value cannot be parsed
+- THEN the reported problem SHALL NOT contain the stored text

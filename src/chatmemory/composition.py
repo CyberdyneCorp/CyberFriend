@@ -193,7 +193,18 @@ def declared_capabilities(settings: Settings) -> frozenset[ModelCapability] | No
             f"unknown model capability {', '.join(repr(u) for u in unknown)}; "
             f"CHAT_MODEL_CAPABILITIES accepts {', '.join(sorted(known))}"
         )
-    return frozenset(ModelCapability(c) for c in settings.chat_model_capabilities)
+    declared = frozenset(ModelCapability(c) for c in settings.chat_model_capabilities)
+    # The declaration still NARROWS -- an operator whose endpoint cannot do
+    # structured output has to be able to say so, and is the only one who
+    # knows. Only `chat` is added back, because it is the one capability a
+    # model configured as the chat model has by definition, and leaving it
+    # out is always a mistake rather than a statement.
+    #
+    # Without this, enabling tool calling silently withdrew `chat` and the
+    # punishment arrived three stages later as "gpt-4o is missing required
+    # capability: chat" -- a crash loop caused by adding one word to one
+    # environment variable, which is how this deployment broke.
+    return declared | {ModelCapability.CHAT}
 
 
 def build_chat_model(settings: Settings) -> OpenAICompatibleChat:

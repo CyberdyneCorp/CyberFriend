@@ -23,6 +23,14 @@ from typing import cast
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+# From `_utils` because that is where the router's own copy comes from:
+# `starlette.routing` and `starlette.staticfiles` both import it from here,
+# and re-implementing the root_path rule would let the guard's idea of the
+# path drift from the router's on an upgrade -- which is the whole bug this
+# call exists to prevent. If a future Starlette moves it, the import fails
+# loudly at startup rather than quietly matching the wrong path.
+from starlette._utils import get_route_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from chatmemory.app.tokens import (
@@ -274,7 +282,13 @@ class BearerAuthMiddleware:
         self._prefix = protected_prefix
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not str(scope.get("path", "")).startswith(self._prefix):
+        # `get_route_path`, never `scope["path"]`: the router matches routes on
+        # the path with `root_path` stripped, so a guard reading the raw path
+        # would guard a different application than the one that dispatches --
+        # behind any prefix mount or a proxy that sets root_path, the guard
+        # sees "/prefix/mcp", misses the prefix, and the corpus surface answers
+        # with no viewer bound.
+        if scope["type"] != "http" or not get_route_path(scope).startswith(self._prefix):
             # Health and readiness stay open: an orchestrator probing them
             # holds no credential, and they expose no message content.
             await self._app(scope, receive, send)

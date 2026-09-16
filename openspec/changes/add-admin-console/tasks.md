@@ -38,7 +38,7 @@
 - [ ] 5.4 Treat an undeclared effect as mutating
 - [ ] 5.5 Indexed channels: add and remove, reporting a channel the agent cannot read
 - [ ] 5.6 Retention window and per-person opt-outs
-- [ ] 5.7 MCP token issue and revoke
+- [ ] 5.7 MCP token review and revoke — **no issue route**: minting one grants a read of that account's whole view of the corpus, so it stays in `python -m chatmemory.mcp.issue_token`; the console is typed to a directory that cannot mint
 - [ ] 5.8 Read-only status: health, ingestion progress, embedding backlog, recent audit
 - [ ] 5.9 **Refuse any request for message, document or ask content** — counts and timings only
 - [ ] 5.10 Test: no response anywhere in the API contains a secret, even masked
@@ -52,6 +52,7 @@
 - [ ] 6.5 Status screen and audit log view
 - [ ] 6.6 Show the source of each value — database, environment or default
 - [ ] 6.7 Token entry held in memory only, never in local storage
+- [ ] 6.8 Tokens screen reviews and revokes; it offers no way to issue one
 
 ## 7. Deployment
 
