@@ -313,19 +313,59 @@ _SELF_DESCRIPTION_PATTERNS = (
 )
 
 
+# Words that name the ASSISTANT'S OWN machinery. They are almost never the
+# subject of a team's conversation, so a short question built around them is
+# asking about the bot -- "what about Wikipedia, internet access, or MCP?".
+_CAPABILITY_TERMS = frozenset({
+    "wikipedia", "internet", "mcp", "serpapi", "context7", "google",
+    "web access", "internet access", "web search", "search the web",
+    "tools", "tool", "ferramentas", "ferramenta", "capabilities",
+    "capability", "funcionalidades", "features",
+})
+# Addressing the bot directly.
+_ADDRESS_TERMS = frozenset({
+    "you", "your", "yourself", "você", "voce", "vc", "seu", "sua",
+    "cyberfriend", "bot",
+})
+_WORD_RE = re.compile(r"[^\W_]+(?:\s+(?:access|search|the\s+web))?")
+
+
 def self_description_question(text: str) -> bool:
     """Whether this asks what the assistant is or can do.
 
-    Deliberately narrow and phrase-based. A false negative costs a retrieval
-    that probably finds nothing; a false positive replaces a real question
-    with a capability list, which is the worse mistake.
+    The first version matched a list of phrases, and missed "what tools are
+    available" and "what about Wikipedia, internet access, or MCP?" -- so the
+    bot searched its channels, found a colleague's crypto project, and listed
+    that project's features as its own. Twice. Enumerating phrasings is the
+    same keyword failure that broke tool routing: there are always more ways
+    to ask than any list holds.
+
+    So this looks for SIGNALS instead. A short question counts when it names
+    the assistant's own machinery (MCP, Wikipedia, tools), or addresses the
+    assistant while asking about capability. Length still bounds it: a long
+    question mentioning "tools" is almost always about the team's tools.
     """
-    lowered = " ".join(text.lower().replace("?", " ").split())
-    if len(lowered.split()) > 8:
-        # A long question that happens to contain one of these phrases is
-        # almost always about something else.
+    lowered = " ".join(text.lower().replace("?", " ").replace(",", " ").split())
+    words = lowered.split()
+    if any(pattern in lowered for pattern in _SELF_DESCRIPTION_PATTERNS):
+        return len(words) <= 8
+    if len(words) > 10:
         return False
-    return any(pattern in lowered for pattern in _SELF_DESCRIPTION_PATTERNS)
+
+    padded = f" {lowered} "
+    names_machinery = any(f" {term} " in padded for term in _CAPABILITY_TERMS)
+    addresses_bot = any(w in _ADDRESS_TERMS for w in words)
+    asks_capability = any(
+        w in {"can", "could", "able", "have", "access", "available", "use",
+              "support", "pode", "consegue", "tem", "disponível", "disponivel"}
+        for w in words
+    )
+
+    # Machinery named in a short question is about the bot on its own.
+    strong = {"mcp", "wikipedia", "serpapi", "context7"}
+    if any(f" {t} " in padded for t in strong):
+        return True
+    return names_machinery and (addresses_bot or asks_capability)
 
 
 def obligation_question(text: str) -> ObligationQuestion | None:
