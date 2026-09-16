@@ -21,6 +21,7 @@ from chatmemory.app.reasoning.contract import (
     LoggingRunRecorder,
     RunOutcome,
     RunRecorder,
+    RunStatus,
 )
 from chatmemory.app.reasoning.fixed import CorrectiveDriver, FixedPath
 from chatmemory.app.reasoning.loop import ReasoningLoop
@@ -60,9 +61,40 @@ class ReasoningAnswerService:
         outcome = await (
             self._loop if routing.route is Route.LOOP else self._fixed
         ).run(question)
+        decisions = [_route_decision(routing)]
+
+        # The fixed path searches the corpus and nothing else, and it carries
+        # nearly every question -- which left every external tool unreachable
+        # for exactly the questions they exist for. "Who wrote the novel Dune"
+        # classifies as single-goal, found nothing in the corpus, and abstained
+        # while a registered, routed, authorised Wikipedia tool sat unused.
+        #
+        # Escalating only on abstention keeps the ordering that matters: the
+        # team's own conversations are always consulted first and always win
+        # when they have an answer, and an outside source is reached only when
+        # they have none. The loop already calls tools once per run under its
+        # own budget, so this reuses that path rather than growing a second.
+        if (
+            routing.route is Route.FIXED
+            and outcome.record.status is RunStatus.ABSTAINED
+            and self._loop.can_reach_outside
+        ):
+            decisions.append(
+                Decision(
+                    "escalation",
+                    "fixed_abstained_trying_external_tools",
+                    DecisionMaker.DRIVER,
+                )
+            )
+            escalated = await self._loop.run(question)
+            # Keep the escalation only when it actually produced an answer; an
+            # escalation that also abstains says nothing the first run did not.
+            if escalated.record.status is RunStatus.ANSWERED:
+                outcome = escalated
+
         record = replace(
             outcome.record,
-            decisions=(_route_decision(routing), *outcome.record.decisions),
+            decisions=(*decisions, *outcome.record.decisions),
         )
         self._recorder.record(record)
         return RunOutcome(answer=outcome.answer, record=record)

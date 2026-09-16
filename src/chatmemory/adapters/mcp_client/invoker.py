@@ -13,7 +13,8 @@ interesting as an invocation, and more interesting after an incident.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import structlog
@@ -37,7 +38,9 @@ from chatmemory.app.egress import (
     EgressRequest,
     ProvenancedQuery,
     QueryOrigin,
+    RefusalReason,
     authorized,
+    keep_asker_words,
 )
 
 log = structlog.get_logger()
@@ -128,14 +131,43 @@ class GuardedInvoker:
         # about to be called; a provider reached any other way finds no
         # clearance and refuses, which is what keeps the boundary unskippable
         # rather than merely documented.
+        arguments: Mapping[str, object] = request.arguments
         try:
-            clearance = self._egress.authorize(
-                EgressRequest(
-                    asker=request.requester,
-                    query=_query_for(request, permit),
-                    provider=permit.server,
+            try:
+                clearance = self._egress.authorize(
+                    EgressRequest(
+                        asker=request.requester,
+                        query=_query_for(request, permit),
+                        provider=permit.server,
+                    )
                 )
-            )
+            except EgressRefused as refused:
+                # A read-only reformulation carrying words the asker did not
+                # write gets one more chance, with those words removed. Only
+                # for NOT_ROOTED: content-derived text is refused outright,
+                # because trimming it would still send what content chose.
+                if (
+                    refused.reason is not RefusalReason.NOT_ROOTED_IN_QUESTION
+                    or permit.effect.mutates
+                ):
+                    raise
+                rooted = _rooted_arguments(request)
+                if rooted is None:
+                    raise
+                arguments = rooted
+                trimmed = replace(request, arguments=rooted)
+                clearance = self._egress.authorize(
+                    EgressRequest(
+                        asker=request.requester,
+                        query=_query_for(trimmed, permit),
+                        provider=permit.server,
+                    )
+                )
+                log.info(
+                    "federation.query_trimmed_to_asker_words",
+                    tool=request.qualified_name,
+                    requester=str(request.requester),
+                )
         except EgressRefused as refused:
             log.warning(
                 "federation.egress_refused",
@@ -150,7 +182,7 @@ class GuardedInvoker:
             return InvocationOutcome(decision=decision, entry=entry)
 
         with authorized(clearance):
-            result = await self._federation.call(permit, request.arguments)
+            result = await self._federation.call(permit, arguments)
 
         # Consumed whatever the outcome. An approval authorises one attempt,
         # not one success: leaving it granted after a timeout or a transport
@@ -192,6 +224,25 @@ class GuardedInvoker:
         if decision.refusal not in _NEEDS_CONFIRMATION or decision.permit is None:
             return None
         return self._confirmations.propose(request, decision.permit, now=now)
+
+
+def _rooted_arguments(request: InvocationRequest) -> Mapping[str, object] | None:
+    """The arguments with every word the asker did not write removed.
+
+    None when trimming leaves a string argument empty: a call whose query was
+    entirely the model's own words has nothing of the asker's left to send,
+    and sending an empty query is not a smaller version of the same call.
+    """
+    trimmed: dict[str, object] = {}
+    for key, value in request.arguments.items():
+        if isinstance(value, str) and value.strip():
+            kept = keep_asker_words(value, request.question)
+            if not kept:
+                return None
+            trimmed[key] = kept
+        else:
+            trimmed[key] = value
+    return trimmed
 
 
 def _query_for(request: InvocationRequest, permit: ToolPermit) -> ProvenancedQuery:

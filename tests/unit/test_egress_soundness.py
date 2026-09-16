@@ -226,3 +226,67 @@ def test_an_approved_mutating_call_is_not_word_rooted() -> None:
         origin=ActionOrigin.REQUESTER_REQUEST,
     )
     assert _query_for(request, _permit(True)).rooted_in_asker
+
+
+# --- a helpful reformulation is trimmed, not refused -------------------
+
+
+def test_words_the_asker_did_not_write_are_dropped() -> None:
+    """Asked "who wrote the novel Dune", the model proposed "Dune novel
+    author" -- and "author" is not the asker's, so the call was refused and
+    the question went unanswered."""
+    from chatmemory.app.egress import keep_asker_words
+
+    kept = keep_asker_words("Dune novel author", "Who wrote the novel Dune ?")
+
+    assert kept == "Dune novel"
+
+
+def test_trimming_cannot_let_content_through() -> None:
+    """This is not a loosening: a word that was not in the question still
+    cannot leave, whoever proposed it."""
+    from chatmemory.app.egress import keep_asker_words
+
+    kept = keep_asker_words("acme salary bands 2026 Dune", "who wrote Dune")
+
+    assert "salary" not in kept and "acme" not in kept
+    assert kept == "Dune"
+
+
+def test_a_query_made_only_of_the_models_words_is_not_sent_empty() -> None:
+    """Nothing of the asker's left means nothing to send; an empty query is
+    not a smaller version of the same call."""
+    from chatmemory.adapters.mcp_client.invoker import _rooted_arguments
+    from chatmemory.app.authorization import ActionOrigin, InvocationRequest
+    from chatmemory.domain.identity import PersonRef
+
+    request = InvocationRequest(
+        requester=PersonRef("discord", 1),
+        question="who wrote Dune",
+        qualified_name="wikipedia:search",
+        arguments={"query": "acme salary bands"},
+        origin=ActionOrigin.REQUESTER_REQUEST,
+    )
+    assert _rooted_arguments(request) is None
+
+
+def test_trimmed_arguments_are_provably_rooted() -> None:
+    from chatmemory.adapters.mcp_client.invoker import _query_for, _rooted_arguments
+    from chatmemory.app.authorization import ActionOrigin, InvocationRequest
+    from chatmemory.domain.identity import PersonRef
+
+    request = InvocationRequest(
+        requester=PersonRef("discord", 1),
+        question="Who wrote the novel Dune ?",
+        qualified_name="wikipedia:summary",
+        arguments={"title": "Dune novel author", "count": 3},
+        origin=ActionOrigin.REQUESTER_REQUEST,
+    )
+    trimmed = _rooted_arguments(request)
+    assert trimmed is not None
+    assert trimmed["count"] == 3, "non-text arguments are untouched"
+
+    from dataclasses import replace
+
+    query = _query_for(replace(request, arguments=trimmed), _permit(False))
+    assert query.rooted_in_asker

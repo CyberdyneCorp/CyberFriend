@@ -574,7 +574,20 @@ def test_the_bot_receives_the_obligation_aware_service() -> None:
     for node in ast.walk(built):
         if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "AnswerStack":
             answers = next(k.value for k in node.keywords if k.arg == "answers")
-            assert getattr(answers.func, "id", None) == "ObligationAnswerService"
+            # Reachable, not necessarily outermost: the self-description layer
+            # wraps it so "what can you do" is answered before anything can
+            # search the corpus for it. What matters is that the bot's answer
+            # service CONTAINS the obligation-aware one.
+            constructed = {
+                getattr(n.func, "id", None)
+                for n in ast.walk(answers)
+                if isinstance(n, ast.Call)
+            }
+            assert "ObligationAnswerService" in constructed
+            assert getattr(answers.func, "id", None) == "SelfDescriptionAnswerService", (
+                "self-description must be outermost, or a capability question "
+                "reaches retrieval first"
+            )
             return
     pytest.fail("build_answer_stack never constructs an AnswerStack")
 
