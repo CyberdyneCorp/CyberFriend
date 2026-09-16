@@ -29,7 +29,9 @@ DEPLOYMENT_SETTINGS = {
     "EMBEDDING_MODEL": ("ingest", "bot", "mcp"),
     "EMBEDDING_DIMENSIONS": ("ingest", "bot", "mcp"),
     "CHAT_MODEL": ("bot",),
-    "EXTRACTION_MODEL": ("ingest",),
+    # The bot summarises conversation memory on the extraction model, so it
+    # needs the operator's choice as much as the ingest process does.
+    "EXTRACTION_MODEL": ("ingest", "bot"),
     # Federation and the web tools decide what the agent may reach; asks
     # decide what it extracts. All of them are settings an operator changes
     # per deployment, so the platform has to accept them.
@@ -45,6 +47,12 @@ DEPLOYMENT_SETTINGS = {
     "SERPAPI_KEY": ("bot",),
     "ASK_EXTRACTION_ENABLED": ("ingest", "admin"),
     "ASK_MIN_CONFIDENCE": ("ingest", "admin"),
+    # Conversation memory. Retention is enforced by the ingest sweep, so a
+    # window set in the platform but never passed there is a retention policy
+    # that silently does not apply.
+    "MEMORY_RECENT_TURNS": ("bot",),
+    "MEMORY_SUMMARISE_AFTER_TURNS": ("bot",),
+    "MEMORY_RETENTION_DAYS": ("ingest",),
 }
 
 

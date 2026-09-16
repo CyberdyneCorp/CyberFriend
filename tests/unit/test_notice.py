@@ -22,7 +22,6 @@ from typing import Any, cast
 
 from chatmemory.adapters.discord.acl import DiscordAclResolver, DiscordAudienceResolver
 from chatmemory.app.ask import AskRequest, AskService
-from chatmemory.app.conversation import ConversationStore
 from chatmemory.app.disclosure import WithheldEvidenceProbe
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.reasoning.retrieval import WithheldRetrieval
@@ -124,7 +123,6 @@ def build(search: FakeSearch, *, probe: bool = True) -> AskService:
         audiences=DiscordAudienceResolver(g, indexed),
         answers=cast(Any, CorrectlyScopedAnswers()),
         limiter=RateLimiter(),
-        conversations=ConversationStore(),
         withheld=WithheldRetrieval(cast(Any, search)) if probe else None,
     )
 

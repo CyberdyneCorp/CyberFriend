@@ -41,6 +41,13 @@ any of them is outside the person's current readable set.
 This is a cheap set check, not a re-fetch, and it fails closed: a turn whose
 provenance cannot be established is not used.
 
+Provenance also carries forward. A follow-up is answered by a model that was
+shown the remembered turns and summaries, and it can restate them while its own
+evidence is elsewhere -- or is only the web, which would record no channels at
+all. So recall returns each item's channels with its text, and a new turn's
+provenance is the union of its citations, every channel its run consulted, and
+the channels of everything memory put in front of the model.
+
 ### Summaries carry the union, and fail as a whole
 
 A summary merges turns and loses per-turn provenance, so it records the union of

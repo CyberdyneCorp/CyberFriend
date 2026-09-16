@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from chatmemory.adapters.discord.acl import DiscordAclResolver, DiscordAudienceResolver
 from chatmemory.app.ask import AskRequest, AskService, StubAnswerService
-from chatmemory.app.conversation import ConversationStore
 from chatmemory.app.limits import RateLimiter
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Answer, Citation, Question
@@ -62,7 +61,6 @@ def build(answers: object | None = None) -> tuple[AskService, RecordingAnswerSer
             audiences=DiscordAudienceResolver(g, indexed),
             answers=service,  # type: ignore[arg-type]
             limiter=RateLimiter(),
-            conversations=ConversationStore(),
         ),
         service,  # type: ignore[return-value]
     )
@@ -116,7 +114,12 @@ async def test_restricted_asker_gets_no_notice() -> None:
 
 
 async def test_followup_by_another_person_is_rescoped_to_them() -> None:
-    """Context is shared per location; access never is."""
+    """Access is never inherited from whoever asked before in the same place.
+
+    This test used to assert that the second person's question carried the
+    first person's -- the conversation was keyed by channel alone. Memory is
+    now keyed by person and location; see tests/unit/test_conversation_memory.py.
+    """
     asks, recorder = build()
     await asks.ask(AskRequest(person(LEAD), "first", ch(GENERAL), location_id=GENERAL))
     await asks.ask(AskRequest(person(STAFF), "second", ch(GENERAL), location_id=GENERAL))
@@ -124,22 +127,7 @@ async def test_followup_by_another_person_is_rescoped_to_them() -> None:
     first, second = recorder.seen
     assert ch(LEADERSHIP) in first.asker.visible_channels
     assert ch(LEADERSHIP) not in second.asker.visible_channels
-    # The follow-up still sees the conversation so far.
-    assert second.history == ("first",)
-
-
-async def test_conversation_history_is_carried_within_a_location() -> None:
-    asks, recorder = build()
-    await asks.ask(AskRequest(person(LEAD), "one", ch(GENERAL), location_id=GENERAL))
-    await asks.ask(AskRequest(person(LEAD), "two", ch(GENERAL), location_id=GENERAL))
-    assert recorder.seen[-1].history == ("one",)
-
-
-async def test_history_does_not_leak_between_locations() -> None:
-    asks, recorder = build()
-    await asks.ask(AskRequest(person(LEAD), "one", ch(GENERAL), location_id=GENERAL))
-    await asks.ask(AskRequest(person(LEAD), "two", ch(LEADERSHIP), location_id=LEADERSHIP))
-    assert recorder.seen[-1].history == ()
+    assert second.memory.empty
 
 
 async def test_rate_limit_blocks_and_reports_retry() -> None:
@@ -149,7 +137,6 @@ async def test_rate_limit_blocks_and_reports_retry() -> None:
         audiences=DiscordAudienceResolver(g, (GENERAL,)),
         answers=StubAnswerService(),
         limiter=RateLimiter(max_questions=2, window_seconds=60),
-        conversations=ConversationStore(),
     )
     for _ in range(2):
         assert (await asks.ask(AskRequest(person(LEAD), "q", ch(GENERAL), GENERAL))).answered
@@ -168,7 +155,6 @@ async def test_rate_limit_is_per_person_not_per_surface() -> None:
         audiences=DiscordAudienceResolver(g, (GENERAL,)),
         answers=StubAnswerService(),
         limiter=RateLimiter(max_questions=1, window_seconds=60),
-        conversations=ConversationStore(),
     )
     await asks.ask(AskRequest(person(LEAD), "q", ch(GENERAL), GENERAL))
     via_dm = await asks.ask(AskRequest(person(LEAD), "q", None, LEAD))

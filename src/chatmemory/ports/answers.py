@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from chatmemory.domain.audience import Audience
-from chatmemory.domain.identity import ChannelRef, Viewer
+from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
+from chatmemory.ports.memory import Recollection
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,12 @@ class Answer:
     abstained: bool = False
     partial: bool = False
     withheld_channels: frozenset[ChannelRef] = field(default_factory=frozenset)
+    # Every channel the run that produced this answer consulted, cited or not.
+    # Conversation memory records it as the answer's provenance, because an
+    # uncited sentence can still paraphrase a window the run was shown. None
+    # means nobody established it, and such an answer is not remembered: an
+    # empty set would be a claim that the answer rests on no channel at all.
+    consulted_channels: frozenset[ChannelRef] | None = None
 
     @property
     def source_channels(self) -> frozenset[ChannelRef]:
@@ -59,11 +66,45 @@ class Answer:
 
 
 @dataclass(frozen=True, slots=True)
+class AskerProfile:
+    """What the asker's own Discord profile says about them.
+
+    Carries its `person` so a renderer can check it belongs to the asker
+    before it reaches a prompt: a profile is only ever context about the
+    person consenting to it by asking, never a description of someone else.
+    There is deliberately no join date or activity here -- nothing that would
+    make this a dossier if it were ever built for the wrong person.
+
+    Every text field is typed by a member of the server and is untrusted.
+    """
+
+    person: PersonRef
+    display_name: str
+    nickname: str | None
+    role_names: tuple[str, ...]
+
+
+class AskerProfileResolver(Protocol):
+    async def resolve_profile(self, person: PersonRef) -> AskerProfile | None:
+        """The person's own profile, or None when it cannot be resolved.
+
+        Must not raise: a missing profile means answering without one.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
 class Question:
     text: str
     asker: Viewer
     audience: Audience
-    history: tuple[str, ...] = ()
+    # The asker's own earlier turns in this location, already filtered by what
+    # they may read now. Context for interpreting the question, never evidence:
+    # nothing in it carries a window id, so nothing in it can become a citation.
+    memory: Recollection = Recollection()
+    # Optional so every existing construction keeps working, and because an
+    # unresolvable profile is a reason to answer without it, never to fail.
+    asker_profile: AskerProfile | None = None
 
 
 class AnswerService(Protocol):

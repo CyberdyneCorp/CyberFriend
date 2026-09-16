@@ -39,6 +39,12 @@ with the channels each answer drew on.
 - THEN the stored turn SHALL include the answer and the channels its citations
   came from
 
+#### Scenario: Follow-up answered with memory in the prompt
+- WHEN an answer is produced while earlier turns or summaries were shown to the
+  model
+- THEN the stored turn SHALL also record the channels of every turn and summary
+  shown, so it is withheld once any of them is no longer readable
+
 ### Requirement: Remembered turns respect current permissions
 
 Before a remembered turn is used, the system SHALL check the channels it drew on

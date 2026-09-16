@@ -631,7 +631,6 @@ def _ask_service(store: FakeAskStore) -> tuple[object, RecordingAnswers]:
     from chatmemory.adapters.discord.acl import DiscordAclResolver, DiscordAudienceResolver
     from chatmemory.app.ask import AskService
     from chatmemory.app.asks.answering import ObligationAnswerService
-    from chatmemory.app.conversation import ConversationStore
     from chatmemory.app.limits import RateLimiter
     from tests.unit.fakes import FakeChannel, FakeGuild, FakeMember
 
@@ -659,7 +658,6 @@ def _ask_service(store: FakeAskStore) -> tuple[object, RecordingAnswers]:
                 ObligationService(store), retrieval, clock=lambda: NOW
             ),
             limiter=RateLimiter(),
-            conversations=ConversationStore(),
         ),
         retrieval,
     )

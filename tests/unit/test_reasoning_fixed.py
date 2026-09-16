@@ -28,7 +28,13 @@ from chatmemory.app.reasoning.gate import (
     CoverageBucket,
     RelevanceGate,
 )
-from chatmemory.app.reasoning.ports import Grounded, Plan, RetrievalResult
+from chatmemory.app.reasoning.ports import (
+    NO_CONTEXT,
+    Grounded,
+    Plan,
+    PromptContext,
+    RetrievalResult,
+)
 from chatmemory.app.reasoning.verdicts import Assessment, Verdict
 from chatmemory.domain.audience import Audience, DeliveryMode
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
@@ -149,9 +155,13 @@ class CitingSynthesizer:
         self._cite = cite
         self._text = text
         self.calls = 0
+        self.context = NO_CONTEXT
 
-    async def synthesize(self, question_text: str, items: Sequence[Evidence]) -> Grounded:
+    async def synthesize(
+        self, question_text: str, items: Sequence[Evidence], context: PromptContext
+    ) -> Grounded:
         self.calls += 1
+        self.context = context
         cited = tuple(self._cite) if self._cite is not None else tuple(i.window_id for i in items)
         return Grounded(text=self._text, cited_window_ids=cited, model_calls=1, prompt_tokens=200)
 
@@ -160,8 +170,10 @@ class FakePlanner:
     def __init__(self, *sub_questions: str, model_calls: int = 1) -> None:
         self._sub_questions = sub_questions
         self._model_calls = model_calls
+        self.context = NO_CONTEXT
 
-    async def plan(self, question_text: str, max_steps: int) -> Plan:
+    async def plan(self, question_text: str, max_steps: int, context: PromptContext) -> Plan:
+        self.context = context
         return Plan(
             sub_questions=self._sub_questions, model_calls=self._model_calls, prompt_tokens=50
         )

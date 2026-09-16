@@ -31,6 +31,11 @@ which is the one thing retrieved text can never forge. It is also always
 private -- ephemeral for a slash command, a direct message otherwise --
 because a prompt shown in a channel asks everyone present to approve on the
 requester's behalf, and the fastest clicker decides.
+
+`/forget` is the person's control over what the assistant remembers of their
+conversation. Like `/resolve` it takes whose history from the interaction and
+nothing else, and it answers privately: announcing in a channel that somebody
+erased what they asked would say something about what they asked.
 """
 
 from __future__ import annotations
@@ -43,7 +48,13 @@ import discord
 import structlog
 from discord import app_commands
 
-from chatmemory.app.ask import AskRequest, AskService, CorrectionRequest
+from chatmemory.app.ask import (
+    AskRequest,
+    AskService,
+    CorrectionRequest,
+    ForgetRequest,
+    conversation_location,
+)
 from chatmemory.app.asks.model import (
     AskKind,
     AskStatus,
@@ -115,12 +126,26 @@ CORRECTION_REFUSED = (
     "I can't close that one. Either there's no such ask, or it isn't yours to close."
 )
 
+FORGET_HERE = "here"
+FORGET_EVERYWHERE = "everywhere"
+
+MEMORY_UNAVAILABLE = "I don't keep conversation history here, so there's nothing to forget."
+
+
+def _forgotten_note(turns: int, summaries: int, everywhere: bool) -> str:
+    where = "everywhere" if everywhere else "in this conversation"
+    if not turns and not summaries:
+        return f"There was nothing to forget {where}."
+    return f"Done. I've forgotten what you asked me {where}."
+
+
 CAPABILITIES = (
     "I answer questions about what's been said in the channels you can read.\n"
     "Try: `what did people ask me today?`, `what happened in #infra this week?`\n"
     "Mention me with a question, use `/ask`, or send me a direct message.\n"
     "Use `/resolve` to close something I said was asked of you, or to tell me "
-    "it was never yours.\n\n"
+    "it was never yours.\n"
+    "I remember our conversation so follow-ups make sense; `/forget` erases it.\n\n"
     "Answers posted in a channel only use sources everyone here can read. "
     "Ask me in a DM to search everything *you* can read."
 )
@@ -128,6 +153,25 @@ CAPABILITIES = (
 
 def _person(user: discord.User | discord.Member) -> PersonRef:
     return PersonRef(PLATFORM, user.id)
+
+
+def forget_request(
+    requester: PersonRef, *, channel_id: int | None, in_guild: bool, everywhere: bool
+) -> ForgetRequest:
+    """Name the location exactly as `/ask` and a mention remember under.
+
+    Both key a conversation by the channel the question arrived in, and mark
+    it direct when there is no guild. A `/forget` that spelled it any other way
+    would report success over a conversation it never touched.
+    """
+    if everywhere:
+        return ForgetRequest(requester, None)
+    location_id = channel_id if channel_id is not None else requester.platform_user_id
+    # The same test `/ask` applies to decide a reply is not posted to a channel.
+    direct = not (in_guild and channel_id is not None)
+    return ForgetRequest(
+        requester, conversation_location(requester, location_id, direct=direct)
+    )
 
 
 def _source_of(citation: Citation) -> str:
@@ -497,7 +541,44 @@ class CyberFriendClient(discord.Client):
         # grows is one people stop reading, so the way out of it is not a
         # thing to make conditional on configuration somebody has to find.
         self.tree.add_command(self._build_resolve_command(), guild=guild)
+        # Registered unconditionally for the same reason: memory ships with its
+        # off switch, and a way out that depends on configuration is one that
+        # is missing on the deployment somebody needs it on.
+        self.tree.add_command(self._build_forget_command(), guild=guild)
         await self.tree.sync(guild=guild)
+
+    def _build_forget_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/forget`: erase the caller's own conversation, here or everywhere."""
+
+        @app_commands.command(
+            name="forget", description="Erase what I remember of our conversation"
+        )
+        @app_commands.describe(scope="Just this conversation, or everywhere")
+        @app_commands.choices(
+            scope=[
+                app_commands.Choice(name="This conversation", value=FORGET_HERE),
+                app_commands.Choice(name="Everywhere", value=FORGET_EVERYWHERE),
+            ]
+        )
+        async def forget(
+            interaction: discord.Interaction, scope: app_commands.Choice[str]
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            request = forget_request(
+                _person(interaction.user),
+                channel_id=interaction.channel_id,
+                in_guild=interaction.guild_id is not None,
+                everywhere=scope.value == FORGET_EVERYWHERE,
+            )
+            purge = await self._asks.forget(request)
+            note = (
+                MEMORY_UNAVAILABLE
+                if purge is None
+                else _forgotten_note(purge.turns, purge.summaries, request.location is None)
+            )
+            await interaction.followup.send(note, ephemeral=True)
+
+        return forget
 
     def _build_resolve_command(self) -> app_commands.Command[Any, ..., None]:
         """`/resolve`: the addressee's own word about their own ask.

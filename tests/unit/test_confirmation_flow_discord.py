@@ -48,7 +48,6 @@ from chatmemory.app.confirmation import (
     current_channel,
     seek_confirmation,
 )
-from chatmemory.app.conversation import ConversationStore
 from chatmemory.app.limits import RateLimiter
 from chatmemory.domain.audience import Audience, DeliveryMode
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
@@ -531,7 +530,6 @@ def ask_service(answers: object, desk: ConfirmationDesk | None) -> AskService:
         audiences=FixedAudiences(),  # type: ignore[arg-type]
         answers=answers,  # type: ignore[arg-type]
         limiter=RateLimiter(),
-        conversations=ConversationStore(),
         desk=desk,
     )
 

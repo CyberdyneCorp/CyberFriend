@@ -4,7 +4,7 @@ Runs exactly one replica. Two containers sharing a bot token both identify to
 the gateway and ingest every message twice; Discord does not error, so the
 duplication is silent. See docker-compose.yml.
 
-Eight concurrent jobs make up the process, each a loop that survives its own
+Nine concurrent jobs make up the process, each a loop that survives its own
 failures because none of them may take the others down:
 
   live         messages the gateway hands us, persisted as they arrive
@@ -15,6 +15,7 @@ failures because none of them may take the others down:
   extraction   asks read out of newly captured conversation
   ask backlog  asks read out of everything backfill imported
   ask state    open/answered/stale, applied from observed events only
+  memory       remembered conversation past its retention window, deleted
 
 Only the live loop is real-time. The rest are catch-up work whose whole point
 is that an outage costs time rather than fidelity.
@@ -57,9 +58,10 @@ from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.state import AskStateService
 from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
+from chatmemory.app.conversation import MemoryRetention
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
 from chatmemory.app.windowing import WindowBuilder
-from chatmemory.composition import build_ask_pipeline
+from chatmemory.composition import build_ask_pipeline, build_memory_retention
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
@@ -89,6 +91,9 @@ ASK_STATE_INTERVAL_SECONDS = 300.0
 # minute rather than as fast as the database can serve it. A channel that
 # stopped changing months ago pays one empty index scan a minute for it.
 BACKLOG_EXTRACTION_INTERVAL_SECONDS = 60.0
+# How often expired conversation memory is deleted. Hourly: a window measured
+# in days is honoured to within an hour, and a pass is two indexed deletes.
+MEMORY_RETENTION_INTERVAL_SECONDS = 3600.0
 
 
 def indexed_channels(settings: Settings) -> list[ChannelRef]:
@@ -324,6 +329,33 @@ async def ask_state_loop(
         await asyncio.sleep(interval)
 
 
+async def memory_retention_loop(
+    retention: MemoryRetention,
+    state: HealthState,
+    interval: float = MEMORY_RETENTION_INTERVAL_SECONDS,
+) -> None:
+    """Delete what people asked the assistant once it is past retention.
+
+    Here rather than in the bot because this is the process that runs sweeps,
+    and one sweeper is enough: the bot has replicas' worth of reasons to be
+    restarted, and a sweep that ran only between restarts would not run.
+    Runs before its first sleep, so a deploy that shortened the window takes
+    effect immediately.
+    """
+    while True:
+        try:
+            purged = await retention.sweep(datetime.now(UTC))
+            state.details["memory_retention"] = {
+                "turns": purged.turns,
+                "summaries": purged.summaries,
+                "last_run_at": time.time(),
+            }
+        except Exception:
+            # Expired rows stay until the next pass; nothing else depends on it.
+            log.exception("memory.retention_failed")
+        await asyncio.sleep(interval)
+
+
 # --- wiring -------------------------------------------------------------
 
 
@@ -443,6 +475,13 @@ async def main() -> None:
             ),
         )
         tasks.create_task(worker.run_forever(IDLE_SECONDS))
+
+        # Unconditional. Retention is part of what makes remembering a
+        # person's questions acceptable at all, so it is not something an
+        # operator can leave switched off by omission.
+        tasks.create_task(
+            memory_retention_loop(build_memory_retention(settings, engine), state)
+        )
 
         if asks is not None:
             # The point of the whole ask pipeline: without these tasks the

@@ -22,6 +22,12 @@ stack and the ask service is built from guild state, so this is the only place
 that holds both ends; `/resolve` is registered either way, and a process that
 skips this refuses every attempt to close an ask rather than silently
 pretending to have recorded one.
+
+Conversation memory is handed down the same way, and for the same reason: it
+is built over the answer stack's engine, and the ask service that recalls and
+remembers is built from guild state. `main` -> `build_bot` ->
+`build_ask_service` -> `AskService(conversations=...)` is the whole chain, and
+`tests/unit/test_memory_integration.py` reads it from this file down.
 """
 
 from __future__ import annotations
@@ -40,7 +46,13 @@ from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.app.ask import AskService
 from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.authorization import ConfirmationLedger
-from chatmemory.composition import ask_policy, build_answer_stack, build_ask_service
+from chatmemory.app.conversation import Conversations
+from chatmemory.composition import (
+    ask_policy,
+    build_answer_stack,
+    build_ask_service,
+    build_conversations,
+)
 from chatmemory.config import Settings, get_settings
 from chatmemory.health import HealthState, spawn
 from chatmemory.ports.answers import AnswerService
@@ -70,6 +82,7 @@ def build_bot(
     search: SearchBackend | None = None,
     confirmations: ConfirmationLedger | None = None,
     corrections: CorrectionService | None = None,
+    conversations: Conversations | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -98,6 +111,9 @@ def build_bot(
         # tool is refused for want of a confirmation nobody can ever obtain --
         # the prompt would be built inside the run and shown to no one.
         confirmations=confirmations,
+        # The person's own conversation, recalled before answering and
+        # remembered after. Without it every follow-up arrives with no context.
+        conversations=conversations,
     )
     if corrections is not None:
         # `/resolve` is registered either way, so without this every attempt to
@@ -129,6 +145,10 @@ async def main() -> None:
         # through. Without this an ask can be extracted and never dismissed:
         # the correction path was built, tested and reachable from nothing.
         corrections=CorrectionService(PostgresAskStore(stack.engine), ask_policy(settings)),
+        # Over the same engine, so a turn is remembered through the pool the
+        # question was answered through. Omitting this is the failure the old
+        # in-memory store had: history recorded for a stage nobody wired.
+        conversations=build_conversations(settings, stack.engine),
     ).client
 
     original_on_ready = client.on_ready

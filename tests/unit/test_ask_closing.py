@@ -60,7 +60,6 @@ from chatmemory.app.asks.state import (
     canonical_reaction,
     is_acknowledging,
 )
-from chatmemory.app.conversation import ConversationStore
 from chatmemory.app.limits import RateLimiter
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from tests.unit.fakes import FakeChannel, FakeGuild, FakeMember
@@ -289,7 +288,6 @@ def service(store: FakeAskStore, *, wired: bool = True) -> AskService:
         audiences=DiscordAudienceResolver(guild(), indexed),
         answers=NeverAnswers(),  # type: ignore[arg-type]
         limiter=RateLimiter(),
-        conversations=ConversationStore(),
     )
     if wired:
         asks.attach_corrections(CorrectionService(store, AskPolicy()))

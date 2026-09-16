@@ -39,6 +39,12 @@ than the process: answering questions about Discord must not depend on
 somebody else's uptime. Every one of those outcomes is logged at startup,
 because the failure this project keeps having is not a crash -- it is a
 capability that was built, tested, and silently never reached.
+
+Conversation memory is assembled here too, over the engine the answer stack
+already holds: `build_conversations` for the bot, which recalls, remembers and
+summarises, and `build_memory_retention` for the ingest process's sweep. The
+summariser runs on the extraction model, because it runs after every few
+questions and nobody is waiting on it.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ from chatmemory.adapters.discord.acl import (
     DiscordAudienceResolver,
     GuildProvider,
 )
+from chatmemory.adapters.discord.profile import DiscordProfileResolver
 from chatmemory.adapters.llm.asks_extraction import (
     ExtractorConfig,
     OpenAICompatibleAskExtractor,
@@ -79,6 +86,7 @@ from chatmemory.adapters.mcp_client.config import (
 )
 from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
+from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
@@ -102,7 +110,12 @@ from chatmemory.app.authorization import (
     ToolEffect,
 )
 from chatmemory.app.confirmation import ConfirmationDesk, with_confirmation
-from chatmemory.app.conversation import ConversationStore
+from chatmemory.app.conversation import (
+    Conversations,
+    ConversationSummariser,
+    MemoryPolicy,
+    MemoryRetention,
+)
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.reasoning.capabilities import (
     LOOP_STAGES,
@@ -982,12 +995,62 @@ async def build_answer_stack(settings: Settings) -> AnswerStack:
     )
 
 
+def memory_policy(settings: Settings) -> MemoryPolicy:
+    return MemoryPolicy(
+        recent_turns=settings.memory_recent_turns,
+        summarise_after_turns=settings.memory_summarise_after_turns,
+    )
+
+
+def build_summary_model(settings: Settings) -> OpenAICompatibleChat:
+    """The cheap handle the summariser writes with.
+
+    Declared for no answering stage: it asks for plain text, which every chat
+    model provides, so there is no capability to check and no reason for a
+    summariser to be able to refuse the deployment.
+    """
+    return OpenAICompatibleChat(
+        api_key=settings.llm_api_key.get_secret_value(),
+        base_url=settings.llm_base_url,
+        model=settings.extraction_model,
+        stages=(),
+        provides=frozenset({ModelCapability.CHAT}),
+    )
+
+
+def build_conversations(
+    settings: Settings, engine: AsyncEngine, model: ChatModel | None = None
+) -> Conversations:
+    """Conversation memory for the bot, over the answer stack's engine."""
+    store = PostgresMemoryStore(engine)
+    policy = memory_policy(settings)
+    log.info(
+        "composition.conversation_memory",
+        recent_turns=policy.recent_turns,
+        summarise_after_turns=policy.summarise_after_turns,
+        summary_model=settings.extraction_model,
+    )
+    return Conversations(
+        store,
+        ConversationSummariser(store, model or build_summary_model(settings), policy),
+        policy,
+    )
+
+
+def build_memory_retention(settings: Settings, engine: AsyncEngine) -> MemoryRetention:
+    """The retention sweep, for the ingest process."""
+    return MemoryRetention(
+        PostgresMemoryStore(engine), timedelta(days=settings.memory_retention_days)
+    )
+
+
 def build_ask_service(
     settings: Settings,
     guild: GuildProvider,
     answers: AnswerService,
     search: SearchBackend | None = None,
     confirmations: ConfirmationLedger | None = None,
+    conversations: Conversations | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -1001,7 +1064,13 @@ def build_ask_service(
         audiences=DiscordAudienceResolver(guild, indexed),
         answers=answers,
         limiter=RateLimiter(),
-        conversations=ConversationStore(),
+        # None only for a caller that builds a surface without a database. The
+        # bot process passes one; `test_memory_integration` proves it from the
+        # entrypoint down.
+        conversations=conversations,
+        # Reads the same cached member the permission resolver reads, and only
+        # ever for the asker: there is no call here that takes anyone else.
+        profiles=DiscordProfileResolver(guild),
         # Without this the withheld-evidence notice is built, tested, and
         # structurally unable to fire: retrieval is pre-scoped to
         # asker INTERSECT audience, so nothing is ever dropped later for the

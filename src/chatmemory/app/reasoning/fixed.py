@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from chatmemory.app.reasoning.budgets import Budget, BudgetLedger
 from chatmemory.app.reasoning.contract import (
@@ -43,8 +43,9 @@ from chatmemory.app.reasoning.policy import (
 )
 from chatmemory.app.reasoning.ports import Critic, RetrievalTool, Synthesizer
 from chatmemory.app.reasoning.scope import retrieval_viewer
+from chatmemory.app.reasoning.stages import prompt_context
 from chatmemory.app.reasoning.verdicts import Assessment, Verdict
-from chatmemory.domain.identity import Viewer
+from chatmemory.domain.identity import ChannelRef, Viewer
 from chatmemory.domain.search import SearchQuery
 from chatmemory.ports.answers import Answer, Question
 
@@ -303,7 +304,12 @@ async def write_answer(
     citations at all is not delivered as an answer -- saying nothing was
     found is better than asserting something nothing supports.
     """
-    grounded = await synthesizer.synthesize(question.text, evidence.items)
+    # The asker's profile and permitted memory ride along as fenced context.
+    # They cannot become citations: citations are resolved below against the
+    # window ids this run retrieved, and memory carries none.
+    grounded = await synthesizer.synthesize(
+        question.text, evidence.items, prompt_context(question)
+    )
     spend.charge_model_call(grounded.prompt_tokens, grounded.model_calls)
     citations = evidence.citations(grounded.cited_window_ids)
     if not citations:
@@ -359,7 +365,10 @@ async def finish_run(
         )
     status = RunStatus.ABSTAINED if answer.abstained else RunStatus.ANSWERED
     return RunOutcome(
-        answer=answer,
+        # Every channel the run held evidence from, cited or not. Memory
+        # records this as the turn's provenance: a sentence can paraphrase a
+        # window without citing it, and must not outlive a revocation for it.
+        answer=replace(answer, consulted_channels=consulted_channels(evidence)),
         record=RunRecord(
             path=path,
             status=status,
@@ -391,10 +400,22 @@ def _recorded_cause(gathered: GatherResult, abstained: bool) -> TerminalCause:
     return TerminalCause.ACCESS_BLOCKED if gathered.access_blocked else TerminalCause.CORPUS_EMPTY
 
 
+def consulted_channels(evidence: EvidenceLedger) -> frozenset[ChannelRef]:
+    """The channels a run's evidence came from, external sources included.
+
+    External evidence is filed under `ChannelRef(source_system, 0)`, and it is
+    kept here rather than filtered: whether such a source can be re-checked
+    later is memory's decision to make, and it cannot make it about a channel
+    it was never told about.
+    """
+    return frozenset(item.channel for item in evidence.items)
+
+
 def failed_run(path: AnswerPath, spend: BudgetLedger, detail: str) -> RunOutcome:
     """A dependency failure. Reported as a failure, never as "found nothing"."""
     return RunOutcome(
-        answer=failure_answer(),
+        # Nothing was retrieved, so the reply rests on no channel.
+        answer=replace(failure_answer(), consulted_channels=frozenset()),
         record=RunRecord(
             path=path,
             status=RunStatus.FAILED,

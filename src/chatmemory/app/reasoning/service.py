@@ -7,6 +7,12 @@ comparable and the routing decision stays visible in the record.
 Retrieval scope is not this class's decision either: both paths derive their
 viewer from the question's audience through `scope.retrieval_viewer`, and
 neither accepts one from outside.
+
+A question asked mid-conversation goes to the loop. Routing is lexical and
+reads the question alone, and "and last month?" reads like a single lookup --
+for nothing, because the fixed path retrieves with the question's own words.
+Only the loop has a planner, and the planner is the one stage that can turn a
+follow-up into a lookup with its subject spelled out.
 """
 
 from __future__ import annotations
@@ -36,6 +42,13 @@ from chatmemory.app.reasoning.stages import ModelCritic, ModelPlanner, ModelSynt
 from chatmemory.app.routing import Route, RoutingDecision, classify
 from chatmemory.ports.answers import Answer, Question
 
+CONVERSATION_ROUTE = "conversation_route"
+"""Decision name recorded when earlier turns send a question to the loop.
+
+Separate from the classifier's own `route` decision, so a record still says
+what the words alone would have chosen.
+"""
+
 
 class ReasoningAnswerService:
     """Classify, answer by the chosen path, record what happened."""
@@ -58,10 +71,19 @@ class ReasoningAnswerService:
     async def answer_run(self, question: Question) -> RunOutcome:
         """The same work as `answer`, returning the operator record too."""
         routing = self._classify(question.text)
-        outcome = await (
-            self._loop if routing.route is Route.LOOP else self._fixed
-        ).run(question)
         decisions = [_route_decision(routing)]
+        route = routing.route
+        if route is Route.FIXED and not question.memory.empty:
+            route = Route.LOOP
+            decisions.append(
+                Decision(
+                    CONVERSATION_ROUTE,
+                    str(Route.LOOP),
+                    DecisionMaker.DRIVER,
+                    detail="permitted_memory_present",
+                )
+            )
+        outcome = await (self._loop if route is Route.LOOP else self._fixed).run(question)
 
         # The fixed path searches the corpus and nothing else, and it carries
         # nearly every question -- which left every external tool unreachable
@@ -75,7 +97,7 @@ class ReasoningAnswerService:
         # they have none. The loop already calls tools once per run under its
         # own budget, so this reuses that path rather than growing a second.
         if (
-            routing.route is Route.FIXED
+            route is Route.FIXED
             and outcome.record.status is RunStatus.ABSTAINED
             and self._loop.can_reach_outside
         ):

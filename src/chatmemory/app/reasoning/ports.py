@@ -162,10 +162,31 @@ class Plan:
     prompt_tokens: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class PromptContext:
+    """What a prompt may be told besides the question and the evidence.
+
+    Both fields are blocks already fenced as data -- the asker's own profile,
+    and their permitted earlier turns in this location -- or "" when there is
+    nothing to say. They are rendered per prompt, so each carries a fence id
+    drawn for that prompt alone.
+
+    Required on the planner and the synthesiser rather than defaulted: a stage
+    that could be called without it is a stage the memory feature can be
+    silently disconnected from, which is how this project's features die.
+    """
+
+    asker: str = ""
+    memory: str = ""
+
+
+NO_CONTEXT = PromptContext()
+
+
 class Planner(Protocol):
     """Splits a question into separable lines of enquiry."""
 
-    async def plan(self, question: str, max_steps: int) -> Plan: ...
+    async def plan(self, question: str, max_steps: int, context: PromptContext) -> Plan: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +204,9 @@ class Grounded:
 
 
 class Synthesizer(Protocol):
-    async def synthesize(self, question: str, evidence: Sequence[Evidence]) -> Grounded: ...
+    async def synthesize(
+        self, question: str, evidence: Sequence[Evidence], context: PromptContext
+    ) -> Grounded: ...
 
 
 class Reranker(Protocol):
