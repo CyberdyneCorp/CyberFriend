@@ -4,7 +4,7 @@ Runs exactly one replica. Two containers sharing a bot token both identify to
 the gateway and ingest every message twice; Discord does not error, so the
 duplication is silent. See docker-compose.yml.
 
-Five concurrent jobs make up the process, each a loop that survives its own
+Seven concurrent jobs make up the process, each a loop that survives its own
 failures because none of them may take the others down:
 
   live         messages the gateway hands us, persisted as they arrive
@@ -12,9 +12,18 @@ failures because none of them may take the others down:
   reconcile    edits and deletions that happened while we were not running
   windows      retrieval units rebuilt from newly captured messages
   embeddings   the backlog of windows without a current vector
+  extraction   asks read out of newly captured conversation
+  ask state    open/answered/stale, applied from observed events only
 
 Only the live loop is real-time. The rest are catch-up work whose whole point
 is that an outage costs time rather than fidelity.
+
+Extraction is here rather than on the query path on purpose: extracting when
+somebody asks repeats identical work on every question, costs a full model run
+each time, and can only see whatever retrieval happened to surface. It is also
+the job whose failure is quietest -- a dead extractor and a quiet server look
+identical from outside, because "nothing outstanding" is a plausible answer --
+so it reports its own progress on the health endpoint.
 """
 
 from __future__ import annotations
@@ -22,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import structlog
@@ -39,8 +48,11 @@ from chatmemory.adapters.discord.source import (
 )
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.postgres import PostgresStore
+from chatmemory.app.asks.state import AskStateService
+from chatmemory.app.asks.worker import ExtractionWorker
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
 from chatmemory.app.windowing import WindowBuilder
+from chatmemory.composition import build_ask_pipeline
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
@@ -59,6 +71,11 @@ RECONCILE_INTERVAL_SECONDS = 900.0
 RECONCILE_LOOKBACK = timedelta(hours=24)
 WINDOW_BATCH = 500
 IDLE_SECONDS = 5.0
+# How often open asks are re-examined against what has since been observed.
+# Minutes rather than seconds: every transition comes from a reply or a
+# reaction that is already stored, so a pass is a few statements over rows
+# that changed, and nothing is lost by running it on a cadence.
+ASK_STATE_INTERVAL_SECONDS = 300.0
 
 
 def indexed_channels(settings: Settings) -> list[ChannelRef]:
@@ -69,12 +86,22 @@ def indexed_channels(settings: Settings) -> list[ChannelRef]:
 
 
 async def live_loop(
-    source: DiscordChatSource, service: IngestService, state: HealthState
+    source: DiscordChatSource,
+    service: IngestService,
+    state: HealthState,
+    extraction: ExtractionWorker | None = None,
 ) -> None:
     async for message in source.stream():
         try:
             if await service.capture(message):
                 state.last_message_ingested_at = time.time()
+                if extraction is not None:
+                    # After the capture and only on success: an ask row points
+                    # at the message row, so extracting from a message the
+                    # store has not written has nowhere to point. `submit`
+                    # neither blocks nor raises -- a backlogged extractor must
+                    # cost asks, never ingestion.
+                    extraction.submit(message)
         except Exception:
             # One unstorable message must not end live capture. Reconciliation
             # re-reads recent history, so the loss is repaired rather than
@@ -198,6 +225,62 @@ async def window_loop(
             await asyncio.sleep(idle)
 
 
+async def extraction_loop(
+    worker: ExtractionWorker,
+    state: HealthState,
+    idle: float = IDLE_SECONDS,
+) -> None:
+    """Extract asks from captured conversation, for as long as the process runs.
+
+    Shaped like the embedding worker, and for the same reason: a pass that
+    dies on one bad batch stops extracting entirely, and the only symptom is
+    that obligations quietly stop appearing -- which reads as "nobody asked me
+    anything" rather than as a fault. The worker absorbs a failing batch; this
+    absorbs everything else, including a failure to reach the store at all.
+
+    Progress is published on every iteration rather than only when something
+    was extracted, so a stalled extractor is visible as a queue that is not
+    draining instead of as an absence of output.
+    """
+    while True:
+        try:
+            done = await worker.run_once()
+        except Exception:
+            log.exception("asks.extraction_pass_failed")
+            done = 0
+        state.details["asks_extraction"] = worker.progress.as_dict()
+        if done == 0:
+            await asyncio.sleep(idle)
+
+
+async def ask_state_loop(
+    asks: AskStateService,
+    state: HealthState,
+    interval: float = ASK_STATE_INTERVAL_SECONDS,
+) -> None:
+    """Age and close asks from events that were observed, never from judgement.
+
+    Without this pass an ask stays open forever: the replies and reactions
+    that answer it are already in the corpus, but nothing looks at them, so
+    "what do I need to do" keeps reporting work that was finished weeks ago --
+    which is the fastest way to make somebody stop reading the list.
+    """
+    while True:
+        try:
+            refreshed = await asks.refresh(datetime.now(UTC))
+            state.details["asks_state"] = {
+                "answered_by_reply": refreshed.answered_by_reply,
+                "answered_by_reaction": refreshed.answered_by_reaction,
+                "marked_stale": refreshed.marked_stale,
+                "last_run_at": time.time(),
+            }
+        except Exception:
+            # State is derived, so a failed pass costs freshness rather than
+            # data: the next one re-derives everything from the same rows.
+            log.exception("asks.state_refresh_failed")
+        await asyncio.sleep(interval)
+
+
 # --- wiring -------------------------------------------------------------
 
 
@@ -259,9 +342,23 @@ async def main() -> None:
     handler = GatewayEventHandler(sink=service, feed=source)
     client = IngestClient(handler, settings.discord_guild_id, connection_changed)
 
+    # Built before the TaskGroup so the live loop can be handed the worker it
+    # feeds. None only when an operator has switched extraction off, which is
+    # said out loud below: "obligations are empty" and "extraction is off" are
+    # indistinguishable from the answer side, and one of them is a decision
+    # somebody made.
+    asks = build_ask_pipeline(settings, engine) if settings.ask_extraction_enabled else None
+    if asks is None:
+        log.warning(
+            "ingest.ask_extraction_disabled",
+            hint="ASK_EXTRACTION_ENABLED=false; nothing will answer obligation questions",
+        )
+
     async with asyncio.TaskGroup() as tasks:
         tasks.create_task(client.start(settings.discord_token.get_secret_value()))
-        tasks.create_task(live_loop(source, service, state))
+        tasks.create_task(
+            live_loop(source, service, state, asks.worker if asks else None)
+        )
         tasks.create_task(backfill_loop(service, channels, state, ready=gateway_ready))
 
         # Unconditional, like windowing and embedding below, and for the same
@@ -291,6 +388,14 @@ async def main() -> None:
             ),
         )
         tasks.create_task(worker.run_forever(IDLE_SECONDS))
+
+        if asks is not None:
+            # The point of the whole ask pipeline: without these two tasks the
+            # package is code nothing runs, no `ask` row is ever written, and
+            # "what did people ask me today" is answered by similarity search
+            # over windows -- which is the failure this feature exists to fix.
+            tasks.create_task(extraction_loop(asks.worker, state))
+            tasks.create_task(ask_state_loop(asks.state, state))
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from chatmemory.adapters.discord.acl import LiveGuild, PermissionCaches, _Guild
 from chatmemory.adapters.discord.bot import CyberFriendClient
 from chatmemory.adapters.discord.gateway import attach_permission_listeners
 from chatmemory.app.ask import AskService
+from chatmemory.app.authorization import ConfirmationLedger
 from chatmemory.composition import build_answer_stack, build_ask_service
 from chatmemory.config import Settings, get_settings
 from chatmemory.health import HealthState, spawn
@@ -55,7 +56,10 @@ class BotGraph:
 
 
 def build_bot(
-    settings: Settings, answers: AnswerService, search: SearchBackend | None = None
+    settings: Settings,
+    answers: AnswerService,
+    search: SearchBackend | None = None,
+    confirmations: ConfirmationLedger | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -74,7 +78,17 @@ def build_bot(
         # against fakes, not to re-describe discord.py's type hierarchy.
         return cast(_Guild | None, client.get_guild(settings.discord_guild_id))
 
-    asks = build_ask_service(settings, LiveGuild(provider, caches), answers, search=search)
+    asks = build_ask_service(
+        settings,
+        LiveGuild(provider, caches),
+        answers,
+        search=search,
+        # The federation's confirmation ledger, so the desk this ask service
+        # opens writes where the invoke-time gate reads. Without it a mutating
+        # tool is refused for want of a confirmation nobody can ever obtain --
+        # the prompt would be built inside the run and shown to no one.
+        confirmations=confirmations,
+    )
     client = CyberFriendClient(asks, settings.discord_guild_id)
     attach_permission_listeners(client, caches)
     return BotGraph(client=client, asks=asks, caches=caches)
@@ -90,7 +104,12 @@ async def main() -> None:
     # `search` is what lets the withheld-evidence notice fire at all: it
     # probes the gap between what the asker may read and what the audience
     # may. Without it the notice is unreachable in the running process.
-    client = build_bot(settings, stack.answers, search=stack.search).client
+    client = build_bot(
+        settings,
+        stack.answers,
+        search=stack.search,
+        confirmations=stack.federation.confirmations if stack.federation else None,
+    ).client
 
     original_on_ready = client.on_ready
 

@@ -61,6 +61,31 @@ class Settings(BaseSettings):
     # pydantic-settings JSON-decodes the value before any validator runs.
     chat_model_capabilities: Annotated[frozenset[str], NoDecode] = frozenset()
 
+    # --- Asks ----------------------------------------------------------
+    # Extraction is a standing cost proportional to server traffic rather
+    # than to usage, so an operator has to be able to stop paying it without
+    # redeploying a different image. Default on: a deployment that wired
+    # extraction and then ran with it disabled by default would be the same
+    # feature-that-never-runs defect this exists to close.
+    ask_extraction_enabled: bool = True
+
+    # Presentation threshold, not storage and not authorization. A
+    # sub-threshold extraction is still recorded -- that is how the threshold
+    # gets tuned against reality -- it simply never reaches an answer. Raising
+    # it trades recall for precision, which is the direction this feature
+    # errs: a false "you need to do X" costs trust in every other entry.
+    ask_min_confidence: float = 0.6
+
+    # When an unanswered ask becomes stale. Stale, never closed: an ask nobody
+    # answered in three weeks is exactly what somebody asking "what do I need
+    # to do" wants to see.
+    ask_stale_after_days: int = 21
+
+    # Messages buffered per channel before a batch is handed to extraction.
+    # Roughly a window's worth: enough preceding conversation for the model to
+    # tell a follow-up from an opener.
+    ask_extraction_window_messages: int = 20
+
     # --- Federation (optional) -----------------------------------------
     # External MCP servers CyberFriend may reach, as `name=target` entries,
     # space- or comma-separated: "issues=https://issues.internal/mcp". Empty
@@ -150,6 +175,26 @@ class Settings(BaseSettings):
     def _positive_dimensions(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("embedding_dimensions must be positive")
+        return v
+
+    @field_validator("ask_min_confidence")
+    @classmethod
+    def _confidence_is_a_probability(cls, v: float) -> float:
+        """Refused rather than clamped.
+
+        A threshold of 2.0 silently reports nothing, and "the obligations
+        feature returns nothing" is indistinguishable from "nobody asked me
+        anything" -- which is the failure this project keeps shipping.
+        """
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("ask_min_confidence must be between 0 and 1")
+        return v
+
+    @field_validator("ask_stale_after_days", "ask_extraction_window_messages")
+    @classmethod
+    def _positive_ask_setting(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be positive")
         return v
 
 

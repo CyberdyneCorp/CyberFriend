@@ -27,6 +27,7 @@ from chatmemory.app.asks.model import (
     to_person,
 )
 from chatmemory.domain.identity import PersonRef
+from chatmemory.domain.messages import Message
 
 #: Label used when several people were mentioned. Recording the group is the
 #: honest answer; picking one of them is the bug this exists to avoid.
@@ -165,3 +166,55 @@ _NOT_A_NAME = frozenset(
         "the recipient",
     }
 )
+
+
+class ObservedDirectory:
+    """A directory that learns names from the conversation as it arrives.
+
+    The ingest process has no roster to build a `StaticDirectory` from: it
+    holds a gateway connection for messages, not a member list, and the people
+    an ask can name are exactly the people who are talking. So names are
+    learned from the messages themselves -- `author_display` is what the
+    platform said about the author at the time -- and the same ambiguity rule
+    applies as everywhere else: a name seen for two different people resolves
+    to nobody, permanently, rather than to whoever was seen first.
+
+    Without this, `resolve` is always None and every ask that names somebody in
+    prose ("can leo take this") is recorded UNATTRIBUTED. That is the safe
+    direction, but it is also most of the asks the feature exists for.
+    """
+
+    def __init__(self, max_names: int = 5000) -> None:
+        # Bounded because this lives in a long-running process and grows with
+        # the number of distinct display names ever seen, which nothing else
+        # bounds. Past the cap it stops learning rather than starts forgetting:
+        # dropping a known name would make resolution depend on how recently
+        # somebody spoke.
+        self._max = max_names
+        self._index: dict[str, PersonRef] = {}
+        self._ambiguous: set[str] = set()
+
+    def observe(self, message: Message) -> None:
+        """Learn the author's display name, if it is usable."""
+        self.learn(message.author_display, message.author)
+
+    def learn(self, name: str, person: PersonRef) -> None:
+        key = normalise_name(name)
+        if not key or key in self._ambiguous:
+            return
+        known = self._index.get(key)
+        if known == person:
+            return
+        if known is not None:
+            # Two people, one name. Neither can be resolved from it again.
+            del self._index[key]
+            self._ambiguous.add(key)
+            return
+        if len(self._index) < self._max:
+            self._index[key] = person
+
+    def resolve(self, name: str) -> PersonRef | None:
+        return self._index.get(normalise_name(name))
+
+    def __len__(self) -> int:
+        return len(self._index)

@@ -27,13 +27,14 @@ Only the operator's allowlist can mark a tool read-only. See `_effect_for`.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import structlog
 
 from chatmemory.adapters.mcp_client.config import AllowedTool, FederationConfig
 from chatmemory.adapters.mcp_client.session import DiscoveredTool
 from chatmemory.app.authorization import ToolEffect, ToolPermit
+from chatmemory.app.reasoning.ports import EMPTY_SCHEMA
 
 log = structlog.get_logger()
 
@@ -44,10 +45,18 @@ class FederationStartupError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class RegisteredTool:
-    """An allowlisted tool that a reachable server actually provides."""
+    """An allowlisted tool that a reachable server actually provides.
+
+    Carries the server's argument schema beside its description, because the
+    two travel to the same place: routing hands both to the run, and a model
+    offered a name with no argument shape can only guess. The schema is
+    still only a description of a call -- the permit next to it is what
+    decides whether the call may happen.
+    """
 
     permit: ToolPermit
     description: str
+    input_schema: Mapping[str, object] = field(default_factory=lambda: EMPTY_SCHEMA)
 
     @property
     def qualified_name(self) -> str:
@@ -195,4 +204,9 @@ def _register_one(entry: AllowedTool, advertised: DiscoveredTool) -> RegisteredT
         # The description is used only for routing. It is text an external
         # server controls, so it never reaches a decision about permissions.
         description=advertised.description,
+        # Same standing as the description: it tells a caller what arguments
+        # exist, and nothing more. A server cannot widen what it may be asked
+        # to do by advertising a larger schema, because `_effect_for` above
+        # has already settled what this tool is allowed to be.
+        input_schema=advertised.input_schema,
     )
