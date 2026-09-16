@@ -50,6 +50,11 @@ ON CONFLICT (id) DO UPDATE SET
     content = EXCLUDED.content,
     edited_at = EXCLUDED.edited_at,
     search_tsv = EXCLUDED.search_tsv,
+    -- A new content revision, which is a message the extractor has not read.
+    -- Bumped here because this clause is the one place message text changes:
+    -- an edit that only re-marked the message pending from the caller would
+    -- be pending exactly as often as somebody remembered to mark it.
+    asks_extraction_seq = message.asks_extraction_seq + 1,
     -- An edit un-deletes nothing, but a re-ingest of a live message must not
     -- resurrect a tombstone either.
     deleted_at = message.deleted_at
@@ -433,4 +438,99 @@ ON CONFLICT (id) DO UPDATE SET
 UPDATE_PERSON_DISPLAY = text("""
 UPDATE person SET display_name = :n
 WHERE id = :id AND display_name IS DISTINCT FROM :n
+""")
+
+
+# --- ask extraction scheduling ------------------------------------------
+#
+# Extraction is billed per message, so the unit of work here is a message and
+# not a channel. A per-channel watermark would be wrong in the direction that
+# costs money: backfill walks history newest-first, so every page imported
+# moves the watermark backwards, and the next pass would pay for a model call
+# on everything newer than it all over again.
+#
+# The generation is migration 0009's mechanism applied per message, and it is
+# here for the same race. Extraction takes a model call and seconds; an edit
+# landing in that gap must not be swallowed by the mark that follows it.
+# `asks_extraction_seq` counts content revisions and is bumped by the upsert
+# above; `asks_extracted_seq` is the revision that was actually read. Pending
+# is the two differing, so recording a generation the message has since moved
+# past leaves it pending rather than clearing work never done -- which also
+# means the mark cannot be written without the generation in hand.
+
+MESSAGES_PENDING_EXTRACTION = text("""
+SELECT m.id, m.channel_id, m.content, m.created_at, m.edited_at,
+       m.reply_to_id, m.thread_id, m.asks_extraction_seq,
+       COALESCE((
+           SELECT p.platform_user_id FROM person_platform_id p
+           WHERE p.person_id = m.author_person_id AND p.platform = :platform
+           ORDER BY p.platform_user_id LIMIT 1
+       ), m.author_person_id) AS platform_user_id,
+       -- The name the directory learns people by, so a backfilled ask that
+       -- names somebody in prose can still resolve to them.
+       (SELECT pe.display_name FROM person pe WHERE pe.id = m.author_person_id)
+           AS author_display,
+       -- Mentions decide both whether a message is worth a model call at all
+       -- and who the ask fell to. The live path is handed them by the
+       -- gateway; a message read back out of the corpus has to bring its own,
+       -- or every backfilled "@bob can you..." arrives looking like chatter.
+       COALESCE((
+           SELECT array_agg(DISTINCT pp.platform_user_id)
+           FROM message_mention mm
+           JOIN person_platform_id pp
+             ON pp.person_id = mm.person_id AND pp.platform = :platform
+           WHERE mm.message_id = m.id
+       ), ARRAY[]::bigint[]) AS mention_ids
+FROM message m
+JOIN channel c ON c.id = m.channel_id
+WHERE m.deleted_at IS NULL
+  AND m.asks_extracted_seq IS DISTINCT FROM m.asks_extraction_seq
+  -- Indexing scope, bound from the operator's configuration rather than read
+  -- from `channel.is_indexed`. That column is written TRUE when a channel is
+  -- first seen and never written again by anything, so a predicate on it
+  -- excludes nothing: a channel removed from scope would go on being read and
+  -- paid for. Binding the ids is also how every viewer-scoped read works.
+  AND m.channel_id = ANY(:indexed_channel_ids)
+  -- Young messages belong to the live pass. One captured seconds ago is
+  -- probably still buffered in the extraction worker's window and about to be
+  -- extracted from there, so reading it here as well buys the same model call
+  -- twice. Anything the live pass drops or fails on arrives here a few minutes
+  -- later, and history is older than this by many orders of magnitude.
+  AND m.created_at < now() - INTERVAL '5 minutes'
+-- Newest first: the obligations somebody still cares about are the recent
+-- ones, and history imports newest-first too, so the backlog drains in the
+-- order it becomes answerable.
+ORDER BY m.created_at DESC
+LIMIT :limit
+""")
+
+RECORD_EXTRACTION = text("""
+UPDATE message m
+-- COALESCE because the live path has no generation to give: capture hands it
+-- a message rather than reading a row, so it records whatever revision is
+-- current. That is no weaker than the behaviour it replaces -- a live message
+-- was extracted exactly once and never revisited -- and it is what keeps the
+-- backlog pass from paying a second time for everything the stream delivered.
+SET asks_extracted_seq = COALESCE(b.seq, m.asks_extraction_seq)
+FROM unnest(CAST(:ids AS bigint[]), CAST(:generations AS bigint[])) AS b(id, seq)
+WHERE m.id = b.id
+""")
+
+# Capped on purpose. The number a reader needs is "is the backlog draining",
+# which "1000+" answers as well as an exact count does, and the exact count is
+# a scan of every pending row on a corpus that may have millions of them.
+PENDING_EXTRACTION_COUNT = text("""
+SELECT count(*) FROM (
+    SELECT 1 FROM message m
+    JOIN channel c ON c.id = m.channel_id
+    WHERE m.deleted_at IS NULL
+      AND m.asks_extracted_seq IS DISTINCT FROM m.asks_extraction_seq
+      -- The same predicates the pass itself reads on, or the figure reports a
+      -- backlog that is never going to drain because nothing will read it.
+      -- Scope comes from the operator's configuration: `channel.is_indexed`
+      -- is set TRUE once and never unset, so reading it excludes nothing.
+      AND m.channel_id = ANY(:indexed_channel_ids)
+      AND m.created_at < now() - INTERVAL '5 minutes'
+    LIMIT :cap
+) pending
 """)

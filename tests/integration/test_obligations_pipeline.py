@@ -356,3 +356,52 @@ async def test_only_messages_with_a_plausible_addressee_are_paid_for(
         message(19, ALICE, "can you take a look at the migration"),
     )
     assert [c.message.platform_message_id for c in pipeline.extractor.calls] == [19]
+
+
+async def test_a_reaction_predating_the_ask_does_not_close_it(
+    pipeline: Pipeline,
+) -> None:
+    """The acknowledgement has to come after the thing it acknowledges.
+
+    People react to messages all the time. Without the ordering guard, a tick
+    left for some earlier reason closes the ask the moment extraction creates
+    one -- the obligation is answered before anybody has read it.
+    """
+    await pipeline.capture(
+        message(
+            21,
+            ALICE,
+            "@bob can you review the migration?",
+            mentions=frozenset({BOB}),
+            thread_id=THREAD,
+        )
+    )
+
+    # Reacted an hour before the ask was recorded.
+    await pipeline.asks.record_reaction(
+        source_message_id=21, person=BOB, emoji="\u2705", at=TODAY - timedelta(hours=1)
+    )
+    await pipeline.state.refresh(NOW)
+
+    outstanding = await pipeline.ask(
+        "what do I need to do", viewer(BOB, OPEN_CH), OPEN_CH
+    )
+    assert outstanding.text != NOTHING_OUTSTANDING, "a stale reaction closed the ask"
+
+
+async def test_a_reaction_after_the_ask_does_close_it(pipeline: Pipeline) -> None:
+    """The guard must not break the case it exists to permit."""
+    await pipeline.capture(
+        message(
+            22,
+            ALICE,
+            "@bob can you review the migration?",
+            mentions=frozenset({BOB}),
+            thread_id=THREAD,
+        )
+    )
+    await pipeline.asks.record_reaction(
+        source_message_id=22, person=BOB, emoji="\u2705", at=TODAY + timedelta(minutes=5)
+    )
+    refreshed = await pipeline.state.refresh(NOW)
+    assert refreshed.answered_by_reaction == 1

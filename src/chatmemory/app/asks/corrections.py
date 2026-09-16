@@ -13,13 +13,19 @@ else's obligations done becomes a way to hide them.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import structlog
 
 from chatmemory.app.asks.model import (
+    OUTSTANDING,
     Ask,
+    AskPolicy,
     Correction,
     CorrectionOutcome,
     CorrectionResolution,
+    ObligationRequest,
+    ReportedAsk,
 )
 from chatmemory.app.asks.ports import AskStore
 from chatmemory.domain.identity import PersonRef, Viewer
@@ -39,8 +45,32 @@ def may_correct(ask: Ask, person: PersonRef) -> bool:
 
 
 class CorrectionService:
-    def __init__(self, store: AskStore) -> None:
+    def __init__(self, store: AskStore, policy: AskPolicy | None = None) -> None:
         self._store = store
+        self._policy = policy or AskPolicy()
+
+    async def correctable(self, viewer: Viewer, limit: int = 25) -> Sequence[ReportedAsk]:
+        """The viewer's own outstanding asks, so a surface can offer them.
+
+        Read through the same viewer-scoped predicate and the same confidence
+        threshold the answer path uses. Offering a sub-threshold extraction for
+        correction would defeat the threshold from the other side: the person
+        would be asked about a claim the system had already decided was too
+        weak to make.
+
+        Whether an ask can actually be corrected is still the store's
+        predicate, not this list. An ask addressed to a group is in nobody's
+        obligations, and one that reached a surface some other way is still
+        refused at the point of writing.
+        """
+        return await self._store.obligations(
+            viewer,
+            ObligationRequest(
+                statuses=OUTSTANDING,
+                min_confidence=self._policy.min_confidence,
+                limit=limit,
+            ),
+        )
 
     async def mark_done(self, viewer: Viewer, ask_key: str) -> CorrectionOutcome:
         return await self.correct(viewer, ask_key, CorrectionResolution.DONE)

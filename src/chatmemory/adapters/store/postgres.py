@@ -18,6 +18,7 @@ from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import DirtyChannel, Message, Window
 from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
 from chatmemory.ports.sources import EmbeddingClient
+from chatmemory.ports.store import PendingExtraction
 
 log = structlog.get_logger()
 
@@ -404,6 +405,65 @@ class PostgresStore:
                 sql.STORE_EMBEDDING,
                 {"window_id": window_id, "embedding": sql.vector_literal(embedding)},
             )
+
+    # --- ask extraction --------------------------------------------------
+
+    async def messages_pending_extraction(
+        self, limit: int, channels: Sequence[ChannelRef] = ()
+    ) -> Sequence[PendingExtraction]:
+        """Messages whose current revision nothing has extracted asks from.
+
+        Mentions come back with them, unlike every other read here: windowing
+        renders text and does not care who was tagged, while extraction cannot
+        work without it -- the mention is both the reason a message is worth a
+        model call and the strongest evidence of who the ask fell to.
+        """
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                sql.MESSAGES_PENDING_EXTRACTION,
+                {
+                    "limit": limit,
+                    "platform": PLATFORM,
+                    "indexed_channel_ids": [c.platform_channel_id for c in channels],
+                },
+            )
+            return [
+                PendingExtraction(
+                    message=replace(
+                        _message_from_row(r),
+                        mentions=frozenset(
+                            PersonRef(PLATFORM, int(uid))
+                            for uid in cast("list[int]", r["mention_ids"])
+                        ),
+                    ),
+                    generation=cast(int, r["asks_extraction_seq"]),
+                )
+                for r in rows.mappings()
+            ]
+
+    async def record_extraction(self, entries: Sequence[PendingExtraction]) -> int:
+        """Mark each message extracted as of the revision its caller read."""
+        if not entries:
+            return 0
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                sql.RECORD_EXTRACTION,
+                {
+                    "ids": [e.message.platform_message_id for e in entries],
+                    "generations": [e.generation for e in entries],
+                },
+            )
+            return result.rowcount or 0
+
+    async def pending_extraction_count(
+        self, cap: int = 1000, channels: Sequence[ChannelRef] = ()
+    ) -> int:
+        async with self._engine.connect() as conn:
+            row = await conn.execute(
+                sql.PENDING_EXTRACTION_COUNT,
+                {"cap": cap, "indexed_channel_ids": [c.platform_channel_id for c in channels]},
+            )
+            return int(row.scalar_one())
 
     async def get_cursor(self, channel: ChannelRef) -> int | None:
         async with self._engine.connect() as conn:

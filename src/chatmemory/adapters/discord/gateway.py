@@ -4,7 +4,7 @@
 discord.py, so the rules below are tested against plain objects.
 `IngestClient` is the thin discord.py subclass that feeds it.
 
-Three rules earn their place here:
+Four rules earn their place here:
 
 - **Raw delete events are handled, not just the cached ones.** discord.py only
   dispatches `on_message_delete` for messages still in its in-memory cache,
@@ -15,6 +15,12 @@ Three rules earn their place here:
   never stored is a no-op; failing to tombstone one we did store leaves
   deleted content retrievable. When the two are confused the safe direction is
   to write the tombstone.
+- **An acknowledging reaction is an ingest event, not a query-time one.**
+  The addressee ticking the message they were asked on is the one closing
+  signal that leaves no message behind, so if nothing here records it the ask
+  stays open for ever and the list only grows. Raw again, for the same reason
+  deletes are: the message being acknowledged is usually old enough to have
+  fallen out of discord.py's cache, which is exactly when it matters.
 - **The resolved-viewer cache is invalidated from here.** Permissions are
   resolved at query time precisely so a revoked role takes effect without a
   reindex; a cache that outlives the revocation would reintroduce the stale
@@ -71,6 +77,47 @@ class RawDeletePayload(Protocol):
 class RawBulkDeletePayload(Protocol):
     message_ids: set[int]
     channel_id: int
+
+
+class RawEmoji(Protocol):
+    """The emoji on a reaction event, as discord.py reports it."""
+
+    name: str | None
+    id: int | None
+
+
+class RawReactionPayload(Protocol):
+    message_id: int
+    user_id: int
+    emoji: RawEmoji
+
+
+class AskAcknowledgements(Protocol):
+    """Where a reaction that could close an ask is recorded.
+
+    A port rather than the service itself, so the event semantics below stay
+    testable without the ask package -- and so nothing in this file is tempted
+    to decide *whether* the reaction closes anything. That is a property of the
+    ask row, and it is settled by a SQL predicate.
+    """
+
+    async def record_reaction(
+        self, source_message_id: int, person: PersonRef, emoji: str, at: datetime
+    ) -> bool: ...
+
+
+def reaction_emoji(emoji: RawEmoji) -> str | None:
+    """The reaction as a plain character, or None when it cannot be one.
+
+    A custom server emoji is refused outright. It arrives with an id and a name
+    its uploader chose, so a guild that uploads any image at all under the name
+    `white_check_mark` would otherwise be able to close other people's
+    obligations with it -- the addressee check still holds, but the meaning of
+    the gesture would no longer be the one the spec names.
+    """
+    if emoji.id is not None:
+        return None
+    return emoji.name
 
 
 # --- resolved-permission caching ----------------------------------------
@@ -239,11 +286,27 @@ class GatewayEventHandler:
         feed: LiveFeed,
         caches: Iterable[CacheInvalidator] = (),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        asks: AskAcknowledgements | None = None,
     ) -> None:
         self._sink = sink
         self._feed = feed
         self._caches = tuple(caches)
         self._now = now
+        self._asks = asks
+
+    def acknowledge_asks_with(self, asks: AskAcknowledgements) -> None:
+        """Route acknowledging reactions to `asks`.
+
+        Attached after construction rather than passed in, because the ask
+        pipeline is built from the database engine and this handler is built
+        from the gateway, and the ingest process assembles them in that order.
+        Same shape, and the same reason, as `attach_permission_listeners`.
+
+        Not optional in practice: a process that never calls this receives
+        reaction events and drops them, so an ask can be extracted and can
+        never be closed by the one signal that leaves no message behind.
+        """
+        self._asks = asks
 
     async def on_message(self, raw: RawMessage) -> None:
         if raw.author.bot:
@@ -284,6 +347,26 @@ class GatewayEventHandler:
             await self._sink.handle_delete(message_id, at)
         log.info("gateway.bulk_delete", count=len(payload.message_ids))
 
+    async def on_reaction_add(self, payload: RawReactionPayload) -> None:
+        """Hand an acknowledging reaction over; ignore everything else.
+
+        Not gated on indexing scope, and not filtered by who reacted. The
+        store keeps a reaction only for a message it already holds, and only
+        the addressee's counts when the ask is closed -- so both questions are
+        answered where the answer lives, once, in SQL.
+        """
+        if self._asks is None:
+            return
+        emoji = reaction_emoji(payload.emoji)
+        if emoji is None:
+            return
+        await self._asks.record_reaction(
+            payload.message_id,
+            PersonRef(PLATFORM, payload.user_id),
+            emoji,
+            self._now(),
+        )
+
     def on_member_changed(self, person: PersonRef | None = None) -> None:
         """Roles or membership changed: that person's resolved view is stale."""
         for cache in self._caches:
@@ -316,6 +399,11 @@ class IngestClient(discord.Client):
         # body. members: so a member update tells us whose view went stale.
         intents.message_content = True
         intents.members = True
+        # reactions: stated rather than inherited from `default()`. A tick from
+        # the addressee is one of the two events that close an ask, and an
+        # intent silently dropped in a future refactor would show up only as
+        # obligations that never stop being reported.
+        intents.reactions = True
         super().__init__(intents=intents)
         self._handler = handler
         self._guild_id = guild_id
@@ -362,6 +450,17 @@ class IngestClient(discord.Client):
         self, payload: discord.RawBulkMessageDeleteEvent
     ) -> None:
         await self._handler.on_raw_bulk_delete(cast(RawBulkDeletePayload, payload))
+
+    async def on_raw_reaction_add(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        """The raw event only: a tick lands on a message, not on a cache entry.
+
+        `on_reaction_add` fires solely for messages discord.py still holds, and
+        an ask worth closing is usually hours or days old by the time somebody
+        acknowledges it -- which is to say, never cached.
+        """
+        await self._handler.on_reaction_add(cast(RawReactionPayload, payload))
 
     async def on_member_update(self, _before: discord.Member, after: discord.Member) -> None:
         self._handler.on_member_changed(PersonRef(PLATFORM, after.id))
