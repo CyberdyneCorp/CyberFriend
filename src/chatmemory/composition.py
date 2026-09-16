@@ -81,6 +81,7 @@ from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
+from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
 from chatmemory.app.ask import AskService
 from chatmemory.app.asks.answering import ObligationAnswerService
@@ -449,7 +450,11 @@ def build_federation_config(settings: Settings) -> FederationConfig | None:
     a malformed entry, a tool naming a server that is not configured. The
     caller decides what that costs; here it is simply not silently dropped.
     """
-    if not settings.federation_servers:
+    # Any registered tool needs a proposer, not only a remote one. Gating on
+    # MCP servers alone left a deployment with local web tools offering them
+    # every run and calling none -- the log said "offer_only" and the
+    # behaviour looked like a model that never wanted a tool.
+    if not settings.federation_servers and not settings.web_tools_enabled:
         return None
     return FederationConfig(
         servers=tuple(parse_server(s) for s in settings.federation_servers),
@@ -488,6 +493,22 @@ def report_federation(config: FederationConfig, registration: Registration) -> N
         )
 
 
+def web_tools_config(settings: Settings) -> WebToolsConfig:
+    """Operator settings, translated for the web adapter.
+
+    The key is unwrapped here and nowhere else: `WebToolsConfig` holds a
+    plain string because the provider needs one to sign a request, and the
+    narrower the place a secret is readable the fewer places can log it.
+    """
+    return WebToolsConfig(
+        serpapi_key=(
+            settings.serpapi_key.get_secret_value() if settings.serpapi_key else None
+        ),
+        max_calls_per_run=settings.web_max_calls_per_run,
+        timeout_seconds=settings.web_timeout_seconds,
+    )
+
+
 async def build_federation(
     settings: Settings,
     factory: SessionFactory | None = None,
@@ -512,6 +533,23 @@ async def build_federation(
     except FederationConfigurationError as exc:
         log.error("composition.federation.misconfigured", error=str(exc))
         return None
+
+    # Local providers -- Wikipedia, and SerpApi when a key is configured.
+    # They are not remote MCP servers, but they are governed by the same
+    # allowlist, routing, invoke-time authorization and audit, because a
+    # second ungoverned path for tools is exactly what that machinery
+    # exists to prevent. They register even when no MCP server is
+    # configured, which is the ordinary case for this deployment.
+    web = build_web_tools(web_tools_config(settings)) if settings.web_tools_enabled else None
+    if web is not None and web.providers:
+        config = web.merge_into(config or FederationConfig())
+        factory = web.factory(factory)
+        log.info(
+            "composition.web_tools.registered",
+            providers=sorted(web.providers),
+        )
+    elif settings.web_tools_enabled:
+        log.warning("composition.web_tools.none_available")
 
     if config is None:
         log.info("composition.federation.disabled", reason="no servers configured")
@@ -602,7 +640,11 @@ def build_tool_proposer(
     come from, and taking the bot down over it would make somebody else's
     capability a prerequisite for answering questions about Discord.
     """
-    if not settings.federation_servers:
+    # Any registered tool needs a proposer, not only a remote one. Gating on
+    # MCP servers alone left a deployment with local web tools offering them
+    # every run and calling none -- the log said "offer_only" and the
+    # behaviour looked like a model that never wanted a tool.
+    if not settings.federation_servers and not settings.web_tools_enabled:
         return None
     try:
         # Raises here, naming `tool_calling`, rather than as an endpoint's 400
