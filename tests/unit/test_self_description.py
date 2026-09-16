@@ -41,8 +41,17 @@ def q(text: str) -> Question:
 
 @pytest.mark.parametrize(
     "text",
-    ["What you can do ?", "what can you do?", "who are you", "o que você faz?",
-     "quem é você", "how do you work"],
+    [
+        "What you can do ?", "what can you do?", "who are you", "o que você faz?",
+        "quem é você", "how do you work",
+        # Missed by the phrase list. Each one sent the bot to its channels,
+        # where it found a colleague's crypto project and claimed its features.
+        "what tools are available?",
+        "What about Wikipedia, Internet access, or MCP ?",
+        "do you have internet access",
+        "quais ferramentas você tem?",
+        "can you use MCP",
+    ],
 )
 def test_self_description_questions_are_recognised(text: str) -> None:
     assert self_description_question(text)
@@ -55,6 +64,9 @@ def test_self_description_questions_are_recognised(text: str) -> None:
         "what did people ask me to do today",
         # Contains the phrase, and is about something else entirely.
         "what can you do about the deploy pipeline failing on staging every night",
+        # About the TEAM's tools, not the assistant's.
+        "what tools did the team decide to use for the migration last week",
+        "when is the espresso machine repair",
     ],
 )
 def test_other_questions_are_not(text: str) -> None:
