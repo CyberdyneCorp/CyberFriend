@@ -297,6 +297,37 @@ def named_period(text: str) -> Period | None:
     return None
 
 
+# Questions about the assistant itself. These must never reach retrieval: the
+# corpus is other people's conversations, and a search for "what can you do"
+# finds whatever somebody once wrote about some OTHER tool's features -- which
+# the bot then presented as its own, confidently claiming to calculate
+# cryptocurrency prices because a colleague had described a project that did.
+_SELF_DESCRIPTION_PATTERNS = (
+    "what can you do", "what you can do", "what do you do", "who are you",
+    "what are you", "how do you work", "how can you help", "what can i ask",
+    "help me use", "how do i use you",
+    # Portuguese, because this server speaks it.
+    "o que voce faz", "o que você faz", "o que voce pode", "o que você pode",
+    "quem e voce", "quem é você", "quem e você", "como voce funciona",
+    "como você funciona", "como posso usar",
+)
+
+
+def self_description_question(text: str) -> bool:
+    """Whether this asks what the assistant is or can do.
+
+    Deliberately narrow and phrase-based. A false negative costs a retrieval
+    that probably finds nothing; a false positive replaces a real question
+    with a capability list, which is the worse mistake.
+    """
+    lowered = " ".join(text.lower().replace("?", " ").split())
+    if len(lowered.split()) > 8:
+        # A long question that happens to contain one of these phrases is
+        # almost always about something else.
+        return False
+    return any(pattern in lowered for pattern in _SELF_DESCRIPTION_PATTERNS)
+
+
 def obligation_question(text: str) -> ObligationQuestion | None:
     """The obligation question being asked, or None for everything else.
 

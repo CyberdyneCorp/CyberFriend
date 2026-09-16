@@ -115,6 +115,27 @@ def _words(text: str) -> frozenset[str]:
     return frozenset(m.group().casefold() for m in _WORD.finditer(text))
 
 
+def keep_asker_words(text: str, question: str) -> str:
+    """`text` with every word the asker did not write removed.
+
+    The rooting check refuses a query containing any word the asker did not
+    type, which is the point -- it is what stops retrieved content leaving as
+    a search term. But a model reformulating a question for a search engine
+    routinely adds a helpful word of its own: asked "who wrote the novel
+    Dune", it proposed "Dune novel author", and "author" is not the asker's.
+    The call was refused and the question went unanswered.
+
+    Dropping those words rather than the whole call keeps the invariant
+    exactly -- everything that leaves is a word the asker wrote -- while
+    keeping the model's useful selection and ordering. It is not a loosening:
+    a word that was not in the question still cannot leave, whoever
+    proposed it.
+    """
+    allowed = _words(question)
+    kept = [m.group() for m in _WORD.finditer(text) if m.group().casefold() in allowed]
+    return " ".join(kept)
+
+
 @dataclass(frozen=True, slots=True)
 class ProvenancedQuery:
     """A query, and the question it must still be traceable to.

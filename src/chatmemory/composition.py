@@ -128,6 +128,7 @@ from chatmemory.app.reasoning.retrieval import (
 )
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.stages import ModelToolProposer
+from chatmemory.app.self_description import SelfDescriptionAnswerService
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import AnswerService
@@ -967,7 +968,14 @@ async def build_answer_stack(settings: Settings) -> AnswerStack:
         # windows surface is exactly how this feature fails, and it is why the
         # rows exist. Everything it does not claim reaches `reasoning`
         # unchanged.
-        answers=ObligationAnswerService(obligations, reasoning),
+        # Outermost, so "what can you do" is answered from configuration
+        # before anything can search the corpus for it.
+        answers=SelfDescriptionAnswerService(
+            ObligationAnswerService(obligations, reasoning),
+            external_tools=(
+                sorted(federation.federation.permits) if federation is not None else ()
+            ),
+        ),
         reasoning=reasoning,
         obligations=obligations,
         federation=federation,

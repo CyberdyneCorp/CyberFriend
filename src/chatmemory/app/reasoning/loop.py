@@ -180,6 +180,11 @@ def combine(results: Sequence[GatherResult]) -> GatherResult:
 class ReasoningLoop:
     """Plan, gather per sub-question, answer once from everything gathered."""
 
+    @property
+    def can_reach_outside(self) -> bool:
+        """Whether this loop has any external tool to try."""
+        return self._tools is not None
+
     def __init__(
         self,
         driver: CorrectiveDriver,
