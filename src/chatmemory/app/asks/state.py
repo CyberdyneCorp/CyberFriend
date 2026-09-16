@@ -68,8 +68,33 @@ class Reaction:
     at: datetime
 
 
+def _bare(emoji: str) -> str:
+    """`emoji` stripped of the selectors that only choose how it is drawn.
+
+    U+FE0F and U+FE0E ask for the emoji or the text presentation of the same
+    character, so "☑️" and "☑" are the same reaction wearing different bytes.
+    Which one arrives depends on the client that sent it.
+    """
+    return emoji.strip().replace("️", "").replace("︎", "")
+
+
+_BY_BARE: dict[str, str] = {_bare(e): e for e in ACKNOWLEDGING_REACTIONS}
+
+
+def canonical_reaction(emoji: str) -> str | None:
+    """The set member `emoji` denotes, or None when it acknowledges nothing.
+
+    Callers record the *canonical* form rather than what arrived, because the
+    statement that closes an ask compares the stored emoji against exactly this
+    set. A reaction kept in the other spelling would sit in the table for ever
+    and close nothing -- an ask that looks answered to the person who answered
+    it and open to everybody else.
+    """
+    return _BY_BARE.get(_bare(emoji))
+
+
 def is_acknowledging(emoji: str) -> bool:
-    return emoji.strip() in ACKNOWLEDGING_REACTIONS
+    return canonical_reaction(emoji) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,10 +187,21 @@ class AskStateService:
 
         Storing only acknowledging reactions keeps this from becoming a general
         record of who reacted to what, which is not what anyone consented to.
+
+        Whose reaction it was is not checked here, and must not be: the
+        addressee of an ask is a property of a row, and re-deciding it in the
+        adapter would be a second copy of the rule. `CLOSE_ANSWERED_BY_REACTION`
+        binds `person_id = addressee_person_id` as a predicate, so a reaction
+        from anybody else is stored and closes nothing.
+
+        Idempotent by construction. The same reaction arriving twice is one row
+        (the store conflicts it away) and one transition (the close only fires
+        on an ask that is still outstanding).
         """
-        if not is_acknowledging(emoji):
+        canonical = canonical_reaction(emoji)
+        if canonical is None:
             return False
-        await self._store.record_reaction(source_message_id, person, emoji, at)
+        await self._store.record_reaction(source_message_id, person, canonical, at)
         return True
 
     async def refresh(self, now: datetime) -> StateRefresh:

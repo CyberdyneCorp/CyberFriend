@@ -89,16 +89,24 @@ UNSCOPED: dict[str, str] = {
         "their message ids"
     ),
     "sql.DIRTY_CHANNELS": "scheduling metadata; a channel id and a watermark",
+    "sql.RECORD_EXTRACTION": "write; the ask-extraction watermark",
+    "sql.PENDING_EXTRACTION_COUNT": (
+        "write-side read with no viewer; extraction runs in the ingest\n"
+        "process, where there is no requester. Bounded by the operator's\n"
+        "indexed scope via :indexed_channel_ids -- deliberately not\n"
+        ":channel_ids, which in every other statement means what one\n"
+        "viewer may read"
+    ),
     "sql.STORED_REVISIONS": (
         "ingest-only; message ids and revision timestamps for reconciliation, "
         "no message text"
     ),
     # --- sql: content returned to the ingestion process ------------------
     #
-    # These four return text with no viewer bound. They run for windowing and
-    # embedding, which act for nobody: there is no viewer to bind, and
-    # rebuilding only the channels some person may read would leave the rest
-    # of the corpus permanently unwindowed and therefore permanently
+    # These return text with no viewer bound. They run for windowing,
+    # embedding and ask extraction, which act for nobody: there is no viewer
+    # to bind, and doing only the channels some person may read would leave
+    # the rest of the corpus permanently unwindowed and therefore permanently
     # unretrievable. None of them is reachable from a request-scoped surface;
     # the entrypoint that drives them serves no requests.
     "sql.MESSAGES_WITHOUT_WINDOW": (
@@ -108,6 +116,13 @@ UNSCOPED: dict[str, str] = {
     "sql.MESSAGES_FOR_REWINDOW": (
         "ingest-only; message text for the channel rebuild, which acts for "
         "nobody. Unreachable from any request-scoped surface"
+    ),
+    "sql.MESSAGES_PENDING_EXTRACTION": (
+        "write-side read with no viewer; extraction runs in the ingest\n"
+        "process, where there is no requester. Bounded by the operator's\n"
+        "indexed scope via :indexed_channel_ids -- deliberately not\n"
+        ":channel_ids, which in every other statement means what one\n"
+        "viewer may read"
     ),
     "sql.WINDOWS_MISSING_EMBEDDINGS": (
         "ingest-only; window text for the embedding worker. Unreachable from "

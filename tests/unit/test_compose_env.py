@@ -33,6 +33,12 @@ DEPLOYMENT_SETTINGS = {
     # per deployment, so the platform has to accept them.
     "FEDERATION_SERVERS": ("bot",),
     "FEDERATION_TOOL_ALLOWLIST": ("bot",),
+    # The other half of enabling a state-changing tool. Undeclared here, an
+    # operator naming holders in the platform gets an empty broker and every
+    # mutating call is refused for want of a credential -- the confirmation
+    # gate would be configured, reported at startup, and still unreachable.
+    "FEDERATION_CREDENTIAL_HOLDERS": ("bot",),
+    "FEDERATION_MAX_TOOLS_PER_RUN": ("bot",),
     "WEB_TOOLS_ENABLED": ("bot",),
     "SERPAPI_KEY": ("bot",),
     "ASK_EXTRACTION_ENABLED": ("ingest",),

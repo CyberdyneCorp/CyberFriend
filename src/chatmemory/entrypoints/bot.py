@@ -3,18 +3,25 @@
 Runs the conversational surface. Ingestion is a separate process; this one
 only answers questions.
 
-Nothing is wired here: the object graph comes from `composition`, which is
-also where the two checks that can refuse the deployment live. That ordering
+Almost nothing is wired here: the object graph comes from `composition`, which
+is also where the two checks that can refuse the deployment live. That ordering
 matters -- a model that cannot honour a response schema, or an embedding
 model whose vectors are the wrong width, stops this process before it
 identifies to the gateway rather than after people start asking it things.
 
-The one thing this file does decide is where permission caches get their
-invalidation from, because that is a property of the process rather than of
-the graph: the guild provider it hands `composition` is a `LiveGuild`, so the
-audience cache built down there is registered against this client's events.
-Hand `composition` a bare callable instead and nothing caches -- slower, never
-stale.
+Two things are decided here rather than down there, and both are properties of
+the *process* rather than of the graph.
+
+Where permission caches get their invalidation from: the guild provider this
+file hands `composition` is a `LiveGuild`, so the audience cache built down
+there is registered against this client's events. Hand `composition` a bare
+callable instead and nothing caches -- slower, never stale.
+
+And where a correction is written. The ask store is built with the answer
+stack and the ask service is built from guild state, so this is the only place
+that holds both ends; `/resolve` is registered either way, and a process that
+skips this refuses every attempt to close an ask rather than silently
+pretending to have recorded one.
 """
 
 from __future__ import annotations
@@ -29,9 +36,11 @@ from chatmemory import logging as log_setup
 from chatmemory.adapters.discord.acl import LiveGuild, PermissionCaches, _Guild
 from chatmemory.adapters.discord.bot import CyberFriendClient
 from chatmemory.adapters.discord.gateway import attach_permission_listeners
+from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.app.ask import AskService
+from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.authorization import ConfirmationLedger
-from chatmemory.composition import build_answer_stack, build_ask_service
+from chatmemory.composition import ask_policy, build_answer_stack, build_ask_service
 from chatmemory.config import Settings, get_settings
 from chatmemory.health import HealthState, spawn
 from chatmemory.ports.answers import AnswerService
@@ -60,6 +69,7 @@ def build_bot(
     answers: AnswerService,
     search: SearchBackend | None = None,
     confirmations: ConfirmationLedger | None = None,
+    corrections: CorrectionService | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -89,6 +99,11 @@ def build_bot(
         # the prompt would be built inside the run and shown to no one.
         confirmations=confirmations,
     )
+    if corrections is not None:
+        # `/resolve` is registered either way, so without this every attempt to
+        # close an ask is refused -- which is the safe half of the feature, and
+        # the half a deployment that wires nothing should get.
+        asks.attach_corrections(corrections)
     client = CyberFriendClient(asks, settings.discord_guild_id)
     attach_permission_listeners(client, caches)
     return BotGraph(client=client, asks=asks, caches=caches)
@@ -109,6 +124,11 @@ async def main() -> None:
         stack.answers,
         search=stack.search,
         confirmations=stack.federation.confirmations if stack.federation else None,
+        # Over the engine the answer stack already holds, so a correction is
+        # written through the same pool the obligation it corrects was read
+        # through. Without this an ask can be extracted and never dismissed:
+        # the correction path was built, tested and reachable from nothing.
+        corrections=CorrectionService(PostgresAskStore(stack.engine), ask_policy(settings)),
     ).client
 
     original_on_ready = client.on_ready

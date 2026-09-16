@@ -98,6 +98,11 @@ WHERE a.status IN ('open', 'stale')
   AND x.message_id = a.source_message_id
   AND x.person_id = a.addressee_person_id
   AND x.emoji = ANY(:emojis)
+  -- The acknowledgement has to come after the thing it acknowledges. Its
+  -- sibling above carries the same guard: without it a tick left on a
+  -- message for some earlier reason closes an ask the moment extraction
+  -- creates one, so the obligation is answered before anybody has read it.
+  AND x.reacted_at > a.asked_at
 """)
 
 # Ageing marks an ask stale. It never closes one: an ask nobody answered in

@@ -43,7 +43,7 @@ capability that was built, tested, and silently never reached.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
@@ -97,6 +97,7 @@ from chatmemory.app.authorization import (
     Authorizer,
     ConfirmationLedger,
     CredentialBroker,
+    CredentialScope,
     InvocationRequest,
     ToolEffect,
 )
@@ -128,6 +129,7 @@ from chatmemory.app.reasoning.retrieval import (
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.stages import ModelToolProposer
 from chatmemory.config import Settings
+from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import AnswerService
 from chatmemory.ports.sources import EmbeddingClient
 from chatmemory.ports.store import SearchBackend
@@ -248,13 +250,64 @@ async def verify_embedding_width(
 
 
 READ_ONLY_SUFFIX = "ro"
-"""The only word an allowlist entry may add after `server:tool`.
+"""Declares a tool read-only: two letters, because it grants nothing."""
 
-A closed vocabulary of exactly one word, for the same reason the federation
-config has no expression language: "declare this tool read-only" must be the
-only thing an environment variable can say about a tool's effect, so an
-operator cannot widen anything by writing something clever.
+MUTATION_SUFFIX = "enable-mutation"
+"""Declares a tool state-changing AND enables it. Spelled out, deliberately.
+
+The asymmetry with `ro` is the point. Read-only is the default posture and
+costs two letters; handing the agent the ability to change something outside
+CyberFriend costs a whole phrase nobody types by accident, and a second,
+separate statement of who may spend it (`FEDERATION_CREDENTIAL_HOLDERS`).
+Neither declaration means anything without the other, so a single fat-
+fingered variable cannot produce a tool that writes.
+
+A misspelling is a startup error rather than a silent downgrade -- but the
+downgrade is the safe direction anyway: without this word a tool's effect is
+undetermined, which behaves as mutating and is refused for want of an enable.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class _Declaration:
+    """What one suffix means, as the three facts a permit is built from.
+
+    Kept together because they are only coherent together: mutation is
+    enabled per-requester or not at all -- the bot's own narrow identity must
+    never be the authority a write carries -- and `AllowedTool` refuses the
+    incoherent combinations at construction.
+    """
+
+    effect: ToolEffect | None
+    credential: CredentialScope
+    mutation_enabled: bool
+
+
+_DECLARATIONS: dict[str, _Declaration] = {}
+"""The complete vocabulary an allowlist entry may use, filled in below.
+
+A closed set, for the same reason the federation config has no expression
+language: what an environment variable can say about a tool must be one of a
+few fixed sentences, so an operator cannot widen anything by writing
+something clever.
+"""
+
+#: No suffix. Undetermined effect, which behaves as mutating -- and with no
+#: enable, so the quiet outcome of a typo is a tool that is refused, never
+#: one that writes unasked.
+UNDECLARED = _Declaration(None, CredentialScope.NARROW_READ_ONLY, False)
+_DECLARATIONS[READ_ONLY_SUFFIX] = _Declaration(
+    ToolEffect.READ_ONLY, CredentialScope.NARROW_READ_ONLY, False
+)
+#: The operator's declaration is the ONLY thing that may mark a tool
+#: read-only; here they declare the opposite, and the registry keeps that
+#: even if the server advertises `readOnlyHint`.
+_DECLARATIONS[MUTATION_SUFFIX] = _Declaration(
+    ToolEffect.MUTATING, CredentialScope.PER_REQUESTER, True
+)
+
+CREDENTIAL_HOLDER_SEPARATOR = "="
+"""`server=platform:user_id` -- who may spend a mutating tool on that server."""
 
 
 class RoutedToolSurface:
@@ -419,28 +472,101 @@ def parse_server(spec: str) -> ServerConfig:
 
 
 def parse_allowed_tool(spec: str) -> AllowedTool:
-    """Read one `server:tool` entry, optionally declared read-only.
+    """Read one `server:tool` entry and whatever the operator declared about it.
 
-    An entry without the suffix leaves the effect undetermined, which counts
-    as mutating -- so the quiet outcome of a typo is a tool that needs a
-    confirmation, never one that writes unasked.
+    An entry without a suffix leaves the effect undetermined, which counts as
+    mutating and is not enabled -- so the quiet outcome of a typo is a tool
+    that is refused, never one that writes unasked. `:ro` is the operator's
+    own determination that a tool is read-only, and the only thing in the
+    system that may make one: a server's own advertisement never reaches
+    here. `:enable-mutation` is the opposite declaration, and the only way a
+    state-changing tool becomes callable at all.
     """
     server, _, rest = spec.partition(":")
     tool, _, suffix = rest.partition(":")
     if not server or not tool:
         raise FederationConfigurationError(
-            f"federation tool {spec!r} must be written server:tool[:{READ_ONLY_SUFFIX}]"
+            f"federation tool {spec!r} must be written "
+            f"server:tool[:{READ_ONLY_SUFFIX}|:{MUTATION_SUFFIX}]"
         )
-    if suffix and suffix != READ_ONLY_SUFFIX:
+    if suffix and suffix not in _DECLARATIONS:
+        known = ", ".join(repr(w) for w in sorted(_DECLARATIONS))
         raise FederationConfigurationError(
             f"federation tool {spec!r}: {suffix!r} is not a known declaration; "
-            f"the only suffix is {READ_ONLY_SUFFIX!r}"
+            f"the only suffixes are {known}"
         )
+    declared = _DECLARATIONS.get(suffix, UNDECLARED)
     return AllowedTool(
         server=server,
         tool=tool,
-        effect=ToolEffect.READ_ONLY if suffix == READ_ONLY_SUFFIX else None,
+        credential=declared.credential,
+        effect=declared.effect,
+        mutation_enabled=declared.mutation_enabled,
     )
+
+
+def parse_credential_holder(spec: str) -> tuple[str, PersonRef]:
+    """Read one `server=platform:user_id` entry.
+
+    A mutating call carries the requester's own authority, so the operator
+    has to say whose. Written per person rather than as "anyone in the
+    server": the set of people who may change something through the agent is
+    exactly the set somebody wrote down.
+    """
+    server, separator, who = spec.partition(CREDENTIAL_HOLDER_SEPARATOR)
+    platform, qualifier, user_id = who.partition(":")
+    if not separator or not server.strip() or not qualifier or not platform.strip():
+        raise FederationConfigurationError(
+            f"federation credential holder {spec!r} must be written "
+            "server=platform:user_id"
+        )
+    if not user_id.strip().isdigit():
+        raise FederationConfigurationError(
+            f"federation credential holder {spec!r}: {user_id!r} is not an account id"
+        )
+    return server.strip(), PersonRef(platform.strip(), int(user_id.strip()))
+
+
+def build_credential_holders(settings: Settings) -> dict[str, frozenset[PersonRef]]:
+    """Who holds their own credential on each federated server.
+
+    Empty is the correct default and the safe one: with nobody named, a
+    per-requester tool is refused rather than falling back to the bot's own
+    identity, which would hand every member of the server whatever the bot
+    holds.
+    """
+    holders: dict[str, frozenset[PersonRef]] = {}
+    for spec in settings.federation_credential_holders:
+        server, person = parse_credential_holder(spec)
+        holders[server] = holders.get(server, frozenset()) | {person}
+    return holders
+
+
+def _check_mutation_is_spendable(
+    config: FederationConfig, holders: Mapping[str, frozenset[PersonRef]]
+) -> None:
+    """Refuse a half-written grant, in either direction.
+
+    An enabled mutating tool whose server names no holder is refused at
+    invocation for want of a credential -- which is safe, and indistinguishable
+    from a working configuration until somebody tries. This project has
+    shipped that shape seven times, so it is a startup error instead: the two
+    declarations that together enable a mutation must both be present, or
+    neither is honoured.
+    """
+    for entry in config.allowlist:
+        if entry.mutation_enabled and not holders.get(entry.server):
+            raise FederationConfigurationError(
+                f"{entry.qualified_name} is declared {MUTATION_SUFFIX} but nobody "
+                f"holds a credential on {entry.server!r}; name them in "
+                "FEDERATION_CREDENTIAL_HOLDERS as server=platform:user_id"
+            )
+    for server in holders:
+        if config.server(server) is None:
+            raise FederationConfigurationError(
+                f"federation credential holder names server {server!r}, "
+                "which is not configured"
+            )
 
 
 def build_federation_config(settings: Settings) -> FederationConfig | None:
@@ -456,28 +582,55 @@ def build_federation_config(settings: Settings) -> FederationConfig | None:
     # behaviour looked like a model that never wanted a tool.
     if not settings.federation_servers and not settings.web_tools_enabled:
         return None
-    return FederationConfig(
+    config = FederationConfig(
         servers=tuple(parse_server(s) for s in settings.federation_servers),
         allowlist=tuple(parse_allowed_tool(t) for t in settings.federation_tool_allowlist),
         max_tools_per_run=settings.federation_max_tools_per_run,
     )
+    _check_mutation_is_spendable(config, build_credential_holders(settings))
+    return config
 
 
-def report_federation(config: FederationConfig, registration: Registration) -> None:
+def report_federation(
+    config: FederationConfig,
+    registration: Registration,
+    holders: Mapping[str, frozenset[PersonRef]] | None = None,
+) -> None:
     """Say, at startup, exactly what is callable and what is not.
 
     An operator must be able to tell a silently empty registry from a working
     one without reading the code, so the registered tool names are logged by
     name and an empty registry is a warning rather than an absence of output.
+
+    Tools that can change something are reported separately and at warning
+    level. A deployment where the agent may only read and one where it may
+    write used to produce byte-identical startup output, which left "we
+    granted that six deploys ago" as something nobody could see.
     """
+    mutating = sorted(t.qualified_name for t in registration.tools if t.permit.mutation_enabled)
     log.info(
         "composition.federation.registered",
         servers=list(config.server_names),
         tools=sorted(registration.names),
+        read_only=sorted(registration.names - frozenset(mutating)),
+        mutating=mutating,
         unreachable=list(registration.unreachable_servers),
         unavailable=list(registration.unavailable_tools),
         max_tools_per_run=config.max_tools_per_run,
     )
+    if mutating:
+        log.warning(
+            "composition.federation.mutation_enabled",
+            tools=mutating,
+            holders=sorted(
+                str(person)
+                for server, people in (holders or {}).items()
+                if any(t.startswith(f"{server}:") for t in mutating)
+                for person in people
+            ),
+            hint="these tools change state on their server; every call is put "
+            "to the person who asked before it is made",
+        )
     if registration.unreachable_servers:
         log.warning(
             "composition.federation.degraded",
@@ -570,7 +723,8 @@ async def build_federation(
         log.error("composition.federation.unavailable", error=str(exc))
         return None
 
-    report_federation(config, federation.registration)
+    holders = build_credential_holders(settings)
+    report_federation(config, federation.registration, holders)
     if proposer is None:
         # Tools that can be offered and never called. Said out loud, because a
         # federation wired to a model that cannot call tools looks identical in
@@ -579,24 +733,27 @@ async def build_federation(
             "composition.federation.offer_only",
             hint="no tool-calling model handle; runs will be offered tools but call none",
         )
-    return _federated_tools(config, federation, proposer)
+    return _federated_tools(config, federation, proposer, holders)
 
 
 def _federated_tools(
     config: FederationConfig,
     federation: Federation,
     proposer: ModelToolProposer | None = None,
+    holders: Mapping[str, frozenset[PersonRef]] | None = None,
 ) -> FederatedTools:
     """Assemble the guarded door around a connected federation.
 
-    The credential broker starts empty on purpose: a per-requester tool is
+    The credential broker holds only the people an operator wrote down, and
+    is empty for a deployment that wrote none: a per-requester tool is
     refused until somebody's credential is actually registered, which fails
     closed rather than falling back to the bot's own identity and handing
     every server member whatever it holds.
     """
     confirmations = ConfirmationLedger()
     audit = InMemoryAuditTrail()
-    authorizer = Authorizer(federation.permits, confirmations, CredentialBroker())
+    broker = CredentialBroker(dict(holders or {}))
+    authorizer = Authorizer(federation.permits, confirmations, broker)
     invoker = GuardedInvoker(federation, authorizer, audit, confirmations)
     return FederatedTools(
         federation=federation,

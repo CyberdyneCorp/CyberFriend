@@ -13,6 +13,14 @@ grouped and labelled by source, always -- including when every source is this
 server, because a reader should never have to infer the common case from the
 absence of a warning.
 
+`/resolve` is here for the same reason the buttons below are. An ask is a
+claim the system made about somebody, so the person it named has to be able to
+say "done" or "that was never mine" -- and whose word that is has to come from
+the interaction, which carries an authenticated account, rather than from
+anything they typed. The ask itself is chosen from a list built for that one
+account, and a key they supply instead buys them nothing: the store binds both
+their readable channels and their own person id as predicates.
+
 The confirmation prompt below is the other thing this file owes a person. It
 is shown with buttons rather than by asking them to type a word, and the
 reason is the threat model rather than taste: a typed "yes" arrives as message
@@ -35,7 +43,14 @@ import discord
 import structlog
 from discord import app_commands
 
-from chatmemory.app.ask import AskRequest, AskService
+from chatmemory.app.ask import AskRequest, AskService, CorrectionRequest
+from chatmemory.app.asks.model import (
+    AskKind,
+    AskStatus,
+    CorrectionOutcome,
+    CorrectionResolution,
+    ReportedAsk,
+)
 from chatmemory.app.authorization import ConfirmationPrompt
 from chatmemory.app.confirmation import ConfirmationReply, Undeliverable
 from chatmemory.app.disclosure import ScopedAnswer, withheld_notice
@@ -71,10 +86,41 @@ SOURCE_FALLBACK_LABELS = {
     SOURCE_WEB: "open result",
 }
 
+# Discord's own limits on a slash-command choice. A label past the first is
+# rejected outright, which would take the whole autocomplete down with it.
+MAX_CHOICE_CHARS = 100
+MAX_CORRECTABLE = 25
+
+#: What each answer to "what happened to it" means on the record. Two
+#: resolutions, three things a person might say: "not mine" and "that was never
+#: a request" are both the system having been wrong about them, and both stop
+#: it being their obligation. Keeping the wording separate is for the person
+#: reading the menu; the record only needs to know it was dismissed.
+CORRECTION_RESOLUTIONS = {
+    "done": CorrectionResolution.DONE,
+    "not_mine": CorrectionResolution.NOT_APPLICABLE,
+    "not_a_request": CorrectionResolution.NOT_APPLICABLE,
+}
+
+CORRECTION_APPLIED = {
+    "done": "Marked done. It won't come up again.",
+    "not_mine": "Noted — not yours. I won't raise it against you again.",
+    "not_a_request": "Noted — not a request. I won't raise it again.",
+}
+
+# One refusal for both ways this can fail. `UNKNOWN_ASK` and `NOT_ADDRESSEE`
+# are different facts, and telling them apart would answer, for any key
+# somebody cared to try, whether an ask exists in a channel they cannot read.
+CORRECTION_REFUSED = (
+    "I can't close that one. Either there's no such ask, or it isn't yours to close."
+)
+
 CAPABILITIES = (
     "I answer questions about what's been said in the channels you can read.\n"
     "Try: `what did people ask me today?`, `what happened in #infra this week?`\n"
-    "Mention me with a question, use `/ask`, or send me a direct message.\n\n"
+    "Mention me with a question, use `/ask`, or send me a direct message.\n"
+    "Use `/resolve` to close something I said was asked of you, or to tell me "
+    "it was never yours.\n\n"
     "Answers posted in a channel only use sources everyone here can read. "
     "Ask me in a DM to search everything *you* can read."
 )
@@ -169,6 +215,38 @@ def _render(scoped: ScopedAnswer) -> str:
             lines.append(_citation_line(number, citation))
             number += 1
     return "\n".join(lines)
+
+
+_ASK_PHRASING = {
+    AskKind.REQUEST: "asked you to",
+    AskKind.QUESTION: "asked you",
+    AskKind.COMMITMENT: "you said you would",
+}
+
+
+def _ask_label(item: ReportedAsk) -> str:
+    """One line naming an ask well enough to pick it out of a menu.
+
+    The extracted text is model-written and the display name came from the
+    platform, so both are flattened to a single line before they go anywhere
+    near a choice label: a newline in a label is how a menu entry turns into
+    two, and the second one reads as the bot speaking.
+    """
+    ask = item.ask
+    when = ask.asked_at.date().isoformat()
+    stale = " (stale)" if ask.status is AskStatus.STALE else ""
+    if ask.kind is AskKind.COMMITMENT:
+        body = f"{_ASK_PHRASING[ask.kind]} {ask.text}"
+    else:
+        body = f"{item.requester_display} {_ASK_PHRASING[ask.kind]} {ask.text}"
+    return _clip(" ".join(f"{when}: {body}{stale}".split()), MAX_CHOICE_CHARS)
+
+
+def _correction_note(outcome: CorrectionOutcome, said: str) -> str:
+    if outcome is CorrectionOutcome.APPLIED:
+        return CORRECTION_APPLIED[said]
+    # Every other outcome, deliberately collapsed. See CORRECTION_REFUSED.
+    return CORRECTION_REFUSED
 
 
 def _prompt_text(prompt: ConfirmationPrompt) -> str:
@@ -415,7 +493,79 @@ class CyberFriendClient(discord.Client):
     async def setup_hook(self) -> None:
         guild = discord.Object(id=self._guild_id)
         self.tree.add_command(self._build_ask_command(), guild=guild)
+        # Registered unconditionally, next to `/ask`. A list that only ever
+        # grows is one people stop reading, so the way out of it is not a
+        # thing to make conditional on configuration somebody has to find.
+        self.tree.add_command(self._build_resolve_command(), guild=guild)
         await self.tree.sync(guild=guild)
+
+    def _build_resolve_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/resolve`: the addressee's own word about their own ask.
+
+        Always ephemeral, in both directions. The menu is a list of things
+        somebody was asked to do, which is nobody else's business even when
+        the command is run in a busy channel, and a public refusal would
+        announce that they tried.
+        """
+
+        @app_commands.command(
+            name="resolve", description="Close or dismiss something I said was asked of you"
+        )
+        @app_commands.describe(
+            ask="Which one — pick from your own outstanding asks",
+            outcome="What actually happened to it",
+        )
+        @app_commands.choices(
+            outcome=[
+                app_commands.Choice(name="Done", value="done"),
+                app_commands.Choice(name="Not mine", value="not_mine"),
+                app_commands.Choice(name="This was never a request", value="not_a_request"),
+            ]
+        )
+        async def resolve(
+            interaction: discord.Interaction,
+            ask: str,
+            outcome: app_commands.Choice[str],
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            said = outcome.value
+            result = await self._asks.correct(
+                CorrectionRequest(
+                    # From the interaction, never from `ask`: the key is a
+                    # string this person typed or picked, and a string is
+                    # content. Only Discord can say who sent it.
+                    actor=_person(interaction.user),
+                    ask_key=ask,
+                    resolution=CORRECTION_RESOLUTIONS[said],
+                )
+            )
+            await interaction.followup.send(_correction_note(result, said), ephemeral=True)
+
+        @resolve.autocomplete("ask")
+        async def which(
+            interaction: discord.Interaction, current: str
+        ) -> list[app_commands.Choice[str]]:
+            """Offer this account its own outstanding asks and nothing else.
+
+            The filtering is a convenience, not the control: whatever comes
+            back here, and whatever somebody types instead of picking from it,
+            is checked again against their readable channels and their own
+            person id when the correction is written.
+            """
+            found = await self._asks.correctable(
+                _person(interaction.user), limit=MAX_CORRECTABLE
+            )
+            typed = current.strip().casefold()
+            return [
+                app_commands.Choice(name=_ask_label(item), value=item.ask.key)
+                for item in found
+                # A key Discord would reject takes the whole menu down with
+                # it, so it is dropped rather than sent and failed on.
+                if len(item.ask.key) <= MAX_CHOICE_CHARS
+                and (not typed or typed in _ask_label(item).casefold())
+            ]
+
+        return resolve
 
     def _build_ask_command(self) -> app_commands.Command[Any, ..., None]:
         @app_commands.command(name="ask", description="Ask about what's been said")

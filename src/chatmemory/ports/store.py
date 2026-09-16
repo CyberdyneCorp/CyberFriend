@@ -5,12 +5,13 @@ Note the asymmetry: writes take whatever they need, but every method on
 unfiltered *retrieval* is therefore not expressible through this interface.
 
 `Store` carries one carve-out, and it is narrower than it looks.
-`messages_without_window` and `windows_missing_embeddings` return content and
-take no viewer, because they exist for windowing and embedding -- work the
-ingestion process does on behalf of nobody. There is no viewer to bind, and
-binding one would be wrong rather than merely awkward: windowing only the
-channels some person may read would leave the rest of the corpus permanently
-unwindowed, and therefore permanently unretrievable by anyone.
+`messages_without_window`, `windows_missing_embeddings` and
+`messages_pending_extraction` return content and take no viewer, because they
+exist for windowing, embedding and ask extraction -- work the ingestion
+process does on behalf of nobody. There is no viewer to bind, and binding one
+would be wrong rather than merely awkward: windowing only the channels some
+person may read would leave the rest of the corpus permanently unwindowed, and
+therefore permanently unretrievable by anyone.
 
 What makes that safe is not the comment, it is the reachability. Both are
 called only from the ingestion entrypoint, which serves no requests and has no
@@ -23,12 +24,33 @@ audit in tests/unit/test_sql_audit.py requires the reason in writing.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import DirtyChannel, Message, Window
 from chatmemory.domain.search import SearchHit, SearchQuery
+
+
+@dataclass(frozen=True, slots=True)
+class PendingExtraction:
+    """A message awaiting ask extraction, and the revision that was read.
+
+    The generation is `DirtyChannel`'s, per message rather than per channel.
+    Extraction costs a model call, so the mark has to say *which* revision was
+    read: an edit landing while the model was being asked bumps the message's
+    revision, and recording the one that was read then leaves the message
+    pending instead of clearing work that was never done.
+
+    None means the caller never read a row -- the live pass is handed a
+    message by capture -- and the store records whatever revision is current.
+    That is exactly as strong as the behaviour it replaces, where a live
+    message was extracted once and never revisited.
+    """
+
+    message: Message
+    generation: int | None = None
 
 
 class Store(Protocol):
@@ -93,6 +115,51 @@ class Store(Protocol):
         ...
 
     async def replace_windows(self, channel: ChannelRef, windows: Sequence[Window]) -> int: ...
+
+    # --- ask extraction ---------------------------------------------------
+    #
+    # The same carve-out as windowing, and the same reason it is safe: these
+    # run for the extraction pass, which acts for nobody, and are called only
+    # from the ingest entrypoint. Extracting only the channels some person may
+    # read would leave the rest of a server's obligations permanently
+    # unextracted, which is not a narrower feature but a broken one.
+    #
+    # They are on the port rather than probed for at runtime because history
+    # is most of what a channel contains: a process that silently skips them
+    # answers "what did people ask me to do?" from whatever happened while it
+    # was running, and looks entirely healthy doing it.
+
+    async def messages_pending_extraction(
+        self, limit: int, channels: Sequence[ChannelRef] = ()
+    ) -> Sequence[PendingExtraction]:
+        """Messages whose current revision has not been through extraction.
+
+        Newest first, and the last few minutes are left out: a message
+        captured moments ago is probably still buffered in the live pass and
+        about to be extracted from there, so offering it here as well buys the
+        same model call twice.
+        """
+        ...
+
+    async def record_extraction(self, entries: Sequence[PendingExtraction]) -> int:
+        """Record that each entry's revision has been extracted.
+
+        Recording a revision an edit has already moved past leaves the message
+        pending, so a message edited mid-extraction is re-read rather than
+        being marked done with text nobody extracted.
+        """
+        ...
+
+    async def pending_extraction_count(
+        self, cap: int = 1000, channels: Sequence[ChannelRef] = ()
+    ) -> int:
+        """How much is waiting, counted no further than `cap`.
+
+        Bounded because this is a health figure on a corpus that may hold
+        millions of messages, and "is the backlog draining" is answered by
+        "1000+" exactly as well as by the true number.
+        """
+        ...
 
     async def windows_missing_embeddings(self, limit: int) -> Sequence[Window]: ...
 

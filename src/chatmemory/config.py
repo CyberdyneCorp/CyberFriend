@@ -98,11 +98,23 @@ class Settings(BaseSettings):
     federation_servers: Annotated[tuple[str, ...], NoDecode] = ()
 
     # The tools an operator has explicitly made available, as `server:tool`,
-    # optionally suffixed `:ro` to declare a tool read-only. Discovery
-    # confers nothing: a server advertising a tool that is not listed here
-    # stays unavailable. Undeclared effect counts as mutating, so a tool
-    # listed without `:ro` needs a confirmation before it can ever be called.
+    # optionally suffixed `:ro` to declare a tool read-only or
+    # `:enable-mutation` to declare it state-changing and allow it to be
+    # called at all. Discovery confers nothing: a server advertising a tool
+    # that is not listed here stays unavailable, and a server's own claim to
+    # be read-only is never honoured -- only the suffix here is. Undeclared
+    # effect counts as mutating and is not enabled, so a tool listed without
+    # a suffix is refused rather than called.
     federation_tool_allowlist: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # Who may spend a state-changing tool, as `server=platform:user_id`
+    # entries: "issues=discord:1001". Required before `:enable-mutation`
+    # means anything -- a mutating call carries the requester's own
+    # authority, and this is where an operator says whose. Two variables
+    # rather than one so that no single mistyped setting can give the agent
+    # the ability to change something; empty means no one, which is what a
+    # deployment that has not thought about this should get.
+    federation_credential_holders: Annotated[tuple[str, ...], NoDecode] = ()
 
     # How many federated tools one run may be shown. A cap rather than
     # "all of them": a tool that was never offered is one the invoke-time
@@ -180,7 +192,12 @@ class Settings(BaseSettings):
             return frozenset(p for p in v.replace(",", " ").split())
         return v
 
-    @field_validator("federation_servers", "federation_tool_allowlist", mode="before")
+    @field_validator(
+        "federation_servers",
+        "federation_tool_allowlist",
+        "federation_credential_holders",
+        mode="before",
+    )
     @classmethod
     def _split_federation_entries(cls, v: object) -> object:
         """Split on whitespace or commas, keeping the operator's order.

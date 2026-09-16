@@ -81,6 +81,11 @@ services:
       - CHAT_MODEL_CAPABILITIES=${CHAT_MODEL_CAPABILITIES}
       - FEDERATION_SERVERS=${FEDERATION_SERVERS}
       - FEDERATION_TOOL_ALLOWLIST=${FEDERATION_TOOL_ALLOWLIST}
+      # Who may spend a `:enable-mutation` tool, as server=platform:user_id.
+      # Without it an enabled mutating tool is refused at startup: the two
+      # halves of a grant to change something are declared separately on
+      # purpose, and half a grant is a configuration error, not a default.
+      - FEDERATION_CREDENTIAL_HOLDERS=${FEDERATION_CREDENTIAL_HOLDERS}
       - FEDERATION_MAX_TOOLS_PER_RUN=${FEDERATION_MAX_TOOLS_PER_RUN}
       - WEB_TOOLS_ENABLED=${WEB_TOOLS_ENABLED}
       - SERPAPI_KEY=${SERPAPI_KEY}

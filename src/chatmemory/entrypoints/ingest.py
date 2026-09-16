@@ -4,7 +4,7 @@ Runs exactly one replica. Two containers sharing a bot token both identify to
 the gateway and ingest every message twice; Discord does not error, so the
 duplication is silent. See docker-compose.yml.
 
-Seven concurrent jobs make up the process, each a loop that survives its own
+Eight concurrent jobs make up the process, each a loop that survives its own
 failures because none of them may take the others down:
 
   live         messages the gateway hands us, persisted as they arrive
@@ -13,10 +13,17 @@ failures because none of them may take the others down:
   windows      retrieval units rebuilt from newly captured messages
   embeddings   the backlog of windows without a current vector
   extraction   asks read out of newly captured conversation
+  ask backlog  asks read out of everything backfill imported
   ask state    open/answered/stale, applied from observed events only
 
 Only the live loop is real-time. The rest are catch-up work whose whole point
 is that an outage costs time rather than fidelity.
+
+Extraction runs as two jobs for one reason: the live one can only see what
+the gateway hands it, and backfill imports most of a channel's history without
+ever touching it. The backlog job reads those messages back out of the corpus,
+so "what did people ask me to do?" answers from the whole archive rather than
+from whatever arrived since the last deploy.
 
 Extraction is here rather than on the query path on purpose: extracting when
 somebody asks repeats identical work on every question, costs a full model run
@@ -49,7 +56,7 @@ from chatmemory.adapters.discord.source import (
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.state import AskStateService
-from chatmemory.app.asks.worker import ExtractionWorker
+from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import build_ask_pipeline
@@ -76,6 +83,12 @@ IDLE_SECONDS = 5.0
 # reaction that is already stored, so a pass is a few statements over rows
 # that changed, and nothing is lost by running it on a cadence.
 ASK_STATE_INTERVAL_SECONDS = 300.0
+# How often the backlog pass reads another slice of unextracted history.
+# Together with the slice size this is the whole rate bound: extraction is a
+# model call per candidate message, so history drains at a bounded cost per
+# minute rather than as fast as the database can serve it. A channel that
+# stopped changing months ago pays one empty index scan a minute for it.
+BACKLOG_EXTRACTION_INTERVAL_SECONDS = 60.0
 
 
 def indexed_channels(settings: Settings) -> list[ChannelRef]:
@@ -253,6 +266,36 @@ async def extraction_loop(
             await asyncio.sleep(idle)
 
 
+async def backlog_extraction_loop(
+    worker: BacklogExtractionWorker,
+    state: HealthState,
+    interval: float = BACKLOG_EXTRACTION_INTERVAL_SECONDS,
+) -> None:
+    """Extract asks from history the gateway never streamed to us.
+
+    Sleeps after every pass, busy or idle, because the interval is half of the
+    rate bound: the other half is how much one pass may read. A pass that is
+    allowed to run flat out drains a year of archive in an afternoon and bills
+    for every message of it.
+
+    Absorbs everything, for the reason the live pass does. A worker that dies
+    on one bad batch stops extracting entirely, and the only symptom is that
+    obligations quietly stop appearing -- which reads as "nobody asked me
+    anything" rather than as a fault. Progress, including how much is left, is
+    published every iteration so that a backlog which has stopped draining is
+    visible as a number rather than as an absence of output.
+    """
+    while True:
+        try:
+            await worker.run_once()
+        except Exception:
+            # Including a failure to reach the store at all: the marks are in
+            # the corpus, so nothing this pass did is lost by trying again.
+            log.exception("asks.backlog_pass_failed")
+        state.details["asks_backlog"] = worker.progress.as_dict()
+        await asyncio.sleep(interval)
+
+
 async def ask_state_loop(
     asks: AskStateService,
     state: HealthState,
@@ -353,6 +396,18 @@ async def main() -> None:
             "ingest.ask_extraction_disabled",
             hint="ASK_EXTRACTION_ENABLED=false; nothing will answer obligation questions",
         )
+    else:
+        # Where the live pass records what it has extracted, set before any
+        # loop is started rather than beside the task that needs it: without
+        # it the live pass leaves every captured message looking unread, and
+        # the backlog pass below pays for all of it a second time.
+        asks.worker.records_through(store)
+        # The other half of `ask_state_loop`. That pass closes asks from
+        # reactions that were recorded; this is the only thing in either
+        # process that records one. Without this line the gateway receives
+        # every tick the addressee gives and drops it, the pass finds nothing
+        # to close, and an ask can be extracted and can never leave the list.
+        handler.acknowledge_asks_with(asks.state)
 
     async with asyncio.TaskGroup() as tasks:
         tasks.create_task(client.start(settings.discord_token.get_secret_value()))
@@ -390,11 +445,31 @@ async def main() -> None:
         tasks.create_task(worker.run_forever(IDLE_SECONDS))
 
         if asks is not None:
-            # The point of the whole ask pipeline: without these two tasks the
+            # The point of the whole ask pipeline: without these tasks the
             # package is code nothing runs, no `ask` row is ever written, and
             # "what did people ask me today" is answered by similarity search
             # over windows -- which is the failure this feature exists to fix.
             tasks.create_task(extraction_loop(asks.worker, state))
+            # And the other half: everything backfill imported, which is most
+            # of a channel and none of which was ever submitted to the worker
+            # above. Without this task the ask tables hold only what arrived
+            # while some process happened to be running.
+            tasks.create_task(
+                backlog_extraction_loop(
+                    BacklogExtractionWorker(
+                        asks.worker,
+                        store,
+                        # The operator's configured scope, so a channel taken
+                        # out of it stops costing model calls immediately.
+                        channels=channels,
+                        # The same batch size the live pass buffers to, because
+                        # it means the same thing on both: how much
+                        # conversation the model is shown at once.
+                        batch_messages=settings.ask_extraction_window_messages,
+                    ),
+                    state,
+                )
+            )
             tasks.create_task(ask_state_loop(asks.state, state))
 
 
