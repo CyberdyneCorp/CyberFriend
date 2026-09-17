@@ -24,6 +24,14 @@ Three things have to hold for this to be an opt-out rather than a gesture.
     memory half. The same migration drops any turn or summary written for an
     excluded person, as 0008 does for messages.
 
+*   **It covers what they told the assistant about themselves.** Personal
+    facts -- preferred name, email, preferred language -- are purged by a
+    second trigger on `person_opt_out` (migration 0014), in the same
+    transaction as the flag, and a fact written for an excluded person is
+    dropped before it is stored. No call here: as with memory, the guarantee
+    belongs to the database, so no path that records an opt-out can keep an
+    email address.
+
 *   **The flag lands before the purge.** In the other order there is a window
     between "content deleted" and "exclusion recorded" in which a backfill page
     re-imports exactly what was just removed, and the opt-out reports success.

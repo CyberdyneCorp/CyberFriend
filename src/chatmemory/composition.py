@@ -95,6 +95,7 @@ from chatmemory.adapters.mcp_client.config import (
 from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.adapters.store.facts_postgres import PostgresFactStore
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
@@ -125,6 +126,7 @@ from chatmemory.app.conversation import (
     MemoryPolicy,
     MemoryRetention,
 )
+from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.reasoning.capabilities import (
     LOOP_STAGES,
@@ -987,8 +989,14 @@ def build_ask_pipeline(settings: Settings, engine: AsyncEngine) -> AskPipeline:
     )
 
 
-async def build_answer_stack(settings: Settings) -> AnswerStack:
+async def build_answer_stack(
+    settings: Settings, *, personal_facts: bool = False
+) -> AnswerStack:
     """Assemble everything between the corpus and an answer.
+
+    `personal_facts` says whether the process answering through this stack
+    keeps them, so "what can you do?" only offers to remember a name where
+    something will.
 
     Ordering is the point. The two checks that can refuse the deployment run
     before the graph is returned, so a process that reaches its gateway
@@ -1043,6 +1051,7 @@ async def build_answer_stack(settings: Settings) -> AnswerStack:
             external_tools=(
                 sorted(federation.federation.permits) if federation is not None else ()
             ),
+            personal_facts=personal_facts,
         ),
         reasoning=reasoning,
         obligations=obligations,
@@ -1089,6 +1098,7 @@ def build_conversations(
         store,
         ConversationSummariser(store, model or build_summary_model(settings), policy),
         policy,
+        facts=PostgresFactStore(engine),
     )
 
 
@@ -1097,6 +1107,15 @@ def build_memory_retention(settings: Settings, engine: AsyncEngine) -> MemoryRet
     return MemoryRetention(
         PostgresMemoryStore(engine), timedelta(days=settings.memory_retention_days)
     )
+
+
+def build_personal_facts(engine: AsyncEngine) -> PersonalFactsService:
+    """Personal facts for the bot, over the answer stack's engine.
+
+    The same engine memory uses, so a fact and a remembered turn for one
+    account resolve to one person and are purged together.
+    """
+    return PersonalFactsService(PostgresFactStore(engine))
 
 
 def build_live_scope(
@@ -1121,6 +1140,7 @@ def build_ask_service(
     confirmations: ConfirmationLedger | None = None,
     conversations: Conversations | None = None,
     scope: ScopeProvider | None = None,
+    facts: PersonalFactsService | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -1146,6 +1166,10 @@ def build_ask_service(
         # Reads the same cached member the permission resolver reads, and only
         # ever for the asker: there is no call here that takes anyone else.
         profiles=DiscordProfileResolver(guild),
+        # The asker's own facts: set from their own message, shown only to
+        # them, and rendered into the prompt beside the profile. None answers
+        # every fact request that this deployment keeps none.
+        facts=facts,
         # Without this the withheld-evidence notice is built, tested, and
         # structurally unable to fire: retrieval is pre-scoped to
         # asker INTERSECT audience, so nothing is ever dropped later for the

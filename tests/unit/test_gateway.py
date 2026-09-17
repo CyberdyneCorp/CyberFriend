@@ -101,7 +101,26 @@ async def test_our_own_output_is_never_ingested() -> None:
     assert feed.published == []
 
 
+async def test_a_member_setting_their_email_in_a_channel_is_not_published() -> None:
+    """"I only show your email in a DM" must hold for the message that set it."""
+    handler, _, feed, _ = build()
+    await handler.on_message(
+        raw(1, content="<@2> my email is leo@x.com", mentions=[Author(2, bot=True)])
+    )
+    assert feed.published == []
+
+
 # --- edits -------------------------------------------------------------
+
+
+async def test_an_edit_that_states_ones_own_email_retracts_the_stored_message() -> None:
+    """The upsert would store the email; keeping the pre-edit text is stale."""
+    handler, sink, _, _ = build()
+    await handler.on_message_edit(
+        raw(1, content="my email is leo@x.com", edited_at=NOW)
+    )
+    assert sink.edited == []
+    assert sink.deleted == [(1, NOW)]
 
 
 async def test_edit_replaces_the_stored_content() -> None:

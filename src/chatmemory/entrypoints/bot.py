@@ -29,6 +29,11 @@ remembers is built from guild state. `main` -> `build_bot` ->
 `build_ask_service` -> `AskService(conversations=...)` is the whole chain, and
 `tests/unit/test_memory_integration.py` reads it from this file down.
 
+Personal facts follow the same route: `main` -> `build_personal_facts` over
+the answer stack's engine -> `build_bot(facts=...)` -> `build_ask_service` ->
+`AskService(facts=...)`, and `tests/unit/test_facts_behaviour.py` reads that
+chain from this file down.
+
 Indexing scope is live here as it is in ingest. `main` builds a `LiveScope`
 over the answer stack's engine, refreshes it before identifying, hands it to
 `build_bot` -> `build_ask_service`, where both the ACL and the audience
@@ -79,6 +84,7 @@ from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.authorization import ConfirmationLedger
 from chatmemory.app.configuration import ConfigurationEditor
 from chatmemory.app.conversation import Conversations
+from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.indexing import ChannelPurge, IndexingService
 from chatmemory.app.scope import LiveScope, ScopeProvider
 from chatmemory.composition import (
@@ -87,6 +93,7 @@ from chatmemory.composition import (
     build_ask_service,
     build_conversations,
     build_live_scope,
+    build_personal_facts,
 )
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
@@ -161,6 +168,7 @@ def build_bot(
     conversations: Conversations | None = None,
     scope: ScopeProvider | None = None,
     indexing: IndexingStores | None = None,
+    facts: PersonalFactsService | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -195,6 +203,10 @@ def build_bot(
         # Live indexing scope, asked on every resolution. Without it the
         # resolvers fall back to the environment's startup set.
         scope=scope,
+        # The asker's own facts. Without it "call me Leo" is answered that this
+        # deployment remembers nothing, and `/forget` everywhere has no facts
+        # to delete.
+        facts=facts,
     )
     if corrections is not None:
         # `/resolve` is registered either way, so without this every attempt to
@@ -274,7 +286,7 @@ async def main() -> None:
     state = HealthState()
     spawn(state, settings.health_port)
 
-    stack = await build_answer_stack(settings)
+    stack = await build_answer_stack(settings, personal_facts=True)
     # Refreshed before the gateway identifies, so the first question is
     # answered from stored scope rather than the environment's. A failed read
     # here keeps the environment's scope, which is the scope in force at boot.
@@ -303,6 +315,9 @@ async def main() -> None:
         # this process and ingest refresh from. Without it both commands
         # answer that indexing is unavailable here.
         indexing=build_indexing_stores(stack.engine, scope),
+        # Preferred name, email and language, over the same engine as memory.
+        # Omitted, the whole feature is built, tested and reachable from nothing.
+        facts=build_personal_facts(stack.engine),
     ).client
 
     original_on_ready = client.on_ready

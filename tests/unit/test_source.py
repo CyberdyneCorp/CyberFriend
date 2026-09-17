@@ -102,6 +102,42 @@ def test_thread_message_is_indexed_under_its_parent_channel() -> None:
     assert message.thread_id == THREAD
 
 
+# A member setting their email in a channel: the bot promises to show an email
+# only in its owner's DMs, so the message itself must never reach the corpus,
+# or retrieval and citations repeat it to the room and to other people's DMs.
+@pytest.mark.parametrize(
+    "content",
+    [
+        "<@999> my email is leo@x.com",
+        "<@!999> please remember my e-mail address is leo@x.com",
+        "hey <@999>, use leo@x.com as my email",
+        "<@999> meu email é leo@x.com",
+        "<@999> my email is not-an-email",
+        "my email is leo@x.com",
+    ],
+)
+def test_a_message_stating_ones_own_email_is_never_indexed(content: str) -> None:
+    message = raw(1, content=content, mentions=[Author(999, bot=True)])
+    assert to_message(message) is None
+    assert not is_ingestable(message)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "<@999> call me Leo",
+        "<@999> what is the email of Leo",
+        "the email relay is down again",
+        "<@999> why did my email bounce?",
+    ],
+)
+def test_other_messages_about_facts_or_email_are_still_indexed(content: str) -> None:
+    message = raw(1, content=content, mentions=[Author(999, bot=True)])
+    converted = to_message(message)
+    assert converted is not None and converted.content == content
+    assert is_ingestable(message)
+
+
 def test_bot_messages_are_not_ingestable() -> None:
     assert not is_ingestable(raw(1, author=Author(7, bot=True)))
     assert is_ingestable(raw(2))

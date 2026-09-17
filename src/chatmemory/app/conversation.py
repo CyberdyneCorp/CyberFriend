@@ -36,6 +36,7 @@ from chatmemory.app.reasoning.ports import ChatModel
 from chatmemory.app.reasoning.stages import MEMORY_NOTICE, render_memory
 from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.ports.answers import Answer
+from chatmemory.ports.facts import PersonFactEraser
 from chatmemory.ports.memory import (
     ConversationLocation,
     MemoryPurge,
@@ -142,9 +143,17 @@ class Conversations:
         store: MemoryStore,
         summariser: ConversationSummariser,
         policy: MemoryPolicy | None = None,
+        facts: PersonFactEraser | None = None,
     ) -> None:
         self._policy = policy or MemoryPolicy()
-        self._memory = ConversationMemory(store, recent_turns=self._policy.recent_turns)
+        # The fact store is passed through so "forget everywhere" is one
+        # operation over one person. Without it the memory layer could not
+        # tell an unwired deployment from a wired one, and logged an ERROR
+        # claiming facts were kept on every forget -- including in the
+        # deployment where the ask path had already deleted them.
+        self._memory = ConversationMemory(
+            store, recent_turns=self._policy.recent_turns, facts=facts
+        )
         self._summariser = summariser
         # Held so a background summary is not garbage-collected mid-flight,
         # and so the same conversation is never summarised twice at once.

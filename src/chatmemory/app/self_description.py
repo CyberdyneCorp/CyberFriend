@@ -35,7 +35,9 @@ Keyed by server, so a deployment without a SerpApi key -- and therefore
 without the S&P 500 -- does not promise it."""
 
 
-def describe_capabilities(external_tools: Sequence[str]) -> str:
+def describe_capabilities(
+    external_tools: Sequence[str], *, personal_facts: bool = False
+) -> str:
     lines = [
         "I'm CyberFriend. I answer questions about what has been said in the "
         "channels you're allowed to read, and I cite the messages I used.",
@@ -69,6 +71,14 @@ def describe_capabilities(external_tools: Sequence[str]) -> str:
             "Each figure says how current it is. I report figures; I don't "
             "recommend buying, selling or holding anything.",
         ]
+    if personal_facts:
+        lines += [
+            "",
+            "Tell me what to call you (`call me Leo`), your email address, or "
+            "the language you'd like answers in, and I'll remember it. Ask "
+            "`what do you know about me?` to see it; I only show your email to "
+            "you, in a direct message.",
+        ]
     lines += [
         "",
         "In a channel, I only cite what everyone there can read. Ask me in a "
@@ -81,9 +91,15 @@ def describe_capabilities(external_tools: Sequence[str]) -> str:
 class SelfDescriptionAnswerService:
     """Answers questions about the assistant itself; delegates the rest."""
 
-    def __init__(self, fallback: AnswerService, external_tools: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        fallback: AnswerService,
+        external_tools: Sequence[str] = (),
+        *,
+        personal_facts: bool = False,
+    ) -> None:
         self._fallback = fallback
-        self._description = describe_capabilities(external_tools)
+        self._description = describe_capabilities(external_tools, personal_facts=personal_facts)
 
     async def answer(self, question: Question) -> Answer:
         if self_description_question(question.text):

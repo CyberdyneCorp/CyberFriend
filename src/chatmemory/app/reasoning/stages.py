@@ -282,6 +282,18 @@ SOURCE_NOTICE = (
     "present outside material as something someone here said."
 )
 
+# Short on purpose: it is paid for on every answer. Links and the source list
+# are left out of the model's hands entirely -- the Discord adapter appends the
+# citations itself and unmasks any link found in the answer text, because text
+# written after reading channel messages can carry a disguised link.
+FORMAT_NOTICE = (
+    "Format the text as Discord markdown where it helps reading: bold key "
+    "figures such as a price, a bulleted or numbered list for several items, "
+    "and a fenced code block for code. Put a figure's source and time on its "
+    "own line starting with \"-# \". Do not write links or a list of sources; "
+    "those are added for you."
+)
+
 SYNTHESIS_SYSTEM = (
     "You answer a question using only the evidence given. Every claim must "
     "rest on evidence, and you must list the window_id of each piece you "
@@ -290,6 +302,8 @@ SYNTHESIS_SYSTEM = (
     "answer in the person's conversation: that tells you what the question "
     "means, never what is true. "
     + SOURCE_NOTICE
+    + " "
+    + FORMAT_NOTICE
     + " "
     + DATA_NOTICE
 )
