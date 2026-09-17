@@ -49,6 +49,12 @@ import discord
 import structlog
 from discord import app_commands
 
+from chatmemory.adapters.discord.formatting import (
+    escape_markdown,
+    masked_link,
+    sanitize_answer,
+    split_message,
+)
 from chatmemory.app.ask import (
     AskRequest,
     AskService,
@@ -76,10 +82,16 @@ from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, Source
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Citation
 
+UNPLACEABLE_INTERACTION = (
+    "I couldn't tell which channel this was asked in, so I didn't answer. "
+    "Try again from the channel, or send me a direct message."
+)
 log = structlog.get_logger()
 
 PLATFORM = "discord"
-MAX_REPLY_CHARS = 1900  # Discord's limit is 2000; leave room for citations.
+# An answer is split across messages rather than cut, but not without bound:
+# a runaway answer should not become a wall of messages in a shared channel.
+MAX_ANSWER_CHARS = 6000
 MAX_CITATIONS = 5
 MAX_EXCERPT_CHARS = 140
 MAX_ARGUMENT_CHARS = 1200  # Leaves room for the rest of the prompt.
@@ -94,9 +106,10 @@ EXPIRED_NOTE = (
     "This request timed out and nothing was changed. Ask again if you still want it."
 )
 
+# Sources are subtext (`-# `): present on every answer, and quieter than it.
 SOURCE_HEADINGS = {
-    SOURCE_DISCORD: "**From this server:**",
-    SOURCE_WEB: "**From the web:**",
+    SOURCE_DISCORD: "-# **From this server:**",
+    SOURCE_WEB: "-# **From the web:**",
 }
 
 SOURCE_FALLBACK_LABELS = {
@@ -150,10 +163,17 @@ INDEXING_DESCRIPTIONS = {
 
 
 def _forgotten_note(turns: int, summaries: int, everywhere: bool) -> str:
-    where = "everywhere" if everywhere else "in this conversation"
+    if everywhere:
+        # Said whatever the counts: forgetting everywhere also deletes the
+        # person's facts, which the purge does not count, so "nothing to
+        # forget" could be false.
+        return (
+            "Done. I've forgotten what you asked me everywhere, and anything you "
+            "asked me to remember about you."
+        )
     if not turns and not summaries:
-        return f"There was nothing to forget {where}."
-    return f"Done. I've forgotten what you asked me {where}."
+        return "There was nothing to forget in this conversation."
+    return "Done. I've forgotten what you asked me in this conversation."
 
 
 CAPABILITIES = (
@@ -162,7 +182,9 @@ CAPABILITIES = (
     "Mention me with a question, use `/ask`, or send me a direct message.\n"
     "Use `/resolve` to close something I said was asked of you, or to tell me "
     "it was never yours.\n"
-    "I remember our conversation so follow-ups make sense; `/forget` erases it.\n\n"
+    "I remember our conversation so follow-ups make sense; `/forget` erases it.\n"
+    "Tell me `call me Leo`, your email, or `reply to me in Portuguese` and I'll "
+    "remember it; your email is only ever shown to you, in a DM.\n\n"
     "Answers posted in a channel only use sources everyone here can read. "
     "Ask me in a DM to search everything *you* can read."
 )
@@ -225,7 +247,10 @@ def _citation_line(number: int, citation: Citation) -> str:
     # window spans several people, so naming one author is wrong even when a
     # name is known.
     label = citation.author_display.strip() or SOURCE_FALLBACK_LABELS.get(source, source)
-    excerpt = _clip(" ".join(citation.excerpt.split()), MAX_EXCERPT_CHARS)
+    # Clipped before escaping, so the cut never lands between a backslash and
+    # the character it escapes. The excerpt is quoted content: escaped so it
+    # cannot add a heading, a spoiler, a code fence or a masked link.
+    excerpt = escape_markdown(_clip(" ".join(citation.excerpt.split()), MAX_EXCERPT_CHARS))
     # The heading above already says where this came from; the inline tag
     # repeats it for every non-corpus line, because a line quoted, screenshot
     # or read on its own loses the heading and keeps the claim.
@@ -235,8 +260,10 @@ def _citation_line(number: int, citation: Citation) -> str:
         # `[label]()` renders as literal brackets, which reads as a broken
         # link rather than as a source that has none -- a remote MCP server's
         # result, typically. Say what it is instead.
-        return f"{number}. {tag}{label} — {excerpt}"
-    return f"{number}. {tag}[{label}]({target}) — {excerpt}"
+        return f"-# {number}. {tag}{escape_markdown(label)} — {excerpt}"
+    # The one place a reply carries a masked link: built here from the
+    # citation's own URL, never taken from answer prose.
+    return f"-# {number}. {tag}{masked_link(label, target)} — {excerpt}"
 
 
 def _link_target(url: str) -> str:
@@ -290,8 +317,14 @@ def _capped(
 
 
 def _render(scoped: ScopedAnswer) -> str:
+    """The whole reply as markdown, before it is split into messages.
+
+    The answer text is model output written after reading channel messages
+    and web pages, so its links are unmasked; only the citation lines built
+    below may carry a masked link.
+    """
     answer = scoped.answer
-    body = answer.text[:MAX_REPLY_CHARS]
+    body = sanitize_answer(answer.text[:MAX_ANSWER_CHARS])
     if not answer.citations:
         return body
     lines = [body]
@@ -302,6 +335,11 @@ def _render(scoped: ScopedAnswer) -> str:
             lines.append(_citation_line(number, citation))
             number += 1
     return "\n".join(lines)
+
+
+def _messages(scoped: ScopedAnswer) -> list[str]:
+    """The reply as Discord messages, split outside code blocks."""
+    return split_message(_render(scoped))
 
 
 _ASK_PHRASING = {
@@ -820,9 +858,20 @@ class CyberFriendClient(discord.Client):
             # A reasoning run can outlast Discord's 3s interaction deadline,
             # so acknowledge immediately and deliver when ready.
             await interaction.response.defer(thinking=True)
+            # A guild interaction without a channel cannot be placed, and must
+            # not fall back to "direct message": a DM is the one destination
+            # where a person's email may be shown, so guessing DM for a guild
+            # question would widen what the answer may contain.
+            if interaction.guild_id is not None and interaction.channel_id is None:
+                await interaction.followup.send(
+                    UNPLACEABLE_INTERACTION,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
             destination = (
                 ChannelRef(PLATFORM, interaction.channel_id)
-                if interaction.guild_id and interaction.channel_id
+                if interaction.guild_id is not None and interaction.channel_id is not None
                 else None
             )
             outcome = await self._asks.ask(
@@ -849,7 +898,10 @@ class CyberFriendClient(discord.Client):
                 return
 
             assert outcome.scoped is not None
-            await interaction.followup.send(_render(outcome.scoped))
+            for part in _messages(outcome.scoped):
+                await interaction.followup.send(
+                    part, allowed_mentions=discord.AllowedMentions.none()
+                )
             await self._notify_if_withheld(outcome.scoped, interaction.user, interaction.channel)
 
         return ask
@@ -895,7 +947,15 @@ class CyberFriendClient(discord.Client):
             return
 
         assert outcome.scoped is not None
-        await message.reply(_render(outcome.scoped), mention_author=False)
+        for index, part in enumerate(_messages(outcome.scoped)):
+            if index == 0:
+                await message.reply(
+                    part, mention_author=False, allowed_mentions=discord.AllowedMentions.none()
+                )
+            else:
+                # A plain send: replying again would stack a reply preview on
+                # every part of one answer.
+                await message.channel.send(part, allowed_mentions=discord.AllowedMentions.none())
         await self._notify_if_withheld(outcome.scoped, message.author, message.channel)
 
     def user_mentioned(self, message: discord.Message) -> bool:

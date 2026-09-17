@@ -33,6 +33,15 @@ Both halves are keyed by the authenticated asker and the delivery location,
 never by the location alone, and the recall runs under the same narrowed view
 retrieval will: a remembered answer from a channel the room cannot read is not
 put in front of a model writing a reply to that room.
+
+And it is where a person's facts about themselves are set, shown and deleted.
+Recognised in `request.text` -- the asker's own message to the assistant --
+before anything is recalled or retrieved, so no remembered turn, channel
+message or tool result is ever read as "call me ...". A fact turn never reaches
+the answer services and is never remembered as conversation: the message may
+hold an email address, and memory is recalled into prompts for channel replies.
+Whose facts are touched is always `request.asker`; a request for anyone else's
+gets one fixed refusal that neither reads the store nor varies with it.
 """
 
 from __future__ import annotations
@@ -44,6 +53,7 @@ from dataclasses import dataclass, replace
 
 import structlog
 
+from chatmemory.app.asker import AskerFacts, answering_with_facts
 from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.asks.model import (
     CorrectionOutcome,
@@ -58,8 +68,9 @@ from chatmemory.app.confirmation import (
 )
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.disclosure import ScopedAnswer, WithheldEvidenceProbe, enforce_audience
+from chatmemory.app.facts import FactOutcome, FactResult, PersonalFactsService
 from chatmemory.app.limits import RateLimiter
-from chatmemory.app.routing import indexing_request
+from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.acl import AclResolver, AudienceResolver
@@ -70,6 +81,12 @@ from chatmemory.ports.answers import (
     AskerProfileResolver,
     Question,
 )
+from chatmemory.ports.facts import (
+    MAX_PREFERRED_NAME_CHARS,
+    FactKind,
+    FactRejection,
+    PersonalFacts,
+)
 from chatmemory.ports.memory import ConversationLocation, MemoryPurge, Recollection
 
 log = structlog.get_logger()
@@ -79,6 +96,136 @@ INDEXING_POINTER = (
     "Manage Channels on the channel can use `/index` or `/unindex` there; Discord "
     "decides who that is, not what the message says."
 )
+
+FACT_LABELS = {
+    FactKind.PREFERRED_NAME: "preferred name",
+    FactKind.EMAIL: "email address",
+    FactKind.PREFERRED_LANGUAGE: "preferred language",
+}
+
+REMEMBERABLE = (
+    "I can remember three things about you, if you tell me yourself: the name "
+    "you'd like me to call you (`call me Leo`), your email address (`my email "
+    "is ...`), and the language you'd like answers in (`reply to me in "
+    "Portuguese`). Ask `what do you know about me?` to see them, or `forget my "
+    "email` to delete one."
+)
+
+FACT_UNSUPPORTED = "I haven't saved that. " + REMEMBERABLE
+
+# One answer for "that's about someone else", whoever it names.
+FACT_ABOUT_SOMEONE_ELSE = (
+    "I only remember what people tell me about themselves, so I haven't saved "
+    "that. They can tell me directly."
+)
+
+# One answer for "what is X's email?", whether or not X ever set one. It is
+# returned without reading the store, so neither its words nor its timing can
+# say whether anything is there.
+FACT_OTHERS_REFUSED = (
+    "I don't share anything people have told me about themselves, and I can't "
+    "say whether they have. Ask them directly."
+)
+
+FACTS_UNAVAILABLE = "I can't remember personal details on this deployment."
+
+# Said in every channel reply about facts, whether or not an email is stored:
+# a note that appeared only when there was one would announce that there is.
+EMAIL_CHANNEL_NOTE = "-# I only show an email address in a direct message to its owner."
+
+FACT_REJECTIONS = {
+    FactRejection.EMPTY: "it was empty",
+    FactRejection.TOO_LONG: "it's too long",
+    FactRejection.MALFORMED: "it isn't a well-formed email address",
+    FactRejection.DISALLOWED_CHARACTERS: (
+        "it can only use letters, numbers, spaces and simple punctuation"
+    ),
+}
+
+FACT_NOT_STORED = (
+    "I didn't save that: you've opted out, so I don't keep personal details for you."
+)
+
+
+def _stored_reply(result: FactResult, direct: bool) -> str:
+    fact = result.fact
+    assert fact is not None
+    if fact.kind is FactKind.PREFERRED_NAME:
+        return f"Got it, I'll call you **{fact.value}**."
+    if fact.kind is FactKind.PREFERRED_LANGUAGE:
+        return f"Got it, I'll answer you in **{fact.value}**."
+    if direct:
+        return (
+            f"Got it, I've saved your email address as `{fact.value}`. I only "
+            "show it to you, in a direct message."
+        )
+    # Confirmed without the value: a channel reply is read by everyone here.
+    return (
+        "Got it, I've saved your email address. I only show it to you in a "
+        "direct message, so I won't repeat it here."
+    )
+
+
+def fact_set_reply(result: FactResult, direct: bool) -> str:
+    """What the person is told after asking to set a fact.
+
+    Every stored fact is confirmed back, so a misrecognised "call me ..." is
+    visible the moment it happens. A refused value is never repeated: an
+    almost-email is still personal data.
+    """
+    label = FACT_LABELS[result.kind]
+    if result.outcome is FactOutcome.STORED:
+        return _stored_reply(result, direct)
+    if result.outcome is FactOutcome.NOT_STORED:
+        return FACT_NOT_STORED
+    reason = FACT_REJECTIONS.get(result.rejection or FactRejection.MALFORMED, "")
+    limit = (
+        f" (at most {MAX_PREFERRED_NAME_CHARS} characters)"
+        if result.rejection is FactRejection.TOO_LONG and result.kind is FactKind.PREFERRED_NAME
+        else ""
+    )
+    return f"I didn't save that as your {label}: {reason}{limit}."
+
+
+def facts_shown_reply(facts: PersonalFacts, direct: bool) -> str:
+    """The person's own facts, as they may be shown where they asked.
+
+    `facts` has already been through `visible_facts`, so a channel reply has no
+    email to show. The wording must not let "not shown here" read as "not
+    stored": the channel version never says there is nothing.
+    """
+    lines = [_shown_line(stored.fact.kind, stored.fact.value) for stored in facts.facts]
+    if direct:
+        if not lines:
+            return "You haven't asked me to remember anything about you.\n\n" + REMEMBERABLE
+        return "\n".join(["Here's what you've asked me to remember:", *lines])
+    head = (
+        "Here's what I can show you here:"
+        if lines
+        else "I have no preferred name or language saved for you."
+    )
+    return "\n".join([head, *lines, EMAIL_CHANNEL_NOTE])
+
+
+def _shown_line(kind: FactKind, value: str) -> str:
+    # Values were validated to carry no markdown, so they are safe to embolden;
+    # an email goes in code so its underscores are not read as emphasis.
+    shown = f"`{value}`" if kind is FactKind.EMAIL else f"**{value}**"
+    return f"• {FACT_LABELS[kind].capitalize()}: {shown}"
+
+
+def fact_forgotten_reply(kind: FactKind | None) -> str:
+    """The same words whether or not there was anything to delete.
+
+    In a channel, "you had no email saved" would tell the room something; and
+    the person's goal -- that it is gone -- holds either way.
+    """
+    if kind is None:
+        return (
+            "Done. I don't have a preferred name, email address or preferred "
+            "language for you any more."
+        )
+    return f"Done. I don't have a {FACT_LABELS[kind]} for you any more."
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +320,7 @@ class AskService:
         corrections: CorrectionService | None = None,
         conversations: Conversations | None = None,
         profiles: AskerProfileResolver | None = None,
+        facts: PersonalFactsService | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
@@ -184,6 +332,11 @@ class AskService:
         # is only honest if something proves the running process supplies it.
         self._conversations = conversations
         self._profiles = profiles
+        # Optional like memory, and proven wired the same way:
+        # `test_facts_behaviour` reads the chain from the entrypoint down.
+        # Without it a fact request is answered that facts are unavailable,
+        # never searched for in the corpus.
+        self._facts = facts
         # Optional because the notice is the only thing that needs it: a
         # deployment without one answers exactly as before, and simply never
         # tells anyone that asking privately would get them more.
@@ -217,6 +370,13 @@ class AskService:
         if not decision.allowed:
             return AskOutcome(None, True, decision.retry_after_seconds)
 
+        intent = fact_intent(request.text)
+        if intent is not None:
+            # Before indexing, recall and retrieval: the text is the asker's own
+            # message, and nothing else is ever read for a fact.
+            reply = await self._fact_turn(request, intent)
+            return AskOutcome(ScopedAnswer(Answer(text=reply), frozenset()))
+
         if indexing_request(request.text):
             # Chat cannot change indexing scope, whoever asks and whatever they
             # say about themselves. Answered before anything is retrieved, so
@@ -242,8 +402,8 @@ class AskService:
             visible_channels=viewer.visible_channels & audience.readable_channels,
         )
         location = request.location
-        memory, profile = await asyncio.gather(
-            self._recall(scope, location), self._profile(request.asker)
+        memory, profile, facts = await asyncio.gather(
+            self._recall(scope, location), self._profile(request.asker), self._asker_facts(viewer)
         )
         question = Question(
             text=request.text,
@@ -262,7 +422,7 @@ class AskService:
         # `gather` copies the current context into each task it starts, so a
         # tool call made deep inside the answer finds this channel and no
         # other.
-        with self._attending(request.asker, confirm):
+        with self._attending(request.asker, confirm), answering_with_facts(facts):
             answer, withheld = await asyncio.gather(
                 self._answers.answer(question),
                 self._withheld_channels(viewer, audience, request.text),
@@ -289,6 +449,11 @@ class AskService:
         None when this deployment keeps no memory, so a surface can say so
         rather than report a deletion of nothing as a success.
         """
+        if request.location is None and self._facts is not None:
+            # Facts belong to the person, not to a location, so only the
+            # unscoped forget reaches them. Not caught: "forgot everything"
+            # that kept an email address must fail loudly, not report success.
+            await self._facts.forget_all(await self._acl.resolve_viewer(request.requester))
         if self._conversations is None:
             return None
         purge = await self._conversations.forget(request.requester, request.location)
@@ -305,6 +470,64 @@ class AskService:
         if self._conversations is None:
             return Recollection()
         return await self._conversations.recall(scope, location)
+
+    async def _fact_turn(self, request: AskRequest, intent: FactIntent) -> str:
+        """Set, show or delete the asker's own facts, and say what happened."""
+        log.info(
+            "ask.fact_intent",
+            asker=str(request.asker),
+            action=intent.action.value,
+            kind=intent.kind.value if intent.kind else None,
+            direct=request.destination is None,
+        )
+        # Refusals first, and before the wiring check: whether a deployment
+        # keeps facts is no reason to answer a question about someone else
+        # differently.
+        if intent.action is FactAction.OTHERS_FACTS:
+            return FACT_OTHERS_REFUSED
+        if intent.action is FactAction.ABOUT_SOMEONE_ELSE:
+            return FACT_ABOUT_SOMEONE_ELSE
+        if intent.action is FactAction.UNSUPPORTED:
+            return FACT_UNSUPPORTED
+        if self._facts is None:
+            return FACTS_UNAVAILABLE
+        # The viewer is resolved from the authenticated asker, and it is the
+        # only key the fact service takes: there is no way to name anyone else.
+        viewer = await self._acl.resolve_viewer(request.asker)
+        direct = request.location.direct
+        if intent.action is FactAction.SHOW:
+            return facts_shown_reply(await self._facts.facts_for(viewer, request.location), direct)
+        if intent.action is FactAction.FORGET:
+            if intent.kind is None:
+                await self._facts.forget_all(viewer)
+            else:
+                await self._facts.forget(viewer, intent.kind)
+            return fact_forgotten_reply(intent.kind)
+        assert intent.kind is not None and intent.value is not None
+        result = await self._facts.remember(viewer, intent.kind, intent.value)
+        return fact_set_reply(result, direct)
+
+    async def _asker_facts(self, viewer: Viewer) -> AskerFacts | None:
+        """The asker's name and language for the prompt. Never their email."""
+        if self._facts is None:
+            return None
+        try:
+            # Read as a channel would see them, so the email is dropped by the
+            # same filter every channel reply goes through -- even for a direct
+            # message. Nothing an answer needs depends on it, and a prompt that
+            # never held it cannot leak it.
+            stored = await self._facts.facts_for(
+                viewer, ConversationLocation(viewer.person.platform, 0, direct=False)
+            )
+        except Exception:
+            # No facts is never a failure: the question is answered without them.
+            log.exception("ask.facts_failed", asker=str(viewer.person))
+            return None
+        return AskerFacts(
+            person=viewer.person,
+            preferred_name=stored.get(FactKind.PREFERRED_NAME),
+            preferred_language=stored.get(FactKind.PREFERRED_LANGUAGE),
+        )
 
     async def _profile(self, asker: PersonRef) -> AskerProfile | None:
         """The asker's own profile. Only ever looked up for `request.asker`."""

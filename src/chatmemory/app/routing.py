@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
+from chatmemory.ports.facts import FactKind
+
 
 class Route(StrEnum):
     FIXED = "fixed"
@@ -733,3 +735,305 @@ def indexing_request(text: str) -> bool:
     "index".
     """
     return bool(_INDEX_REQUEST_PATTERN.search(text.lower()))
+
+
+# --- personal facts ---------------------------------------------------------
+#
+# The person's own message to the assistant is the only place a fact may come
+# from. That is enforced by where this runs -- on `AskRequest.text`, before
+# anything is recalled or retrieved -- and by what it recognises: statements in
+# the first person. A fact stated about someone else is recognised too, but only
+# so it can be refused by name rather than searched for.
+#
+# Every pattern is anchored to the whole message. "call me Leo" is a request;
+# "why does everyone call me Leo in #general?" is a question, and storing
+# "Leo in #general?" as a name is the false positive the design warns about.
+
+
+class FactAction(StrEnum):
+    SET = "set"
+    SHOW = "show"
+    FORGET = "forget"
+    # Something to remember that is not one of the three facts.
+    UNSUPPORTED = "unsupported"
+    # "João's email is ...": a fact about somebody other than the speaker.
+    ABOUT_SOMEONE_ELSE = "about_someone_else"
+    # "what's João's email?": a request for somebody else's facts.
+    OTHERS_FACTS = "others_facts"
+
+
+@dataclass(frozen=True, slots=True)
+class FactIntent:
+    """What the asker's message asks of their personal facts.
+
+    `kind` None on FORGET means every fact. `value` is the raw text the person
+    gave, unvalidated: validation belongs to `ports.facts.PersonalFact`, so a
+    malformed email is still a SET and comes back as a refusal saying why.
+    """
+
+    action: FactAction
+    kind: FactKind | None = None
+    value: str | None = None
+
+
+_POLITE = (
+    r"(?:please|pls|por\s+favor|can\s+you|could\s+you|would\s+you|will\s+you|"
+    r"pode|voc[eê]\s+pode)"
+)
+_GREETING = r"(?:hey|hi|hello|ok|okay|so|oi|ol[aá])"
+_REMEMBER = r"(?:remember|note|save|keep\s+in\s+mind|lembre(?:-se)?|lembra|anota|guarda|salva)"
+_LEAD = (
+    rf"^(?:{_GREETING}\b[,!.]?\s*)*(?:{_POLITE}\b,?\s*)*"
+    rf"(?:{_REMEMBER}\b(?:\s+(?:that|que|de\s+que))?[:,]?\s*)?"
+)
+_TRAIL = r"(?:,?\s*(?:please|pls|por\s+favor|thanks|thank\s+you|obrigad[oa]))?[\s.!?]*$"
+_IS = r"(?:is|[ée])"
+
+_EMAIL_WORD = r"e-?mail(?:\s+address)?"
+_NAME_WORD = r"(?:preferred\s+name|nickname|name|nome(?:\s+preferido)?|apelido)"
+_LANGUAGE_WORD = r"(?:preferred\s+language|language|idioma(?:\s+preferido)?|l[ií]ngua)"
+_MY = r"(?:my|meu|minha)"
+
+_SET_PATTERNS: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
+    (kind, re.compile(_LEAD + body + _TRAIL, re.IGNORECASE))
+    for kind, body in (
+        (
+            FactKind.PREFERRED_NAME,
+            r"(?:(?:you\s+can\s+|just\s+)?call\s+me|my\s+(?:preferred\s+)?name\s+is|"
+            r"i\s+(?:prefer|like|want)\s+to\s+be\s+called|"
+            r"(?:set|change|update)\s+my\s+(?:preferred\s+)?name\s+to|"
+            r"(?:me\s+chame|me\s+chama|me\s+chamem|pode\s+me\s+chamar)\s+de|"
+            r"meu\s+nome\s+(?:preferido\s+)?[ée]|prefiro\s+ser\s+chamad[oa]\s+de)"
+            r"\s+(?P<value>.+?)",
+        ),
+        (
+            FactKind.EMAIL,
+            rf"(?:my\s+{_EMAIL_WORD}\s+is|(?:set|change|update)\s+my\s+{_EMAIL_WORD}\s+to|"
+            r"meu\s+e-?mail\s+[ée]|(?:mude|muda|altere|atualize)\s+(?:o\s+)?meu\s+e-?mail\s+para)"
+            r"\s+(?P<value>\S+?)",
+        ),
+        (FactKind.EMAIL, rf"use\s+(?P<value>\S+)\s+as\s+my\s+{_EMAIL_WORD}"),
+        (
+            FactKind.PREFERRED_LANGUAGE,
+            r"(?:my\s+(?:preferred\s+)?language\s+is|"
+            r"(?:set|change|update)\s+my\s+(?:preferred\s+)?language\s+to|"
+            r"(?:(?:always|from\s+now\s+on,?)\s+)?(?:reply|answer|respond|speak|talk|write)"
+            r"\s+to\s+me\s+in|"
+            r"(?:always|from\s+now\s+on,?)\s+(?:reply|answer|respond|speak|talk|write)\s+in|"
+            r"meu\s+idioma\s+(?:preferido\s+)?[ée]|"
+            r"(?:sempre\s+)?(?:responda|fale|escreva)(?:\s+(?:comigo|para\s+mim|pra\s+mim))?\s+em)"
+            r"\s+(?P<value>.+?)(?:\s+from\s+now\s+on)?",
+        ),
+        (
+            FactKind.PREFERRED_LANGUAGE,
+            r"(?:reply|answer|respond|speak|talk|write)(?:\s+to\s+me)?\s+in\s+(?P<value>.+?)"
+            r"\s+from\s+now\s+on",
+        ),
+    )
+)
+
+# A name someone asks to be called is a few words. The bound and the stop
+# words are what keep "call me when the deploy is done" out of the name field:
+# a miss here is answered as an ordinary question, which is recoverable.
+_MAX_NAME_WORDS = 4
+_MAX_LANGUAGE_WORDS = 3
+_NOT_A_NAME_START = frozenset({
+    "when", "if", "after", "before", "back", "later", "tomorrow", "today",
+    "tonight", "at", "on", "in", "about", "once", "whenever", "as", "by", "and",
+    "or", "to", "anytime", "maybe", "asap", "now", "sometime", "quando", "se",
+    "depois", "amanhã", "amanha", "mais", "hoje", "agora",
+})
+_QUOTES = "\"'`“”‘’"
+
+_FORGET_PATTERN = re.compile(
+    _LEAD
+    + r"(?:forget|delete|remove|clear|erase|drop|esque[çc]a|esquece|apague|apaga|remova)"
+    r"\s+(?:(?:o|a|os|as)\s+)?(?:"
+    rf"{_MY}\s+(?:(?P<email>{_EMAIL_WORD})|(?P<name>{_NAME_WORD})|(?P<language>{_LANGUAGE_WORD})|"
+    r"(?:personal\s+)?(?:facts|details|info|information)|dados(?:\s+pessoais)?)"
+    r"|everything\s+you\s+know\s+about\s+me|tudo\s+(?:o\s+)?que\s+(?:voc[eê]|vc)\s+sabe\s+sobre\s+mim"
+    r")" + _TRAIL,
+    re.IGNORECASE,
+)
+
+_SHOW_PATTERN = re.compile(
+    _LEAD
+    + r"(?:"
+    r"what\s+(?:do|did)\s+you\s+(?:know|remember|have)\s+(?:about|on|for)\s+me|"
+    r"what\s+have\s+you\s+(?:remembered|saved|stored|got)\s+(?:about|on|for)\s+me|"
+    rf"(?:do|did)\s+you\s+(?:know|have|remember|save|store)\s+my\s+"
+    rf"(?:{_EMAIL_WORD}|preferred\s+name|preferred\s+language)|"
+    r"(?:show|list|tell|give)(?:\s+me)?\s+my\s+(?:personal\s+)?(?:facts|details|info|information)|"
+    rf"what(?:'s|\s+is)\s+my\s+(?:{_EMAIL_WORD}|preferred\s+name|preferred\s+language)|"
+    r"what\s+(?:do\s+you\s+call\s+me|name\s+do\s+you\s+call\s+me|"
+    r"language\s+do\s+you\s+(?:reply|answer)(?:\s+to\s+me)?\s+in)|"
+    r"o\s+que\s+(?:voc[eê]|vc)\s+sabe\s+sobre\s+mim|"
+    r"qual\s+(?:[ée]\s+)?(?:o\s+)?meu\s+(?:e-?mail|nome\s+preferido|idioma(?:\s+preferido)?)"
+    r")" + _TRAIL,
+    re.IGNORECASE,
+)
+
+# The fact words a statement or request about another person is recognised by.
+# Deliberately not bare "name": "João's name is on the rota" is not a fact.
+_OTHERS_FACT_WORD = rf"(?:{_EMAIL_WORD}|preferred\s+name|preferred\s+language)"
+_NOT_SOMEONE_ELSE = frozenset(
+    {"my", "meu", "minha", "i", "me", "you", "your", "eu", "voce", "você"}
+)
+
+_ABOUT_SOMEONE_ELSE_PATTERNS = tuple(
+    re.compile(_LEAD + body + _TRAIL, re.IGNORECASE)
+    for body in (
+        rf"(?P<who>[^\s']+(?:\s+[^\s']+){{0,2}})(?:'s|s')\s+{_OTHERS_FACT_WORD}\s+is\s+.+?",
+        rf"(?:his|her|their)\s+{_OTHERS_FACT_WORD}\s+is\s+.+?",
+        rf"(?:set|change|update)\s+(?P<who>\S+(?:\s+\S+)?)(?:'s|s')\s+{_OTHERS_FACT_WORD}\s+to\s+.+?",
+        r"call\s+(?:him|her|them|<@!?\d+>)\s+.+?",
+        r"(?:o\s+)?(?:e-?mail|nome\s+preferido|idioma)\s+d[aoe]\s+(?P<who>\S+(?:\s+\S+)?)\s+[ée]\s+.+?",
+    )
+)
+
+# Requests for somebody else's facts are matched anywhere in the message: one
+# buried in a longer question is refused as firmly as one on its own.
+_OTHERS_FACTS_PATTERNS = tuple(
+    re.compile(body, re.IGNORECASE)
+    for body in (
+        r"\b(?:what(?:'s|\s+is|\s+are)|tell\s+me|give\s+me|send\s+me|share|show\s+me|find|"
+        r"get\s+me|do\s+you\s+(?:know|have))\s+(?:the\s+)?"
+        rf"(?P<who>[^\s?']+(?:\s+[^\s?']+)?)(?:'s|s')\s+{_OTHERS_FACT_WORD}",
+        rf"\b(?:what|which)\s+{_OTHERS_FACT_WORD}\s+(?:does|do|did|is)\s+(?P<who>\S+)",
+        rf"\b(?:does|do|has|have|did)\s+(?P<who>\S+(?:\s+\S+)?)\s+(?:have|has|set|give|given|"
+        rf"tell\s+you|told\s+you)\s+(?:you\s+)?(?:an?\s+|their\s+|his\s+|her\s+)?{_OTHERS_FACT_WORD}",
+        rf"{_OTHERS_FACT_WORD}\s+(?:of|for|from)\s+<@!?\d+>",
+        r"<@!?\d+>(?:'s|s')?\s+(?:e-?mail|preferred\s+name|preferred\s+language)",
+        r"\bqual\s+(?:[ée]\s+)?(?:o\s+)?(?:e-?mail|nome\s+preferido|idioma)\s+d[aoe]\s+(?P<who>\S+)",
+    )
+)
+
+_UNSUPPORTED_PATTERNS = tuple(
+    re.compile(body, re.IGNORECASE)
+    for body in (
+        # "remember that I ..." -- a request to keep something about oneself.
+        rf"^(?:{_GREETING}\b[,!.]?\s*)*(?:{_POLITE}\b,?\s*)*{_REMEMBER}\s+"
+        r"(?:that\s+|que\s+|de\s+que\s+)?(?:this\b|isso\b|the\s+following\b|"
+        r"(?:i|i'm|i've|my|me|mine|eu|meu|minha)\b)",
+        # "my phone number is ..." -- a personal attribute outside the set.
+        _LEAD
+        + r"(?:my\s+(?:phone(?:\s+number)?|mobile(?:\s+number)?|cell(?:\s+number)?|number|"
+        r"birthday|birth\s*date|date\s+of\s+birth|(?:home\s+)?address|pronouns|time\s*zone|"
+        r"age|location|city|country|password|job\s+title|github|twitter|linkedin|telegram|"
+        r"whatsapp|surname|last\s+name|full\s+name|favou?rite\s+\w+)\s+(?:is|are)|"
+        r"meu\s+(?:telefone|celular|n[uú]mero|anivers[aá]rio|endere[çc]o|fuso(?:\s+hor[aá]rio)?|"
+        r"cargo|sobrenome)\s+(?:[ée]|s[aã]o))\s+.+",
+    )
+)
+
+
+def _collapse_text(text: str) -> str:
+    # Curly apostrophes are what phones type; "João’s email" is still a
+    # possessive.
+    return " ".join(text.replace("’", "'").split())
+
+
+def _someone_else(match: re.Match[str]) -> bool:
+    who = match.groupdict().get("who")
+    if who is None:
+        return True
+    return who.split()[-1].lower() not in _NOT_SOMEONE_ELSE
+
+
+def _clean_value(value: str) -> str:
+    return value.strip().strip(_QUOTES).strip()
+
+
+def _plausible(kind: FactKind, value: str) -> bool:
+    words = value.split()
+    if not words:
+        return False
+    if kind is FactKind.PREFERRED_NAME:
+        return len(words) <= _MAX_NAME_WORDS and words[0].lower() not in _NOT_A_NAME_START
+    if kind is FactKind.PREFERRED_LANGUAGE:
+        return len(words) <= _MAX_LANGUAGE_WORDS
+    return True
+
+
+def _forget_intent(text: str) -> FactIntent | None:
+    match = _FORGET_PATTERN.match(text)
+    if match is None:
+        return None
+    for group, kind in (
+        ("email", FactKind.EMAIL),
+        ("name", FactKind.PREFERRED_NAME),
+        ("language", FactKind.PREFERRED_LANGUAGE),
+    ):
+        if match.group(group):
+            return FactIntent(FactAction.FORGET, kind)
+    return FactIntent(FactAction.FORGET)
+
+
+def _set_intent(text: str) -> FactIntent | None:
+    for kind, pattern in _SET_PATTERNS:
+        match = pattern.match(text)
+        if match is None:
+            continue
+        value = _clean_value(match.group("value"))
+        if _plausible(kind, value):
+            return FactIntent(FactAction.SET, kind, value)
+    return None
+
+
+_USER_MENTION = re.compile(r"<@[!&]?\d+>[,:;]?")
+
+
+def states_own_email(text: str) -> bool:
+    """Whether a channel message is someone giving their own email address.
+
+    For ingest, not for asks: such a message must never enter the corpus. The
+    assistant stores the address and promises to show it only in its owner's
+    DMs; a stored copy of the message would hand it to anyone who can read the
+    channel, through retrieval and citations, in the room or in their own DMs.
+
+    Every mention is removed, not only the assistant's, because ingest does not
+    know which account is the assistant -- and "@someone my email is ..." is
+    withheld just the same, which errs on the private side. It does not require
+    the message to be addressed to the assistant for the same reason. A
+    malformed address still counts: an almost-email is still personal data.
+    """
+    intent = fact_intent(_USER_MENTION.sub(" ", text))
+    return (
+        intent is not None
+        and intent.action is FactAction.SET
+        and intent.kind is FactKind.EMAIL
+    )
+
+
+def fact_intent(text: str) -> FactIntent | None:
+    """What this message asks of the asker's personal facts, or None.
+
+    Only ever called on the asker's own message, and never on retrieved
+    content, remembered turns or tool output: those are data, and a fact set
+    from data is a fact somebody else planted. None means an ordinary question.
+
+    The order is the safety order. Requests about somebody else are recognised
+    before anything that could store, so "remember João's email is ..." is
+    refused rather than read as a statement by the speaker.
+    """
+    collapsed = _collapse_text(text)
+    if not collapsed:
+        return None
+    if any(
+        (m := p.match(collapsed)) is not None and _someone_else(m)
+        for p in _ABOUT_SOMEONE_ELSE_PATTERNS
+    ):
+        return FactIntent(FactAction.ABOUT_SOMEONE_ELSE)
+    if any(
+        (m := p.search(collapsed)) is not None and _someone_else(m)
+        for p in _OTHERS_FACTS_PATTERNS
+    ):
+        return FactIntent(FactAction.OTHERS_FACTS)
+    intent = _forget_intent(collapsed) or _set_intent(collapsed)
+    if intent is not None:
+        return intent
+    if _SHOW_PATTERN.match(collapsed):
+        return FactIntent(FactAction.SHOW)
+    if any(p.search(collapsed) for p in _UNSUPPORTED_PATTERNS):
+        return FactIntent(FactAction.UNSUPPORTED)
+    return None

@@ -29,6 +29,7 @@ from typing import Protocol, cast
 import discord
 import structlog
 
+from chatmemory.app.routing import states_own_email
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
 from chatmemory.ports.sources import SourceUnavailable
@@ -143,10 +144,19 @@ def _display_name(author: RawUser) -> str:
     return ""
 
 
+def withholds_personal_fact(raw: RawMessage) -> bool:
+    """A message giving the author's own email, which is never indexed.
+
+    Checked here, in the one conversion every path shares -- live messages,
+    edits and history backfill -- so no path can store what another withholds.
+    """
+    return states_own_email(raw.content)
+
+
 def to_message(raw: RawMessage) -> Message | None:
     """Convert a platform message, or None when it must not be indexed."""
     channel, thread_id = channel_of(raw)
-    if channel is None:
+    if channel is None or withholds_personal_fact(raw):
         return None
     reference = raw.reference
     return Message(
@@ -171,7 +181,11 @@ def is_ingestable(raw: RawMessage) -> bool:
     Our own answers quote the corpus; ingesting them feeds retrieval its own
     output, which compounds every time someone asks a similar question.
     """
-    return not raw.author.bot and channel_of(raw)[0] is not None
+    return (
+        not raw.author.bot
+        and channel_of(raw)[0] is not None
+        and not withholds_personal_fact(raw)
+    )
 
 
 def retry_after(error: BaseException) -> float | None:

@@ -45,7 +45,11 @@ from chatmemory.adapters.discord.acl import (
     DiscordAclResolver,
     PermissionCaches,
 )
-from chatmemory.adapters.discord.source import RawMessage, to_message
+from chatmemory.adapters.discord.source import (
+    RawMessage,
+    to_message,
+    withholds_personal_fact,
+)
 from chatmemory.app.scope import ScopeProvider
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message
@@ -353,6 +357,13 @@ class GatewayEventHandler:
 
     async def on_message_edit(self, after: RawMessage) -> None:
         if after.author.bot:
+            return
+        if withholds_personal_fact(after):
+            # Edited into "my email is ...": the upsert would store the email,
+            # and skipping it would leave the pre-edit text standing for a
+            # message that no longer says it. Retract it; a no-op if never
+            # stored, and not gated on scope for the same reason deletes aren't.
+            await self._sink.handle_delete(after.id, self._now())
             return
         message = to_message(after)
         if message is None:

@@ -38,6 +38,7 @@ SQL_MODULES = (
     "admin_sql",
     "config_sql",
     "memory_sql",
+    "facts_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -306,6 +307,32 @@ UNSCOPED: dict[str, str] = {
     "memory_sql.PURGE_TURNS_BEFORE": "write; retention",
     "memory_sql.PURGE_SUMMARIES_BEFORE": (
         "write; retention, keyed on the oldest content a summary carries"
+    ),
+    # --- facts_sql -------------------------------------------------------
+    #
+    # Personal facts are not channel content, so there is no readable set to
+    # bind. The person predicate stands in for it: every read and delete is
+    # keyed on the requester's own platform identity, and nothing returns a
+    # fact for a person id supplied on its own.
+    "facts_sql.UPSERT_FACT": (
+        "write; stores one of the asker's own facts against the person id the "
+        "adapter resolved from the asker's platform identity. Returns the id "
+        "only, which is how a row dropped by the opt-out trigger is told apart"
+    ),
+    "facts_sql.FACTS_OF_REQUESTER": (
+        "returns facts, but only the requester's own: the person is bound from "
+        "the viewer's platform identity in the WHERE clause, so no argument "
+        "can name another person, and an opted-out person reads nothing. "
+        "Facts are not channel-scoped; where an email may be shown is decided "
+        "by app.facts.visible_facts. Hard-deleted, so no deleted_at"
+    ),
+    "facts_sql.FORGET_FACT": (
+        "write; deletes one kind of the requester's own facts, keyed on their "
+        "platform identity. Returns no row"
+    ),
+    "facts_sql.FORGET_ALL_FACTS": (
+        "write; /forget everywhere, keyed on the requester's own platform "
+        "identity as FORGET_FACT. Returns no row"
     ),
 }
 

@@ -41,6 +41,7 @@ import structlog
 from chatmemory.app.reasoning.evidence import CORPUS_SOURCE_SYSTEMS, SOURCE_WEB
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.answers import Answer
+from chatmemory.ports.facts import PersonFactEraser
 from chatmemory.ports.memory import (
     ConversationLocation,
     MemoryPurge,
@@ -89,11 +90,21 @@ def answer_provenance(
 class ConversationMemory:
     """Records a person's turns and recalls them under their current access."""
 
-    def __init__(self, store: MemoryStore, recent_turns: int = DEFAULT_RECENT_TURNS) -> None:
+    def __init__(
+        self,
+        store: MemoryStore,
+        recent_turns: int = DEFAULT_RECENT_TURNS,
+        *,
+        facts: PersonFactEraser | None = None,
+    ) -> None:
         if recent_turns <= 0:
             raise ValueError("recent_turns must be positive")
         self._store = store
         self._recent_turns = recent_turns
+        # Personal facts share `/forget` everywhere with conversation history
+        # (openspec personal-facts). Optional only so existing constructions
+        # keep working; a forget-everywhere without it logs an error below.
+        self._facts = facts
 
     async def recall(self, viewer: Viewer, location: ConversationLocation) -> Recollection:
         """The viewer's own conversation here, with anything no longer readable removed.
@@ -135,4 +146,26 @@ class ConversationMemory:
     async def forget(
         self, person: PersonRef, location: ConversationLocation | None
     ) -> MemoryPurge:
+        """Forget history here, or everywhere when `location` is None.
+
+        Everywhere also deletes the person's facts: a fact belongs to the
+        person rather than to a location, so only the unscoped forget reaches
+        it. Facts go first -- they are the longer-lived personal data, and a
+        failure between the two deletes should leave history, not an email.
+        """
+        if location is None:
+            await self._forget_facts(person)
         return await self._store.forget(person, location)
+
+    async def _forget_facts(self, person: PersonRef) -> None:
+        if self._facts is None:
+            # Loud, because "forgot everything" that kept an email address is
+            # the failure an operator has no other way to see.
+            log.error(
+                "memory.facts_not_covered",
+                person=str(person),
+                hint="no fact store wired; /forget everywhere left personal facts",
+            )
+            return
+        count = await self._facts.forget_all_facts(person)
+        log.info("memory.facts_forgotten", person=str(person), facts=count)

@@ -70,6 +70,13 @@ be shown only in a direct message to its owner.
 - WHEN a person asks what the assistant knows about them in a channel
 - THEN the answer SHALL NOT show their email address in the channel
 
+#### Scenario: The message that set an email in a channel
+- WHEN a person tells the assistant their email address in an indexed channel
+- THEN that message SHALL NOT be indexed, so retrieval and citations cannot
+  show the address to anyone
+- AND a message edited to state the author's email SHALL be removed from the
+  index
+
 #### Scenario: Preferred name in a channel
 - WHEN the assistant answers a person in a channel
 - THEN it MAY address them by their preferred name
