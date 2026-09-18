@@ -31,6 +31,66 @@ internet said.
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
 | **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |
 
+### What you can ask for
+
+```mermaid
+graph LR
+    P(("You"))
+
+    P --> CORPUS["Your channels"]
+    CORPUS --> C1["what was decided about the deploy"]
+    CORPUS --> C2["what did I miss in #infra"]
+    CORPUS --> C3["/ask &middot; /channels"]
+
+    P --> OWED["What you owe"]
+    OWED --> O1["what do I need to do"]
+    OWED --> O2["/resolve &middot; check reaction"]
+    OWED --> O3["a DM when someone asks you for something"]
+
+    P --> OUT["Outside the server"]
+    OUT --> X1["Wikipedia &middot; Google"]
+    OUT --> X2["BTC &middot; ETH &middot; S&P 500 &middot; currencies"]
+    OUT --> X3["wallet balances on Ethereum and Base"]
+    OUT --> X4["any MCP server an operator allowlists"]
+
+    P --> YOU["About you"]
+    YOU --> Y1["call me Leo &middot; my email is ..."]
+    YOU --> Y2["answers in the language you asked in"]
+    YOU --> Y3["/forget &middot; /notifications"]
+
+    P --> WHEN["On a schedule"]
+    WHEN --> W1["/schedule create, hourly to daily"]
+    WHEN --> W2["/schedule list &middot; delete"]
+    WHEN --> W3["a DM only when there is something"]
+
+    style P fill:#C8E6C9,stroke:#2E7D32
+    style CORPUS fill:#E3F2FD,stroke:#1565C0
+    style OWED fill:#E3F2FD,stroke:#1565C0
+    style OUT fill:#FFF9C4,stroke:#F9A825
+    style YOU fill:#E3F2FD,stroke:#1565C0
+    style WHEN fill:#F3E5F5,stroke:#6A1B9A
+```
+
+Yellow is everything that leaves the server, and all of it is off until an
+operator turns it on. Purple is the one thing that messages you without being
+asked in the moment.
+
+### Commands
+
+| | |
+|---|---|
+| `/ask` | Ask about what's been said |
+| `/channels` | The archived channels you can read |
+| `/index`, `/unindex` | Archive a channel, or stop and delete the archive |
+| `/forget` | Erase what I remember of our conversation |
+| `/resolve` | Close something I said was asked of you |
+| `/notifications` | Turn DMs about obligations on or off |
+| `/schedule create`, `list`, `delete` | Questions asked on a rhythm |
+
+`/notifications` and `/schedule` appear only where those features are switched
+on — a command Discord will not show you is worse than one that is missing from
+this table.
+
 ## The rules it keeps
 
 These are the invariants the whole design is arranged around. They are specified
@@ -61,10 +121,16 @@ graph TD
     D["Discord gateway"] --> ING["ingest"]
     ING --> PG[("Postgres + pgvector")]
     ING --> EMB["Embeddings API"]
+    ING -.->|"deletes traces of<br/>deleted messages"| LF["Langfuse"]
+
     D --> BOT["bot"]
     BOT --> PG
     BOT --> LLM["Chat model"]
-    BOT --> EXT["Web, MCP, market data"]
+    BOT --> EXT["Web · MCP · market · chain"]
+    BOT -.->|"question, answer,<br/>evidence"| LF
+    BOT --> SCH["scheduled tasks<br/>sweep"]
+    SCH --> PG
+
     MCPS["mcp"] --> PG
     ADM["admin console"] --> PG
     ADM --> OP["Operator"]
@@ -73,7 +139,13 @@ graph TD
     style PG fill:#E3F2FD,stroke:#1565C0
     style BOT fill:#C8E6C9,stroke:#2E7D32
     style EXT fill:#FFF9C4,stroke:#F9A825
+    style LF fill:#F3E5F5,stroke:#6A1B9A
 ```
+
+Dotted edges are tracing, and they go both ways for a reason: the bot exports
+what a run saw, and `ingest` deletes those exports when the message they quote
+is deleted. Without the second edge the first would quietly break the
+guarantee that deleted content disappears everywhere.
 
 | Process | Role | Public |
 |---|---|---|
@@ -90,25 +162,44 @@ corpus just silently doubles.
 ### How a question is answered
 
 ```mermaid
-sequenceDiagram
-    participant P as Person
-    participant B as Bot
-    participant A as ACL
-    participant R as Retrieval
-    participant X as External tools
-    P->>B: question
-    B->>A: what may they read
-    A-->>B: viewer channels
-    B->>R: search, scoped in SQL
-    R-->>B: windows and citations
-    alt evidence answers it
-        B-->>P: grounded answer with citations
-    else not enough evidence
-        B->>X: query rooted in the asker's words
-        X-->>B: result, labelled external
-        B-->>P: answer marked as from outside
-    end
+flowchart TD
+    Q["Question"] --> ROUTE{"What kind of<br/>question is it?"}
+
+    ROUTE -->|"what can you do"| SELF["Answered from<br/>configuration"]
+    ROUTE -->|"a price, a wallet"| LIVE["Chain and market tools"]
+    ROUTE -->|"anything else"| ACL["Resolve what this<br/>person may read"]
+
+    ACL --> RET["Retrieval,<br/>scoped in SQL"]
+    RET --> ENOUGH{"Does the evidence<br/>answer it?"}
+    ENOUGH -->|yes| ANS["Answer, labelled<br/>by where it came from"]
+    ENOUGH -->|no| OUT["Web or MCP, rooted<br/>in the asker's words"]
+    OUT --> ANS
+
+    SELF --> ANS
+    LIVE --> ANS
+    ANS --> TRACE["Recorded to Langfuse"]
+
+    style ROUTE fill:#FFF9C4,stroke:#F9A825
+    style RET fill:#E3F2FD,stroke:#1565C0
+    style ANS fill:#C8E6C9,stroke:#2E7D32
 ```
+
+**The first branch is the one worth understanding.** Some questions must never
+reach the corpus, because the corpus cannot hold their answer and will confidently
+supply a wrong one instead. Asked what it could do, the assistant once replied
+with a colleague's project description, read out of a channel; asked for a wallet
+balance, it reported that "the project can know balance information". Both were a
+tangentially-related message winning because it was retrieved first.
+
+So the route is decided before retrieval, and only what is left goes to the
+corpus. Everything that does is scoped in SQL by the asking person's own
+readable channels — never filtered afterwards.
+
+Every answer says where it came from, and the three routes differ in what that
+means: a corpus answer carries citations that link back to the messages, an
+external one is labelled as from outside the server, and a self-description
+carries neither — nothing in it came from a message, and inventing a source for
+a description of configuration would make it look retrieved.
 
 The code follows the same shape: `domain/` holds the vocabulary, `app/` the
 rules, `adapters/` everything that talks to Discord, Postgres, models and the
