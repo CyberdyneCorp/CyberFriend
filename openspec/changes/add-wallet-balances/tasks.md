@@ -31,5 +31,12 @@
 
 ## 5. Live
 
-- [ ] 5.1 Deploy with the endpoints configured
-- [ ] 5.2 Confirm a real address answers in Discord
+- [x] 5.1 Deploy with the endpoints configured
+- [x] 5.2 Confirm the provider answers for a real address against live chains
+- [ ] 5.3 Confirm an address asked in Discord answers
+
+5.2 was verified by running the guarded provider against Ethereum and Base:
+the clearance was minted, the egress log recorded `closed_vocabulary=False`
+(rooting, as designed), and both chains returned native and token balances with
+USD values. `chain_balances:wallet_balances` is registered and read-only in the
+deployed bot. 5.3 is the Discord leg, and needs somebody to ask.
