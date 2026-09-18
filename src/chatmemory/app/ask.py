@@ -109,14 +109,22 @@ FACT_LABELS = {
     FactKind.PREFERRED_NAME: "preferred name",
     FactKind.EMAIL: "email address",
     FactKind.PREFERRED_LANGUAGE: "preferred language",
+    FactKind.PHONE: "phone number",
+    FactKind.ETH_WALLET: "Ethereum wallet",
+    FactKind.BTC_WALLET: "Bitcoin wallet",
 }
 
 REMEMBERABLE = (
-    "I can remember three things about you, if you tell me yourself: the name "
-    "you'd like me to call you (`call me Leo`), your email address (`my email "
-    "is ...`), and the language you'd like answers in (`reply to me in "
-    "Portuguese`). Ask `what do you know about me?` to see them, or `forget my "
-    "email` to delete one."
+    "I can remember these about you, if you tell me yourself:\n"
+    "- the name you'd like me to call you (`call me Leo`)\n"
+    "- your email address (`my email is ...`)\n"
+    "- your phone number (`my phone is ...`)\n"
+    "- the language you'd like answers in (`reply to me in Portuguese`)\n"
+    "- your Ethereum wallet (`my wallet is 0x...`) and your Bitcoin wallet "
+    "(`my btc wallet is ...`)\n"
+    "Ask `what do you know about me?` to see them, or `forget my email` to "
+    "delete one. Once I have your wallet, `what's my balance?` uses it.\n"
+    "Your email, phone and wallets I only ever show you, in a direct message."
 )
 
 FACT_UNSUPPORTED = "I haven't saved that. " + REMEMBERABLE
@@ -144,7 +152,7 @@ EMAIL_CHANNEL_NOTE = "-# I only show an email address in a direct message to its
 FACT_REJECTIONS = {
     FactRejection.EMPTY: "it was empty",
     FactRejection.TOO_LONG: "it's too long",
-    FactRejection.MALFORMED: "it isn't a well-formed email address",
+    FactRejection.MALFORMED: "it isn't the right shape",
     FactRejection.DISALLOWED_CHARACTERS: (
         "it can only use letters, numbers, spaces and simple punctuation"
     ),
@@ -174,6 +182,24 @@ def _stored_reply(result: FactResult, direct: bool) -> str:
     )
 
 
+MALFORMED_BY_KIND = {
+    FactKind.EMAIL: "it isn't a well-formed email address",
+    FactKind.PHONE: "it doesn't look like a phone number",
+    FactKind.ETH_WALLET: (
+        "it isn't a well-formed address - I expect `0x` and 40 hex characters"
+    ),
+    FactKind.BTC_WALLET: (
+        "it isn't a well-formed Bitcoin address - I expect one starting `1`, "
+        "`3` or `bc1`"
+    ),
+}
+"""Why a value was the wrong shape, said per kind.
+
+A generic "it isn't the right shape" tells somebody nothing they can act on,
+and the shapes differ enough to be worth naming: a person who typed a Bitcoin
+address where their Ethereum wallet goes needs to know which was expected."""
+
+
 def fact_set_reply(result: FactResult, direct: bool) -> str:
     """What the person is told after asking to set a fact.
 
@@ -186,7 +212,12 @@ def fact_set_reply(result: FactResult, direct: bool) -> str:
         return _stored_reply(result, direct)
     if result.outcome is FactOutcome.NOT_STORED:
         return FACT_NOT_STORED
-    reason = FACT_REJECTIONS.get(result.rejection or FactRejection.MALFORMED, "")
+    rejection = result.rejection or FactRejection.MALFORMED
+    reason = (
+        MALFORMED_BY_KIND.get(result.kind, FACT_REJECTIONS[FactRejection.MALFORMED])
+        if rejection is FactRejection.MALFORMED
+        else FACT_REJECTIONS.get(rejection, "")
+    )
     limit = (
         f" (at most {MAX_PREFERRED_NAME_CHARS} characters)"
         if result.rejection is FactRejection.TOO_LONG and result.kind is FactKind.PREFERRED_NAME
@@ -430,8 +461,11 @@ class AskService:
             visible_channels=viewer.visible_channels & audience.readable_channels,
         )
         location = request.location
-        memory, profile, facts = await asyncio.gather(
-            self._recall(scope, location), self._profile(request.asker), self._asker_facts(viewer)
+        memory, profile, facts, values = await asyncio.gather(
+            self._recall(scope, location),
+            self._profile(request.asker),
+            self._asker_facts(viewer),
+            self._asker_values(viewer),
         )
         question = Question(
             text=request.text,
@@ -439,6 +473,7 @@ class AskService:
             audience=audience,
             memory=memory,
             asker_profile=profile,
+            asker_values=values,
         )
         # The confirmation channel is opened around the whole of answer
         # production, and closed the moment it ends: a confirmation cannot be
@@ -569,6 +604,34 @@ class AskService:
         assert intent.kind is not None and intent.value is not None
         result = await self._facts.remember(viewer, intent.kind, intent.value)
         return fact_set_reply(result, direct)
+
+    #: Facts whose value may become an outbound argument for their owner.
+    #: Only the chain addresses: a name or a language is not something any
+    #: tool takes, and an email or a phone number must never leave at all.
+    OUTBOUND_KINDS = (FactKind.ETH_WALLET, FactKind.BTC_WALLET)
+
+    async def _asker_values(self, viewer: Viewer) -> frozenset[str]:
+        """The asker's own addresses, for the egress guard and nothing else.
+
+        A second read, deliberately not `_asker_facts`. That one is filtered as
+        a channel would see it so a prompt can never hold a private value; this
+        one is unfiltered because the guard needs the exact stored string to
+        compare against, and its result never reaches a prompt, an answer or a
+        log line.
+        """
+        if self._facts is None:
+            return frozenset()
+        try:
+            stored = await self._facts.facts_for(
+                viewer, ConversationLocation(viewer.person.platform, 0, direct=True)
+            )
+        except Exception:
+            # No values is never a failure: the lookup then asks for an address.
+            log.exception("ask.values_failed", asker=str(viewer.person))
+            return frozenset()
+        return frozenset(
+            value for kind in self.OUTBOUND_KINDS if (value := stored.get(kind))
+        )
 
     async def _asker_facts(self, viewer: Viewer) -> AskerFacts | None:
         """The asker's name and language for the prompt. Never their email."""

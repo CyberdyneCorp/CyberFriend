@@ -18,12 +18,13 @@ internet said.
 | **Audience-aware answers** | In a channel it only cites what everyone there can read; ask in a DM for your full view |
 | **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve` |
 | **Conversation memory** | Follow-ups keep context, per person and per place, and stop being recalled if you lose access to a channel behind them |
-| **Personal facts** | *call me Leo*, *my email is …*, *reply in Portuguese*. Your email is only ever shown in a DM to you |
+| **Personal facts** | *call me Leo*, *my email is …*, *my phone is …*, *my wallet is 0x…*, *reply in Portuguese*. Contact details and wallets are only ever shown in a DM to you |
+| **Knows the time** | Every answering prompt carries the current date and time in UTC, so *today* and *recent* mean something |
 | **Answers in your language** | An answer is written in the language you asked in; a saved preferred language still wins |
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
 | **Web and MCP** | Wikipedia, Google via SerpApi, and any MCP server an operator allowlists |
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
-| **Wallet balances** | What a `0x` address holds on Ethereum and Base, with USD values. Only an address you typed yourself |
+| **Wallet balances** | What a `0x` address holds on Ethereum and Base, with USD values. An address you typed, or the one you saved |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
@@ -54,9 +55,10 @@ graph LR
     OUT --> X4["any MCP server an operator allowlists"]
 
     P --> YOU["About you"]
-    YOU --> Y1["call me Leo &middot; my email is ..."]
-    YOU --> Y2["answers in the language you asked in"]
-    YOU --> Y3["/forget &middot; /notifications"]
+    YOU --> Y1["call me Leo &middot; my email is ... &middot; my phone is ..."]
+    YOU --> Y2["my wallet is 0x... then: my wallet balance?"]
+    YOU --> Y3["answers in the language you asked in"]
+    YOU --> Y4["/forget &middot; /notifications"]
 
     P --> WHEN["On a schedule"]
     WHEN --> W1["/schedule create, hourly to daily"]
@@ -91,6 +93,30 @@ asked in the moment.
 on — a command Discord will not show you is worse than one that is missing from
 this table.
 
+### What it can remember about you
+
+Tell it yourself, in your own message. It never learns these from a channel.
+
+| | |
+|---|---|
+| Preferred name | `call me Leo` |
+| Email | `my email is leo@example.com` |
+| Phone | `my phone is +55 11 99999 1234` |
+| Preferred language | `reply to me in Portuguese` |
+| Ethereum wallet | `my wallet is 0x…` |
+| Bitcoin wallet | `my btc wallet is bc1…` |
+
+`what do you know about me?` shows them; `forget my email` deletes one.
+
+**Your email, phone and wallets are only ever shown to you, in a direct
+message.** A wallet is public on its chain — what is private is that it is
+*yours*, and naming it in a channel makes that link for everyone present.
+
+Once a wallet is saved, `what's my wallet balance?` uses it instead of asking
+for an address. The question has to name a wallet: "what's my balance" alone
+stays with your channels, because in a conversation about money it is as likely
+to be about something somebody said.
+
 ## The rules it keeps
 
 These are the invariants the whole design is arranged around. They are specified
@@ -107,7 +133,10 @@ in `openspec/` and tested, not left to a prompt.
   knowledge. Memory interprets a follow-up but never becomes a source.
 - **Deleted content disappears everywhere, immediately.**
 - **What leaves is only what you typed.** An outbound query must be rooted in
-  the asker's own words, so retrieved content cannot become a search term.
+  the asker's own words, so retrieved content cannot become a search term. A
+  value you saved about yourself — your own wallet — counts as your words,
+  checked against what the store actually holds for you rather than against a
+  label anybody can apply.
 - **State-changing tools need a person's approval**, with the exact arguments
   shown.
 

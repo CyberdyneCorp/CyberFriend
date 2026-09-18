@@ -879,6 +879,20 @@ _EMAIL_WORD = r"e-?mail(?:\s+address)?"
 _NAME_WORD = r"(?:preferred\s+name|nickname|name|nome(?:\s+preferido)?|apelido)"
 _LANGUAGE_WORD = r"(?:preferred\s+language|language|idioma(?:\s+preferido)?|l[ií]ngua)"
 _MY = r"(?:my|meu|minha)"
+_PHONE_WORD = (
+    r"(?:phone(?:\s+number)?|mobile|cell(?:\s*phone)?|whatsapp|"
+    r"telefone|celular|n[uú]mero(?:\s+de\s+telefone)?)"
+)
+# "wallet" alone means the Ethereum one: it is the chain this deployment can
+# read balances on, and somebody who says "my wallet is 0x..." means that.
+_ETH_WALLET_WORD = (
+    r"(?:(?:eth(?:ereum)?|evm|base)\s+(?:wallet|address|endere[cç]o)|"
+    r"wallet|carteira)"
+)
+_BTC_WALLET_WORD = (
+    r"(?:(?:btc|bitcoin)\s+(?:wallet|address|endere[cç]o)|"
+    r"carteira\s+(?:btc|bitcoin))"
+)
 
 _SET_PATTERNS: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
     (kind, re.compile(_LEAD + body + _TRAIL, re.IGNORECASE))
@@ -914,6 +928,28 @@ _SET_PATTERNS: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
             FactKind.PREFERRED_LANGUAGE,
             r"(?:reply|answer|respond|speak|talk|write)(?:\s+to\s+me)?\s+in\s+(?P<value>.+?)"
             r"\s+from\s+now\s+on",
+        ),
+        (
+            FactKind.PHONE,
+            rf"(?:{_MY}\s+{_PHONE_WORD}\s+{_IS}|"
+            rf"(?:set|change|update)\s+my\s+{_PHONE_WORD}\s+to|"
+            rf"(?:mude|muda|altere|atualize)\s+(?:o\s+)?meu\s+{_PHONE_WORD}\s+para)"
+            r"\s+(?P<value>.+?)",
+        ),
+        # Bitcoin before Ethereum: "my btc wallet is ..." also matches the
+        # Ethereum pattern's bare "wallet", and the first match wins.
+        (
+            FactKind.BTC_WALLET,
+            rf"(?:{_MY}\s+{_BTC_WALLET_WORD}\s+{_IS}|"
+            rf"(?:set|change|update)\s+my\s+{_BTC_WALLET_WORD}\s+to)"
+            r"\s+(?P<value>\S+?)",
+        ),
+        (
+            FactKind.ETH_WALLET,
+            rf"(?:{_MY}\s+{_ETH_WALLET_WORD}\s+{_IS}|"
+            rf"(?:set|change|update)\s+my\s+{_ETH_WALLET_WORD}\s+to|"
+            rf"(?:mude|muda|altere|atualize)\s+(?:a\s+)?minha\s+carteira\s+para)"
+            r"\s+(?P<value>\S+?)",
         ),
     )
 )

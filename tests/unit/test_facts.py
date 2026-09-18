@@ -87,8 +87,14 @@ def _conforms(store: FakeFactStore) -> FactStore:
     return store
 
 
-def _migration() -> ModuleType:
-    path = Path(chatmemory.__file__).parents[2] / "migrations" / "versions" / "0014_person_fact.py"
+def _migration(name: str = "0018_contact_facts.py") -> ModuleType:
+    """The migration that currently defines which kinds the table accepts.
+
+    Points at the latest one to widen the constraint, not at the first: 0014
+    created the table with three kinds and is no longer the authority on what
+    it holds.
+    """
+    path = Path(chatmemory.__file__).parents[2] / "migrations" / "versions" / name
     spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -100,7 +106,14 @@ def _migration() -> ModuleType:
 
 
 def test_the_set_of_facts_is_closed() -> None:
-    assert {k.value for k in FactKind} == {"preferred_name", "email", "preferred_language"}
+    assert {k.value for k in FactKind} == {
+        "preferred_name",
+        "email",
+        "preferred_language",
+        "phone",
+        "eth_wallet",
+        "btc_wallet",
+    }
 
 
 def test_a_kind_outside_the_set_cannot_be_constructed() -> None:
@@ -111,7 +124,7 @@ def test_a_kind_outside_the_set_cannot_be_constructed() -> None:
 def test_the_migration_names_the_same_kinds_as_the_domain() -> None:
     """A kind the table accepts and the domain does not, or the reverse, is a
     notes store waiting to happen or a fact that cannot be read back."""
-    assert set(_migration().FACT_KINDS) == {k.value for k in FactKind}
+    assert set(_migration().AFTER) == {k.value for k in FactKind}
 
 
 # --- validation ------------------------------------------------------------

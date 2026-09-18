@@ -96,6 +96,14 @@ class QueryOrigin(StrEnum):
     """Typed by the person asking. The only origin that needs no provenance
     argument: these are their words by definition."""
 
+    ASKER_FACT = "asker_fact"
+    """A value this person set about themselves, such as their own wallet.
+
+    Their words too, typed when they saved it rather than in this question.
+    Trusted exactly as far as ASKER and no further: it still has to be one of
+    the values the store holds for *this* asker, which is a containment check
+    like any other, not a label anybody can apply."""
+
     MODEL_REFORMULATION = "model_reformulation"
     """Proposed by a model that has read retrieved evidence. Admitted only if
     it is rooted in the asker's question."""
@@ -109,6 +117,7 @@ class QueryOrigin(StrEnum):
 
 _TAINT: dict[QueryOrigin, int] = {
     QueryOrigin.ASKER: 0,
+    QueryOrigin.ASKER_FACT: 0,
     QueryOrigin.MODEL_REFORMULATION: 1,
     QueryOrigin.TOOL_RESULT: 2,
     QueryOrigin.RETRIEVED_CONTENT: 3,
@@ -165,6 +174,11 @@ class ProvenancedQuery:
     text: str
     origin: QueryOrigin
     question: str
+    #: Values this person set about themselves, as the store holds them.
+    #: Empty for every query that does not need one, which is nearly all of
+    #: them -- a field that is empty by default cannot widen anything by
+    #: accident.
+    asker_facts: frozenset[str] = frozenset()
 
     @classmethod
     def from_asker(cls, question_text: str) -> ProvenancedQuery:
@@ -190,9 +204,20 @@ class ProvenancedQuery:
         Applied to every origin including `ASKER`, so the property holds even
         if some future caller mislabels a query: the label is evidence, the
         containment is the check.
+
+        `asker_facts` widens what counts as their words from "this question"
+        to "this question, or something they told the assistant about
+        themselves". A person who saved their wallet so they could ask "what's
+        my balance" typed that address; they simply typed it earlier. The
+        check stays containment for the same reason it always was -- the
+        caller supplies the exact values the store holds for this asker, so a
+        model's invention or a message's contents cannot become one.
         """
         words = _words(self.text)
-        return bool(words) and words <= _words(self.question)
+        allowed = _words(self.question)
+        for fact in self.asker_facts:
+            allowed |= _words(fact)
+        return bool(words) and words <= allowed
 
 
 @dataclass(frozen=True, slots=True)

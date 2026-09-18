@@ -254,6 +254,11 @@ class InvocationRequest:
     arguments: Mapping[str, object]
     origin: ActionOrigin
     evidence: EvidenceContext = field(default_factory=EvidenceContext)
+    #: Values the requester set about themselves that an argument may be made
+    #: of -- their own wallet, and nothing else so far. Carried here because
+    #: this is where clearance is minted, and empty unless a caller that knows
+    #: whose facts these are puts them here.
+    asker_values: frozenset[str] = frozenset()
 
     @property
     def digest(self) -> str:

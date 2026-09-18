@@ -160,7 +160,11 @@ async def reply(service: AskService, request: AskRequest) -> str:
         ("delete my preferred name", FactAction.FORGET, FactKind.PREFERRED_NAME, None),
         ("forget everything you know about me", FactAction.FORGET, None, None),
         ("remember that I like pizza", FactAction.UNSUPPORTED, None, None),
-        ("my phone number is 555 0100", FactAction.UNSUPPORTED, None, None),
+        ("my phone number is +55 11 99999 1234", FactAction.SET, FactKind.PHONE,
+         "+55 11 99999 1234"),
+        ("meu telefone é +55 11 99999 1234", FactAction.SET, FactKind.PHONE,
+         "+55 11 99999 1234"),
+        ("remember that I like pizza on Fridays", FactAction.UNSUPPORTED, None, None),
         ("João's email is joao@example.com", FactAction.ABOUT_SOMEONE_ELSE, None, None),
         (
             "remember that João’s email is joao@example.com",

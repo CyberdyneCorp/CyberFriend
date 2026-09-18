@@ -338,3 +338,53 @@ A person whose direct messages are closed has **all** their tasks stopped, with
 the reason shown in `/schedule list`. The obstacle is their settings rather than
 any one question, and retrying the rest would be knocking on a door already
 shut. Removing a person's data deletes their tasks with it.
+
+## Contact facts, and a saved wallet
+
+A person can tell the assistant six things about themselves: preferred name,
+email, phone, preferred language, Ethereum wallet, Bitcoin wallet. Set from
+their own message, never learned from a channel, and each validated for the
+shape its kind requires.
+
+**Email, phone and both wallets are direct-message only.** A wallet address is
+public on its chain; what is private is that it belongs to a particular person,
+and a channel reply naming it makes that link for everyone present.
+
+### What a saved wallet means for egress
+
+This is the part worth understanding before enabling wallet tools.
+
+An outbound query must be rooted in the asker's own words. A saved address is
+not in the question they just typed, so "what's my wallet balance?" would
+otherwise be refused for want of an address.
+
+The rule is not relaxed. The root set widens from *the words of this question*
+to *the words this person wrote about themselves*, and a saved fact qualifies
+because they typed it when they set it. Three things keep that narrow:
+
+- The check is **containment against the exact strings the store holds for that
+  asker**, not a label. A caller that supplies the wrong address gets a
+  refusal, so the route spelling an address into the question is a hint and
+  never the authorisation.
+- Values are read **per person**, so one person's saved wallet can never
+  authorise another's lookup.
+- The **content gate runs first**. An address that appears in a channel message
+  is refused even when it happens to match something the asker saved.
+
+What it does mean: a person's saved address leaves the server when they ask
+about their own balance. That is what they asked for by saving it.
+
+## Knowing the time
+
+Every answering prompt carries the current date and time in **UTC**, labelled.
+Before this, nothing did: time-scoped questions worked where SQL filtered them
+("what did people ask me today" is a `WHERE` clause), but a model judging
+whether something was recent, or asked the date outright, had only its training
+data.
+
+The clock is context, not evidence. It is never a citation, and it cannot make
+a claim answerable that the evidence does not support — the grounding rule is
+unchanged.
+
+One clock, stated as UTC, rather than per-person timezones: an answer that
+names a time says which one, which is the property that matters.

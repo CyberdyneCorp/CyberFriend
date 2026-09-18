@@ -490,6 +490,11 @@ class ReasoningLoop:
             # retrieval would make this origin a lie, which is why the call is
             # proposed before anything is retrieved.
             origin=ActionOrigin.REQUESTER_REQUEST,
+            # What this person has told the assistant about themselves that an
+            # argument may legitimately be. The guard checks containment
+            # against these, so a value the model invented is refused even
+            # when the route that built the call meant well.
+            asker_values=question.asker_values,
         )
         try:
             outcome = await surface.invoke(request)
