@@ -280,3 +280,61 @@ channels this person cannot see.
 
 Operators who need the full picture, with message counts, use the admin
 console's channel view rather than this command.
+
+## Scheduled tasks
+
+With `SCHEDULED_TASKS_ENABLED=true`, a person can have a question asked on
+their behalf between once an hour and once a day, and be sent the answer in a
+direct message.
+
+| | |
+|---|---|
+| `SCHEDULED_TASKS_ENABLED` | Off by default. Bot only |
+| `SCHEDULED_TASKS_PER_PERSON` | How many each person may keep (default 5) |
+| `SCHEDULED_SWEEP_SECONDS` | How often due tasks are looked for (default 300) |
+
+`/schedule create`, `/schedule list` and `/schedule delete`, each showing and
+changing only the caller's own tasks.
+
+### What it costs
+
+**Every run is a full reasoning run** — retrieval, at least one model call,
+possibly tool calls. `people × tasks × 24` is the daily ceiling for hourly
+tasks. The per-person cap and the one-hour floor bound that; **neither is a
+budget**, and a deployment that needs a spending limit needs one of its own.
+
+Turn this on deliberately, after doing that arithmetic for your team size.
+
+### Silence is the design
+
+A run that finds nothing sends nothing. An hourly "I found nothing" is what
+makes somebody mute the assistant — and muting it also silences the obligation
+notifications they do need, so being chatty here is paid for by a different
+feature.
+
+The cost is that a working-but-quiet task is indistinguishable from a broken
+one, which is why `/schedule list` shows when each task last ran and what
+happened. "Ran 20 minutes ago, found nothing" is the answer to "is this thing
+on?", and without it silence would be a support question.
+
+### What a scheduled run can and cannot do
+
+It goes through the same `AskService` a typed question does, which gives two
+properties without new code:
+
+- **Access is resolved at run time.** A task created when somebody could read
+  a channel stops drawing on it the moment they cannot.
+- **Nothing can act.** There is nobody to approve a state-changing tool, so
+  every one is refused — the existing confirmation rule, not a new check.
+
+It *can* reach the external tools, so this deployment will make outbound calls
+on a timer with nobody watching. Each is still bounded per run by the budget,
+rate limit and egress guard, and still rooted in the words the person typed —
+but "a person is present" stops being true.
+
+### When it stops
+
+A person whose direct messages are closed has **all** their tasks stopped, with
+the reason shown in `/schedule list`. The obstacle is their settings rather than
+any one question, and retrying the rest would be knocking on a door already
+shut. Removing a person's data deletes their tasks with it.

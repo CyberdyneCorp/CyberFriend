@@ -127,6 +127,29 @@ CHANNELS = Command(
     "Listar os canais que eu arquivo e que você pode ler",
 )
 
+SCHEDULE_CREATE = Command(
+    "schedule create",
+    "Ask me something on a schedule, between hourly and daily",
+    "Me pedir algo de forma agendada, de hora em hora até uma vez por dia",
+)
+SCHEDULE_LIST = Command(
+    "schedule list",
+    "Show the questions I ask for you, and when each last ran",
+    "Mostrar as perguntas que eu faço por você, e quando cada uma rodou",
+)
+SCHEDULE_DELETE = Command(
+    "schedule delete",
+    "Stop one of your scheduled questions",
+    "Parar uma das suas perguntas agendadas",
+)
+
+SCHEDULED = (SCHEDULE_CREATE, SCHEDULE_LIST, SCHEDULE_DELETE)
+"""Listed only where the feature is on, like `/notifications`.
+
+Naming a command Discord will not show is worse than omitting one, and this is
+the feature where that matters most: somebody told they can schedule a question
+and then unable to will reasonably conclude the assistant is broken."""
+
 ALWAYS_AVAILABLE = (ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE)
 """Commands the bot registers unconditionally.
 

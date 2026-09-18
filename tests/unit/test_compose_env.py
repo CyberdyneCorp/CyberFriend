@@ -87,6 +87,12 @@ DEPLOYMENT_SETTINGS = {
     # need the same three settings. Declared for the bot alone, a deletion
     # would never reach the trace store and deleted text would stay legible
     # there -- the failure this project's deletion guarantee exists to stop.
+    # Scheduled tasks run in the bot, because running one means answering a
+    # question and the answer stack is there. Declared for the bot alone for
+    # that reason -- ingest has nothing to do with them.
+    "SCHEDULED_TASKS_ENABLED": ("bot",),
+    "SCHEDULED_TASKS_PER_PERSON": ("bot",),
+    "SCHEDULED_SWEEP_SECONDS": ("bot",),
     "TRACING_ENABLED": ("ingest", "bot"),
     "LANGFUSE_HOST": ("ingest", "bot"),
     "LANGFUSE_PUBLIC_KEY": ("ingest", "bot"),

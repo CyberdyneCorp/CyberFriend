@@ -17,6 +17,7 @@ from chatmemory.app.language import Language, detect
 from chatmemory.app.self_description import (
     ALWAYS_AVAILABLE,
     NOTIFICATIONS,
+    SCHEDULED,
     describe_capabilities,
 )
 
@@ -142,29 +143,52 @@ def test_an_unknown_server_is_still_named_rather_than_dropped() -> None:
 # --- the list cannot drift from what is registered ----------------------
 
 
+def _keyword(call: ast.Call, arg: str) -> str | None:
+    for keyword in call.keywords:
+        if keyword.arg == arg and isinstance(keyword.value, ast.Constant):
+            return str(keyword.value.value)
+    return None
+
+
 def _registered_commands() -> set[str]:
-    """Every slash command name the Discord surface registers."""
+    """Every slash command the Discord surface registers, as a person types it.
+
+    Subcommands are qualified with their group, because `/schedule create` is
+    what somebody types and `create` alone is not a command at all.
+    """
     tree = ast.parse(DISCORD_BOT.read_text())
+    # Which local names hold a Group, and what that group is called.
+    groups: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and getattr(node.value.func, "attr", None) == "Group"
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            name = _keyword(node.value, "name")
+            if name:
+                groups[node.targets[0].id] = name
+
     names: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        attr = getattr(node.func, "attr", None)
-        if attr != "command":
+        if getattr(node.func, "attr", None) != "command":
             continue
-        for keyword in node.keywords:
-            if keyword.arg != "name":
-                continue
-            if isinstance(keyword.value, ast.Constant):
-                names.add(str(keyword.value.value))
-            else:
-                # `name=action.value` over the IndexAction enum.
-                names.update({"index", "unindex"})
+        owner = getattr(node.func.value, "id", None)
+        prefix = f"{groups[owner]} " if owner in groups else ""
+        name = _keyword(node, "name")
+        if name:
+            names.add(f"{prefix}{name}")
+        elif not prefix:
+            # `name=action.value` over the IndexAction enum.
+            names.update({"index", "unindex"})
     return names
 
 
 def test_the_described_commands_are_exactly_the_registered_ones() -> None:
     """A command added to the bot and forgotten here goes unmentioned for
     ever, which is how it came to list one of six."""
-    described = {c.name for c in (*ALWAYS_AVAILABLE, NOTIFICATIONS)}
+    described = {c.name for c in (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED)}
     assert described == _registered_commands()

@@ -92,6 +92,7 @@ from chatmemory.adapters.discord.bot import (
     DiscordChannelAccess,
     DiscordIndexNotifier,
     DiscordNotificationSender,
+    DiscordTaskMessenger,
     _IndexingGuild,
 )
 from chatmemory.adapters.discord.gateway import attach_permission_listeners
@@ -112,6 +113,7 @@ from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.indexing import ChannelPurge, IndexingService
 from chatmemory.app.notifications import NotificationDelivery
+from chatmemory.app.schedules import ScheduledTaskRunner
 from chatmemory.app.scope import LiveScope, ScopeProvider
 from chatmemory.composition import (
     ask_policy,
@@ -124,6 +126,8 @@ from chatmemory.composition import (
     build_notification_delivery,
     build_notification_preferences,
     build_personal_facts,
+    build_schedules,
+    build_task_runner,
 )
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
@@ -187,6 +191,9 @@ class BotGraph:
     asks: AskService
     caches: PermissionCaches
     indexing: IndexingService | None = None
+    # The sweep that runs due scheduled tasks. None when the feature is off,
+    # which is also when the commands say it is unavailable.
+    tasks: ScheduledTaskRunner | None = None
     #: The queue drain. None when no engine was handed in, or when an
     #: operator has switched notifications off -- in which case nothing in
     #: this process sends anything, which is the safe half.
@@ -267,6 +274,21 @@ def build_bot(
         # same resolver the ask path scopes retrieval with. Without it the
         # command is registered and says listing is unavailable.
         client.attach_channel_listing(build_channel_listing_service(client, settings, scope))
+
+    # `/schedule` and the sweep that runs what it creates. Built together, so a
+    # deployment cannot end up with the commands and no runner -- which would
+    # create tasks nothing ever performs, silently, which is exactly what this
+    # feature already looks like when it is working.
+    #
+    # `notifications` is the answer stack's engine; it is named for the first
+    # thing that needed one.
+    schedules = build_schedules(settings, notifications) if notifications else None
+    runner = None
+    if schedules is not None and notifications is not None:
+        client.attach_schedules(schedules)
+        runner = build_task_runner(
+            settings, notifications, asks, DiscordTaskMessenger(client.fetch_user)
+        )
     delivery = build_delivery(settings, client, provider, caches, notifications, scope)
     return BotGraph(
         client=client,
@@ -274,6 +296,7 @@ def build_bot(
         caches=caches,
         indexing=service,
         notifications=delivery,
+        tasks=runner,
     )
 
 
@@ -381,6 +404,40 @@ async def scope_loop(scope: LiveScope, state: HealthState) -> None:
 #: long after that window it takes to notice. A pass over an empty queue is
 #: one indexed scan that finds nothing.
 NOTIFICATION_DRAIN_INTERVAL_SECONDS = 15.0
+
+
+async def scheduled_task_loop(
+    runner: ScheduledTaskRunner,
+    state: HealthState,
+    interval: float = 300.0,
+    ready: asyncio.Event | None = None,
+) -> None:
+    """Run the questions people asked to have asked on their behalf.
+
+    Waits for the gateway for the same reason the notification drain does, and
+    it matters more here: a run resolves the owner's readable channels from
+    live guild state, and before the connection identifies every person
+    resolves to nothing readable. A pass in that state would answer every task
+    with "I found nothing" -- which this feature renders as silence, so the
+    schedule would advance and nobody would ever know.
+
+    Absorbs everything. A sweep that dies stops the feature, and the symptom is
+    silence, which is also what a working sweep looks like on a quiet day.
+    """
+    if ready is not None:
+        await ready.wait()
+    while True:
+        try:
+            sent = await runner.run_due(datetime.now(UTC))
+            state.details["scheduled_tasks"] = {
+                "delivered": sent,
+                "last_run_at": time.time(),
+            }
+        except Exception:
+            # Nothing is lost that was not already: a claimed task has had its
+            # schedule advanced, so it runs again next interval.
+            log.exception("schedules.sweep_failed")
+        await asyncio.sleep(interval)
 
 
 async def notification_loop(
@@ -530,6 +587,18 @@ async def main() -> None:
         if graph.notifications is not None
         else []
     )
+    # Beside the drain, and for the same reason: this is the only process that
+    # can both answer a question and reach a person. Without this line the
+    # commands create tasks that nothing ever runs.
+    if graph.tasks is not None:
+        drains.append(
+            scheduled_task_loop(
+                graph.tasks,
+                state,
+                interval=settings.scheduled_sweep_seconds,
+                ready=gateway_ready,
+            )
+        )
     await run_beside_scope(
         client.start(settings.discord_token.get_secret_value()), scope, state, drains
     )

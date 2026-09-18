@@ -379,11 +379,24 @@ class AskService:
         self._corrections = corrections
 
     async def ask(
-        self, request: AskRequest, confirm: ConfirmationSurface | None = None
+        self,
+        request: AskRequest,
+        confirm: ConfirmationSurface | None = None,
+        *,
+        metered: bool = True,
     ) -> AskOutcome:
-        decision = self._limiter.check(request.asker)
-        if not decision.allowed:
-            return AskOutcome(None, True, decision.retry_after_seconds)
+        """Answer one question.
+
+        `metered` is False for a run the person did not just perform. Their
+        interactive allowance exists to stop one person monopolising the
+        assistant by typing; a scheduled task is bounded by its own interval
+        instead, and spending the same allowance would let somebody's tasks
+        refuse their own next question.
+        """
+        if metered:
+            decision = self._limiter.check(request.asker)
+            if not decision.allowed:
+                return AskOutcome(None, True, decision.retry_after_seconds)
 
         intent = fact_intent(request.text)
         if intent is not None:

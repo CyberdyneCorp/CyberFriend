@@ -82,12 +82,19 @@ from chatmemory.app.indexing import (
 )
 from chatmemory.app.notifications import NotificationPreferences
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
+from chatmemory.app.schedules import CreateRefusal, CreateResult, ScheduleService
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Citation
 from chatmemory.ports.notifications import (
     DeliveryResult,
     NotificationDraft,
     PendingNotification,
+)
+from chatmemory.ports.schedules import (
+    MAX_INTERVAL_HOURS,
+    MIN_INTERVAL_HOURS,
+    ScheduledTask,
+    TaskOutcome,
 )
 
 UNPLACEABLE_INTERACTION = (
@@ -158,6 +165,87 @@ FORGET_HERE = "here"
 FORGET_EVERYWHERE = "everywhere"
 
 MEMORY_UNAVAILABLE = "I don't keep conversation history here, so there's nothing to forget."
+
+SCHEDULE_DELETED = "Stopped. I won't ask that again."
+
+SCHEDULE_NOT_YOURS = (
+    "I don't have a scheduled task with that number for you. "
+    "`/schedule list` shows yours."
+)
+"""Said both when the task is somebody else's and when it does not exist.
+
+Two sentences would make this command a way to learn which task numbers are
+real, which is the same disclosure `/channels` refuses to make about
+channels."""
+
+
+def _created_message(result: CreateResult) -> str:
+    if result.task is not None:
+        task = result.task
+        return (
+            f"Done. I'll ask that every **{task.interval_hours}h**, "
+            f"starting {discord.utils.format_dt(task.next_run_at, 'R')}.\n"
+            "I'll only message you when I find something, so silence means "
+            "nothing new. `/schedule list` shows when each one last ran."
+        )
+    if result.refusal is CreateRefusal.INTERVAL_OUT_OF_RANGE:
+        return (
+            f"I can ask between every **{MIN_INTERVAL_HOURS}h** and every "
+            f"**{MAX_INTERVAL_HOURS}h**."
+        )
+    if result.refusal is CreateRefusal.EMPTY_QUESTION:
+        return "Tell me what to ask."
+    return (
+        "You've reached the number of scheduled questions I can keep for one "
+        "person. Delete one with `/schedule delete` first."
+    )
+
+
+def _schedule_listing(tasks: Sequence[ScheduledTask]) -> str:
+    if not tasks:
+        return (
+            "You have no scheduled questions. `/schedule create` sets one up.\n"
+            "I'll only message you when there's something to say."
+        )
+    lines = [f"**Your scheduled questions ({len(tasks)}):**"]
+    for task in tasks:
+        lines.append(f"**{task.id}** - every {task.interval_hours}h - {task.question}")
+        lines.append(f"  {_task_state(task)}")
+    return "\n".join(lines)
+
+
+def _task_state(task: ScheduledTask) -> str:
+    """When it last ran and what happened, so silence is legible.
+
+    The whole reason this exists: a task that has run eleven times and found
+    nothing is working, and without this it is indistinguishable from one that
+    stopped running in March.
+    """
+    if not task.active:
+        return f"stopped - {task.disabled_reason or 'disabled'}"
+    if task.last_run_at is None:
+        return f"not run yet - first {discord.utils.format_dt(task.next_run_at, 'R')}"
+    when = discord.utils.format_dt(task.last_run_at, "R")
+    outcome = {
+        TaskOutcome.REPORTED: "found something and messaged you",
+        TaskOutcome.NOTHING: "found nothing",
+        TaskOutcome.FAILED: "failed",
+        TaskOutcome.CLOSED: "couldn't reach your direct messages",
+    }.get(task.last_outcome or TaskOutcome.NOTHING, "ran")
+    return f"last ran {when}, {outcome} - next {discord.utils.format_dt(task.next_run_at, 'R')}"
+
+
+SCHEDULED_PREFIX = "⏰ **Scheduled**"
+"""Marks an answer nobody just asked for.
+
+Without it a direct message arriving at 3am reads as the assistant volunteering
+something, which is the one thing this project is careful never to do
+unannounced."""
+
+SCHEDULES_UNAVAILABLE = (
+    "I can't manage scheduled tasks here - the feature isn't switched on for "
+    "this deployment."
+)
 
 CHANNELS_UNAVAILABLE = (
     "I can't list archived channels here - indexing isn't wired up on this "
@@ -879,6 +967,47 @@ class DiscordNotificationSender:
         return DeliveryResult.SENT
 
 
+class DiscordTaskMessenger:
+    """Delivers a scheduled task's answer as a direct message.
+
+    Separate from `DiscordNotificationSender` although both send a DM: that one
+    renders a notification draft and reports a three-way `DeliveryResult`, and
+    this one sends an answer somebody asked for and needs only "did it arrive".
+    Sharing them would mean one class serving two vocabularies.
+
+    The 403 handling is the same because the fact is the same: Discord answers
+    a closed DM with 403, and treating that as transient means knocking on a
+    door that has been shut.
+    """
+
+    def __init__(self, user: Callable[[int], Awaitable[Any]]) -> None:
+        self._user = user
+
+    async def deliver(self, person: PersonRef, task_id: int, text: str) -> bool:
+        try:
+            recipient = await self._user(person.platform_user_id)
+        except discord.NotFound:
+            # The account is gone. Permanent, and shaped like a closed DM.
+            log.info("schedules.user_not_found", person=str(person))
+            return False
+        except discord.HTTPException:
+            log.warning("schedules.user_lookup_failed", person=str(person))
+            # Transient: reported as undelivered, but the caller only stops a
+            # task on a refusal, so this simply means nothing was sent.
+            return False
+        if recipient is None:
+            return False
+        try:
+            for piece in split_message(f"{SCHEDULED_PREFIX}\n{text}"):
+                await recipient.send(piece, allowed_mentions=discord.AllowedMentions.none())
+        except discord.Forbidden:
+            return False
+        except discord.HTTPException:
+            log.warning("schedules.not_delivered", person=str(person), task_id=task_id)
+            return False
+        return True
+
+
 class CyberFriendClient(discord.Client):
     def __init__(self, asks: AskService, guild_id: int) -> None:
         intents = discord.Intents.default()
@@ -898,6 +1027,7 @@ class CyberFriendClient(discord.Client):
         self._indexing: IndexingService | None = None
         self._notifications: NotificationPreferences | None = None
         self._channels: ChannelListingService | None = None
+        self._schedules: ScheduleService | None = None
 
     def attach_indexing(self, indexing: IndexingService) -> None:
         """Give `/index` and `/unindex` somewhere to act.
@@ -915,6 +1045,16 @@ class CyberFriendClient(discord.Client):
         reads permissions through is built over this client's guild cache.
         """
         self._channels = channels
+
+    def attach_schedules(self, schedules: ScheduleService) -> None:
+        """Give `/schedule` somewhere to read and write.
+
+        Attached after construction like the rest. Without it the group is
+        still registered and says the feature is unavailable -- the safe half,
+        and the one a deployment that wires nothing should get, because the
+        feature sends messages nobody asked for in the moment.
+        """
+        self._schedules = schedules
 
     def attach_notifications(self, notifications: NotificationPreferences) -> None:
         """Give `/notifications` somewhere to write.
@@ -953,7 +1093,76 @@ class CyberFriendClient(discord.Client):
         # is something everyone in it is owed disclosure about, and disclosure
         # nobody can check is not disclosure.
         self.tree.add_command(self._build_channels_command(), guild=guild)
+        # A group rather than three flat commands: `create`, `list` and
+        # `delete` are one concept, and Discord shows them together under it.
+        self.tree.add_command(self._build_schedule_group(), guild=guild)
         await self.tree.sync(guild=guild)
+
+    def _build_schedule_group(self) -> app_commands.Group:
+        """`/schedule create|list|delete`: a person's own scheduled questions.
+
+        Whose they are comes from the interaction, which carries an
+        authenticated account, exactly as `/forget` and `/notifications` do.
+        There is no option naming a person, so managing somebody else's tasks
+        is not expressible.
+
+        Every reply is private. A scheduled question is a standing statement
+        about what somebody is watching, and announcing it in a channel says
+        something about them they did not choose to say.
+        """
+        group = app_commands.Group(
+            name="schedule", description="Questions I ask for you on a schedule"
+        )
+
+        @group.command(name="create", description="Ask me something on a schedule")
+        @app_commands.describe(
+            question="What I should ask, in your own words",
+            every_hours=f"How often, in hours ({MIN_INTERVAL_HOURS}-{MAX_INTERVAL_HOURS})",
+        )
+        async def create(
+            interaction: discord.Interaction, question: str, every_hours: int
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if self._schedules is None:
+                await interaction.followup.send(SCHEDULES_UNAVAILABLE, ephemeral=True)
+                return
+            result = await self._schedules.create(
+                _person(interaction.user), question, every_hours
+            )
+            await interaction.followup.send(
+                _created_message(result),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        @group.command(name="list", description="Show the questions I ask for you")
+        async def listing(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if self._schedules is None:
+                await interaction.followup.send(SCHEDULES_UNAVAILABLE, ephemeral=True)
+                return
+            tasks = await self._schedules.list_for(_person(interaction.user))
+            await interaction.followup.send(
+                _schedule_listing(tasks),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        @group.command(name="delete", description="Stop one of your scheduled questions")
+        @app_commands.describe(task="The number shown by `/schedule list`")
+        async def delete(interaction: discord.Interaction, task: int) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if self._schedules is None:
+                await interaction.followup.send(SCHEDULES_UNAVAILABLE, ephemeral=True)
+                return
+            deleted = await self._schedules.delete(_person(interaction.user), task)
+            # The same sentence either way. "That is not yours" and "there is
+            # no such task" would let somebody learn which numbers exist.
+            await interaction.followup.send(
+                SCHEDULE_DELETED if deleted else SCHEDULE_NOT_YOURS, ephemeral=True
+            )
+
+        return group
 
     def _build_channels_command(self) -> app_commands.Command[Any, ..., None]:
         """`/channels`: the archived channels this person can read.
