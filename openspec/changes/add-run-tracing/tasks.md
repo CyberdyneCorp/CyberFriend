@@ -37,5 +37,12 @@
 
 ## 5. Live
 
-- [ ] 5.1 Deploy with the destination configured
-- [ ] 5.2 Confirm a real question appears as a trace with its evidence
+- [x] 5.1 Deploy with the destination configured
+- [x] 5.2 Confirm the production adapter's export is readable with its evidence
+- [ ] 5.3 Confirm a question asked in Discord appears as a trace
+
+5.2 was verified by running `LangfuseTracer` itself against the deployed
+instance: the trace came back with its question, answer, status, cause and
+evidence text intact, and deleting it through the same API the withdrawal path
+uses removed it. That covers the adapter and the destination. 5.3 is the
+Discord leg, and needs somebody to ask the bot something.
