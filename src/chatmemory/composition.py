@@ -63,6 +63,7 @@ from datetime import timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from chatmemory.adapters.chain.registration import ChainToolsConfig, build_chain_tools
 from chatmemory.adapters.discord.acl import (
     DiscordAclResolver,
     DiscordAudienceResolver,
@@ -621,7 +622,7 @@ def _check_mutation_is_spendable(
 
 
 def federates_anything(settings: Settings) -> bool:
-    """Whether any tool -- remote, web or market -- could be registered.
+    """Whether any tool -- remote, web, market or wallet -- could be registered.
 
     One predicate for both callers. The config and the proposer used to repeat
     the condition, and a third kind of tool added to one copy and not the other
@@ -631,6 +632,7 @@ def federates_anything(settings: Settings) -> bool:
         settings.federation_servers
         or settings.web_tools_enabled
         or settings.market_tools_enabled
+        or settings.wallet_tools_enabled
     )
 
 
@@ -727,6 +729,22 @@ def web_tools_config(settings: Settings) -> WebToolsConfig:
     )
 
 
+def chain_tools_config(settings: Settings) -> ChainToolsConfig:
+    """Operator settings, translated for the wallet adapter.
+
+    One Infura key covers both chains: the endpoint differs only in its host
+    segment, so a second variable would be a second place for the same secret
+    to be set wrong.
+    """
+    return ChainToolsConfig(
+        infura_key=(
+            settings.infura_key.get_secret_value() if settings.infura_key else None
+        ),
+        max_calls_per_run=settings.wallet_max_calls_per_run,
+        timeout_seconds=settings.wallet_timeout_seconds,
+    )
+
+
 def market_tools_config(settings: Settings) -> MarketToolsConfig:
     """Operator settings, translated for the market adapter.
 
@@ -799,6 +817,20 @@ async def build_federation(
             "composition.market_tools.registered",
             providers=sorted(market.providers),
         )
+
+    # Wallet balances, last, so its factory is outermost and anything it does
+    # not own falls through to market, then web, then remote MCP. Held to
+    # *rooting* rather than to a closed vocabulary -- an address has no fixed
+    # set to be a member of, and rooting is what makes the lookup only ever
+    # reach an address the asker typed themselves.
+    if settings.wallet_tools_enabled:
+        chain = build_chain_tools(chain_tools_config(settings))
+        if chain.servers:
+            config = chain.merge_into(config or FederationConfig())
+            factory = chain.factory(factory)
+            log.info("composition.wallet_tools.registered", chains=list(chain.server_names))
+        else:
+            log.warning("composition.wallet_tools.none_available", reason="no INFURA_KEY")
 
     if config is None:
         log.info("composition.federation.disabled", reason="no servers configured")

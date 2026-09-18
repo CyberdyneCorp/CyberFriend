@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Report what an address holds on Ethereum and Base, without the assistant
+  ever being able to look up a wallet the asker did not type

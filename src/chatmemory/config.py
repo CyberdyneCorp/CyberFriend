@@ -208,6 +208,28 @@ class Settings(BaseSettings):
 
     market_timeout_seconds: float = 8.0
 
+    wallet_tools_enabled: bool = False
+    """Wallet balances on Ethereum and Base, given an address.
+
+    Off by default like every other outbound boundary. What leaves is narrower
+    than a web query -- an address, and only one the asker typed into their own
+    question -- but "narrow" is not "none": which addresses this deployment is
+    asked about is itself a signal, and it leaves in a request to a third party.
+    """
+
+    infura_key: SecretStr | None = None
+    """Absent means the wallet tool is not registered at all.
+
+    Not registered rather than registered-and-failing, for the same reason as
+    `serpapi_key`: a tool the model can see but cannot use is one it will plan
+    around and then fail on.
+    """
+
+    wallet_max_calls_per_run: int = 2
+    """Wallet lookups one question may cause. Each reads every chain."""
+
+    wallet_timeout_seconds: float = 8.0
+
     # --- Tracing -------------------------------------------------------
     tracing_enabled: bool = False
     """Export each run -- question, answer and retrieved evidence -- for study.

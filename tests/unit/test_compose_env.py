@@ -52,6 +52,13 @@ DEPLOYMENT_SETTINGS = {
     "MARKET_TOOLS_ENABLED": ("bot",),
     "MARKET_MAX_CALLS_PER_RUN": ("bot",),
     "MARKET_TIMEOUT_SECONDS": ("bot",),
+    # Wallet balances are merged into the bot's federation like the market
+    # tools; declared here or an operator enabling it in the platform silently
+    # keeps it off.
+    "WALLET_TOOLS_ENABLED": ("bot",),
+    "INFURA_KEY": ("bot",),
+    "WALLET_MAX_CALLS_PER_RUN": ("bot",),
+    "WALLET_TIMEOUT_SECONDS": ("bot",),
     "ASK_EXTRACTION_ENABLED": ("ingest", "admin"),
     "ASK_MIN_CONFIDENCE": ("ingest", "admin"),
     # Conversation memory. Retention is enforced by the ingest sweep, so a

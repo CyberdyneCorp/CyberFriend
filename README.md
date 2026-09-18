@@ -22,6 +22,7 @@ internet said.
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
 | **Web and MCP** | Wikipedia, Google via SerpApi, and any MCP server an operator allowlists |
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
+| **Wallet balances** | What a `0x` address holds on Ethereum and Base, with USD values. Only an address you typed yourself |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
@@ -199,6 +200,7 @@ lists the common ones. The settings worth knowing:
 | `CHAT_MODEL_CAPABILITIES` | What the endpoint supports; narrowing is deliberate |
 | `WEB_TOOLS_ENABLED`, `SERPAPI_KEY` | Wikipedia and Google. Off by default |
 | `MARKET_TOOLS_ENABLED` | BTC, ETH, S&P 500, currency conversion. Off by default |
+| `WALLET_TOOLS_ENABLED`, `INFURA_KEY` | Wallet balances on Ethereum and Base. Off by default |
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
