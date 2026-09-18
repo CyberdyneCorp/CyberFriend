@@ -34,6 +34,29 @@ request, and SHALL refuse it outright rather than trimming it.
 - WHEN a rooted argument is not an address
 - THEN no request SHALL be made
 
+### Requirement: A wallet question is not answered from the corpus
+
+The system SHALL decide that a question is about a wallet before retrieval, and
+SHALL NOT answer it from channel content.
+
+#### Scenario: A question naming an address
+- WHEN someone asks what an address holds
+- THEN the corpus SHALL NOT be searched
+- AND the answer SHALL come from the chain
+
+#### Scenario: A channel discusses wallets
+- WHEN a channel contains messages about wallets or balances
+- THEN those messages SHALL NOT be used to answer what an address holds
+
+#### Scenario: A wallet question naming no address
+- WHEN someone asks about a wallet without giving an address
+- THEN the system SHALL ask for the address
+- AND SHALL NOT search the corpus
+
+#### Scenario: A question about what was said
+- WHEN an address is the subject of a question about the conversation
+- THEN the question SHALL be answered from the corpus as usual
+
 ### Requirement: The provider can only read
 
 The system SHALL issue only balance-reading calls, and SHALL hold no key

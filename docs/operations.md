@@ -225,6 +225,18 @@ individuals can see. A rooted word that is not a well-formed address is refused
 outright rather than trimmed — trimming an address to whichever part of it was
 valid hex produces a different, valid-looking address belonging to someone else.
 
+### It is decided before retrieval
+
+A wallet question never reaches the corpus. A balance is not in it and cannot
+be: a channel message about a wallet is a record of what somebody said, and
+answering from one reports a colleague's project summary as somebody's balance
+— which is exactly what happened before this route existed.
+
+An address is still allowed to be what a question is *about*: "what did people
+say about 0x…" keeps its corpus answer, because the conversation verbs mark it
+as a question about the conversation. Asking about a wallet without naming an
+address is answered by asking for one, not by searching.
+
 ### What it cannot see
 
 JSON-RPC cannot enumerate holdings. `eth_getBalance` gives the native balance;

@@ -251,6 +251,15 @@ XCG in 2025) and BGN (Bulgaria joined the euro in 2026). A valid code the rate
 source does not publish is reported as unsupported by that source, after the
 check, not before it."""
 
+CHAIN_BALANCES_PROVIDER = "chain_balances"
+"""The wallet lookup. Deliberately absent from `CLOSED_VOCABULARIES` below.
+
+Held to rooting instead, because addresses are a set of size 2^160 and there
+is no membership to check. Rooting is what makes the lookup reach only an
+address the asker typed into their own question, so the assistant can never be
+used to sweep the addresses mentioned across the channels it can read.
+"""
+
 MARKET_CRYPTO_PROVIDER = "market_crypto"
 MARKET_FX_PROVIDER = "market_fx"
 MARKET_INDEX_PROVIDER = "market_index"

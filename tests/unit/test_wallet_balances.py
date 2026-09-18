@@ -14,7 +14,6 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from chatmemory.adapters.chain.addresses import find_addresses, is_address, normalise
 from chatmemory.adapters.chain.provider import WALLET_TOOL, PricedAsset, WalletProvider
 from chatmemory.adapters.chain.registration import ChainToolsConfig, build_chain_tools
 from chatmemory.adapters.chain.rpc import ChainReader
@@ -30,6 +29,7 @@ from chatmemory.app.egress import (
     authorized,
     keep_asker_words,
 )
+from chatmemory.domain.chain import find_addresses, is_address, normalise
 from chatmemory.domain.identity import PersonRef
 
 ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
@@ -307,3 +307,62 @@ def test_a_key_registers_one_read_only_tool() -> None:
     entry = tools.allowlist[0]
     assert entry.effect.mutates is False
     assert entry.mutation_enabled is False
+
+
+# --- the route that makes the tool reachable ----------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # The verbatim production message. It was answered from a channel
+        # message about a colleague's crypto project, because the corpus
+        # answered first and the critic found it sufficient -- so the run
+        # never escalated to the tool that could actually answer.
+        "0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5",
+        "qual o saldo da carteira 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5?",
+        "what does 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5 hold on base",
+        "quanto tem na wallet 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5",
+    ],
+)
+def test_a_question_naming_an_address_goes_to_the_chain(question: str) -> None:
+    """A balance is never in the corpus. A channel message about a wallet is a
+    record of what somebody said, and answering from one reports a colleague's
+    project summary as somebody's balance."""
+    from chatmemory.app.routing import wallet_question
+
+    asked = wallet_question(question)
+    assert asked is not None
+    assert asked.address == "0xd5c95af87f6e1e83507ac96b2ee4484b9afebdd5"
+
+
+def test_a_wallet_question_with_no_address_asks_for_one() -> None:
+    """"qual o balanco da carteira?" searched the corpus and answered from
+    whatever a colleague had written about wallets. No channel holds a live
+    balance, so there is nothing there to find."""
+    from chatmemory.app.routing import wallet_question
+
+    asked = wallet_question("qual o balanco da carteira?")
+    assert asked is not None
+    assert asked.address is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # The address is the SUBJECT of a question about the conversation.
+        "what did people say about 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5",
+        "o que o pessoal falou sobre a carteira 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5",
+        "quem mencionou 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5",
+        # Nothing to do with wallets at all.
+        "what was decided about the deploy last week",
+        "what did people ask me to do today",
+        "qual o valor do Ethereum ?",
+    ],
+)
+def test_questions_about_the_conversation_still_reach_the_corpus(question: str) -> None:
+    """The bound in the other direction: an address can be what a question is
+    *about*, and that question belongs to the corpus."""
+    from chatmemory.app.routing import wallet_question
+
+    assert wallet_question(question) is None

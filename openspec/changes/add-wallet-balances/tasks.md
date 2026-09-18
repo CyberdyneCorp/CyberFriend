@@ -33,7 +33,12 @@
 
 - [x] 5.1 Deploy with the endpoints configured
 - [x] 5.2 Confirm the provider answers for a real address against live chains
-- [ ] 5.3 Confirm an address asked in Discord answers
+- [x] 5.3 Route a wallet question outside the corpus before retrieval
+- [ ] 5.4 Confirm an address asked in Discord answers
+
+5.3 was a defect found in Discord: the tool was registered, offered, read-only
+and never called, because the corpus answered first from a colleague's message
+about a different project and the critic judged it sufficient.
 
 5.2 was verified by running the guarded provider against Ethereum and Base:
 the clearance was minted, the egress log recorded `closed_vocabulary=False`

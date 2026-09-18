@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
+from chatmemory.domain.chain import find_addresses
 from chatmemory.ports.facts import FactKind
 
 
@@ -401,6 +402,64 @@ def self_description_question(text: str) -> bool:
     if any(f" {t} " in padded for t in strong):
         return True
     return names_machinery and (addresses_bot or asks_capability)
+
+
+# Words that make a question about a wallet's holdings rather than about what
+# anybody said. Both languages, because this server uses both.
+_WALLET_TERMS = frozenset({
+    "wallet", "wallets", "carteira", "carteiras", "address", "endereco",
+    "endereço", "balance", "balances", "saldo", "saldos", "balanco", "balanço",
+    "holdings", "holds", "tokens", "token", "quanto", "hold",
+})
+# Verbs that make a question about the CONVERSATION, even when an address is
+# in it. "What did people say about 0x..." is a corpus question and must stay
+# one; only these keep an address out of the chain lookup.
+_CONVERSATION_VERBS = frozenset({
+    "said", "say", "says", "mentioned", "mention", "discussed", "discuss",
+    "decided", "decide", "wrote", "told", "asked",
+    "disse", "disseram", "falou", "falaram", "mencionou", "mencionaram",
+    "comentou", "comentaram", "discutiu", "discutiram", "decidiu", "decidiram",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class WalletQuestion:
+    """A question the chain can answer and the corpus cannot.
+
+    `address` is None when somebody asks about a wallet without naming one.
+    That is still not a corpus question -- no channel holds a live balance --
+    so it is intercepted and answered by asking for the address, rather than
+    searched for and answered from whatever a colleague once wrote about
+    wallets.
+    """
+
+    address: str | None
+
+
+def wallet_question(text: str) -> WalletQuestion | None:
+    """The wallet lookup being asked for, or None for everything else.
+
+    A balance is never in the corpus. A channel message about a wallet is a
+    record of what somebody said, and answering "what does 0x... hold" from
+    one is how the assistant ends up reporting a colleague's project summary
+    as somebody's balance -- which is exactly what it did.
+
+    An address plus conversation verbs stays with the corpus: "what did people
+    say about 0x..." is a question about the conversation, and the address is
+    its subject rather than a lookup.
+    """
+    addresses = find_addresses(text)
+    words = set(text.lower().replace("?", " ").replace(",", " ").split())
+    if addresses:
+        if words & _CONVERSATION_VERBS:
+            return None
+        return WalletQuestion(address=addresses[0])
+    # No address, but plainly about a wallet: intercepted so the answer is
+    # "which address?" rather than a search of other people's conversations.
+    names_a_wallet = {"wallet", "wallets", "carteira", "carteiras"}
+    if (words & names_a_wallet) and (words & (_WALLET_TERMS - names_a_wallet)):
+        return WalletQuestion(address=None)
+    return None
 
 
 def obligation_question(text: str) -> ObligationQuestion | None:

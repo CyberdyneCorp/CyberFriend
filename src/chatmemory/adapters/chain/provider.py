@@ -37,14 +37,18 @@ from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
-from chatmemory.adapters.chain.addresses import is_address, normalise
 from chatmemory.adapters.chain.rpc import ChainBalances, ChainReader
 from chatmemory.adapters.chain.tokens import tokens_for
 from chatmemory.adapters.mcp_client.session import DiscoveredTool, ToolResult, ToolSession
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
 from chatmemory.adapters.web.query import check_query
 from chatmemory.app.authorization import ToolEffect
-from chatmemory.app.egress import EgressRefused, current_authorization
+from chatmemory.app.egress import (
+    CHAIN_BALANCES_PROVIDER,
+    EgressRefused,
+    current_authorization,
+)
+from chatmemory.domain.chain import is_address, normalise
 
 log = structlog.get_logger()
 
@@ -102,7 +106,7 @@ class PriceLookup(Protocol):
 class WalletProvider:
     """Balances for one address across every configured chain."""
 
-    server = "chain_balances"
+    server = CHAIN_BALANCES_PROVIDER
 
     def __init__(
         self,
