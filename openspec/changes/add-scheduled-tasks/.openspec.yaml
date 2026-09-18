@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Let a person schedule a question to be asked on their behalf, and be told
+  the answer, without becoming a source of unwanted messages
