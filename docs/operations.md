@@ -258,3 +258,25 @@ transaction even if later code asked it to — the allowlist entry declares
 
 A chain that cannot be reached is reported as unreachable, never as an address
 holding nothing; one endpoint failing still reports the other.
+
+## Seeing what is archived
+
+`/channels` lists the archived channels the person asking can read. Private,
+and deliberately not a directory.
+
+The listing is **indexed scope intersected with the asker's readable
+channels**, both read per request: scope changes without a redeploy, and access
+changes without anything happening here at all. It resolves permissions through
+the same `AclResolver` that scopes retrieval, so the list cannot disagree with
+what they can actually search — a listing built from a second permission check
+could name a channel that returns nothing, or omit one that returns something.
+
+**Nothing is said about what the intersection removed** — not the names, not
+the count, not that there were any. A count is a disclosure: "and 4 you cannot
+read" tells somebody four private archived channels exist, which is most of
+what the ACL design exists to withhold. The reply for "you can read none of
+them" is identical whether the server archives nothing at all or archives only
+channels this person cannot see.
+
+Operators who need the full picture, with message counts, use the admin
+console's channel view rather than this command.
