@@ -26,6 +26,7 @@ internet said.
 | **Wallet balances** | What a `0x` address holds on Ethereum and Base, with USD values. Only an address you typed yourself |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
+| **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
 | **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |
@@ -206,6 +207,7 @@ lists the common ones. The settings worth knowing:
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
+| `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 

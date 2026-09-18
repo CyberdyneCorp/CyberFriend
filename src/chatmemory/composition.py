@@ -101,6 +101,7 @@ from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
+from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
 from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseTracer
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
@@ -167,10 +168,16 @@ from chatmemory.app.reasoning.retrieval import (
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.stages import ModelSynthesizer, ModelToolProposer
 from chatmemory.app.reasoning.tracing import OptOutAwareTracer, TraceWithdrawal
+from chatmemory.app.schedules import (
+    ScheduledTaskRunner,
+    ScheduleService,
+    TaskMessenger,
+)
 from chatmemory.app.scope import LiveScope, ScopeProvider, StaticScope
 from chatmemory.app.self_description import (
     ALWAYS_AVAILABLE,
     NOTIFICATIONS,
+    SCHEDULED,
     Command,
     SelfDescriptionAnswerService,
 )
@@ -916,7 +923,43 @@ def available_commands(settings: Settings) -> tuple[Command, ...]:
     commands = list(ALWAYS_AVAILABLE)
     if settings.notifications_enabled:
         commands.append(NOTIFICATIONS)
+    if settings.scheduled_tasks_enabled:
+        commands.extend(SCHEDULED)
     return tuple(commands)
+
+
+def build_schedules(settings: Settings, engine: AsyncEngine) -> ScheduleService | None:
+    """The `/schedule` commands, or None when the feature is off.
+
+    None rather than a service over an empty store: the commands then say the
+    feature is not switched on, which is the honest answer, and a deployment
+    that has not chosen to send unprompted messages does not quietly acquire
+    the ability to.
+    """
+    if not settings.scheduled_tasks_enabled:
+        return None
+    return ScheduleService(
+        PostgresScheduleStore(engine, cap=settings.scheduled_tasks_per_person),
+        tasks_per_person=settings.scheduled_tasks_per_person,
+    )
+
+
+def build_task_runner(
+    settings: Settings, engine: AsyncEngine, asks: AskService, messenger: TaskMessenger
+) -> ScheduledTaskRunner | None:
+    """The sweep that runs due tasks, or None when the feature is off.
+
+    Takes the process's own `AskService`, not a second one: a scheduled run is
+    the same question by the same person through the same stack, and a second
+    instance would be a second set of rules about what they may read.
+    """
+    if not settings.scheduled_tasks_enabled:
+        return None
+    return ScheduledTaskRunner(
+        PostgresScheduleStore(engine, cap=settings.scheduled_tasks_per_person),
+        asks,
+        messenger,
+    )
 
 
 def build_channel_listing(

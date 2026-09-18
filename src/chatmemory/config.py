@@ -230,6 +230,25 @@ class Settings(BaseSettings):
 
     wallet_timeout_seconds: float = 8.0
 
+    # --- Scheduled tasks -----------------------------------------------
+    scheduled_tasks_enabled: bool = False
+    """Questions the assistant asks on a person's behalf, hourly to daily.
+
+    Off by default, and this one is not an outbound boundary but an *inbound*
+    one: it is the second feature that sends somebody a message they did not
+    just ask for, and it is far more open-ended than the first. Every run is
+    also a full reasoning run, so `people x tasks x 24` is the daily ceiling a
+    deployment is signing up for.
+    """
+
+    scheduled_tasks_per_person: int = 5
+    """How many a person may keep. The cap, with the hour floor, is what
+    bounds the cost; neither is a budget."""
+
+    scheduled_sweep_seconds: float = 300.0
+    """How often due tasks are looked for. Well under the hour floor, so a
+    task runs near its time rather than up to an interval late."""
+
     # --- Tracing -------------------------------------------------------
     tracing_enabled: bool = False
     """Export each run -- question, answer and retrieved evidence -- for study.
