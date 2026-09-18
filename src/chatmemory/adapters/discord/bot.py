@@ -71,6 +71,7 @@ from chatmemory.app.asks.model import (
 )
 from chatmemory.app.asks.obligations import MessageUrl
 from chatmemory.app.authorization import ConfirmationPrompt
+from chatmemory.app.channel_listing import ChannelListing, ChannelListingService
 from chatmemory.app.confirmation import ConfirmationReply, Undeliverable
 from chatmemory.app.disclosure import ScopedAnswer, withheld_notice
 from chatmemory.app.indexing import (
@@ -157,6 +158,33 @@ FORGET_HERE = "here"
 FORGET_EVERYWHERE = "everywhere"
 
 MEMORY_UNAVAILABLE = "I don't keep conversation history here, so there's nothing to forget."
+
+CHANNELS_UNAVAILABLE = (
+    "I can't list archived channels here - indexing isn't wired up on this "
+    "deployment."
+)
+
+NO_CHANNELS_FOR_YOU = (
+    "There are no archived channels you can read.\n"
+    "Someone with Manage Channels on a channel can archive it with `/index`."
+)
+"""Said whether the server archives nothing or archives only channels this
+person cannot read. The two must be indistinguishable: a different wording for
+each would make the reply a test for whether private archives exist."""
+
+
+def _channels_message(listing: ChannelListing) -> str:
+    if listing.empty:
+        return NO_CHANNELS_FOR_YOU
+    lines = [
+        f"**Archived channels you can read ({len(listing.channels)}):**",
+        *(f"- <#{c.platform_channel_id}>" for c in listing.channels),
+        "",
+        "Everything said in these is stored so people who can read them can "
+        "search it. `/unindex` stops one and deletes what was archived.",
+    ]
+    return "\n".join(lines)
+
 
 INDEXING_UNAVAILABLE = (
     "Indexing can't be changed from Discord on this deployment. "
@@ -869,6 +897,7 @@ class CyberFriendClient(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self._indexing: IndexingService | None = None
         self._notifications: NotificationPreferences | None = None
+        self._channels: ChannelListingService | None = None
 
     def attach_indexing(self, indexing: IndexingService) -> None:
         """Give `/index` and `/unindex` somewhere to act.
@@ -878,6 +907,14 @@ class CyberFriendClient(discord.Client):
         are still registered and say indexing is unavailable here.
         """
         self._indexing = indexing
+
+    def attach_channel_listing(self, channels: ChannelListingService) -> None:
+        """Give `/channels` somewhere to read from.
+
+        Attached after construction like the others, because the resolver it
+        reads permissions through is built over this client's guild cache.
+        """
+        self._channels = channels
 
     def attach_notifications(self, notifications: NotificationPreferences) -> None:
         """Give `/notifications` somewhere to write.
@@ -912,7 +949,37 @@ class CyberFriendClient(discord.Client):
         # permission is checked on the target channel when it runs.
         for action in IndexAction:
             self.tree.add_command(self._build_indexing_command(action), guild=guild)
+        # Unconditional, and next to them on purpose: a channel being archived
+        # is something everyone in it is owed disclosure about, and disclosure
+        # nobody can check is not disclosure.
+        self.tree.add_command(self._build_channels_command(), guild=guild)
         await self.tree.sync(guild=guild)
+
+    def _build_channels_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/channels`: the archived channels this person can read.
+
+        Always private, and never a directory. What is listed is scope
+        intersected with the asker's own readable channels; nothing is said
+        about what that intersection removed, because "and 4 you cannot see"
+        discloses that four private archived channels exist.
+        """
+
+        @app_commands.command(
+            name="channels", description="List the channels I archive that you can read"
+        )
+        async def channels(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if self._channels is None:
+                await interaction.followup.send(CHANNELS_UNAVAILABLE, ephemeral=True)
+                return
+            listing = await self._channels.for_person(_person(interaction.user))
+            await interaction.followup.send(
+                _channels_message(listing),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        return channels
 
     def _build_indexing_command(
         self, action: IndexAction

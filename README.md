@@ -25,6 +25,7 @@ internet said.
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
 | **Wallet balances** | What a `0x` address holds on Ethereum and Base, with USD values. Only an address you typed yourself |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
+| **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
 | **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |

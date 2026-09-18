@@ -106,6 +106,7 @@ from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.asks.obligations import discord_message_url
 from chatmemory.app.authorization import ConfirmationLedger
 from chatmemory.app.catchup import CatchUpService
+from chatmemory.app.channel_listing import ChannelListingService
 from chatmemory.app.configuration import ConfigurationEditor
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
@@ -117,6 +118,7 @@ from chatmemory.composition import (
     build_answer_stack,
     build_ask_service,
     build_catch_up,
+    build_channel_listing,
     build_conversations,
     build_live_scope,
     build_notification_delivery,
@@ -260,6 +262,11 @@ def build_bot(
         # nothing gets.
         service = build_indexing_service(client, settings.discord_guild_id, indexing)
         client.attach_indexing(service)
+    if scope is not None:
+        # `/channels` reads the same live scope `/index` writes, through the
+        # same resolver the ask path scopes retrieval with. Without it the
+        # command is registered and says listing is unavailable.
+        client.attach_channel_listing(build_channel_listing_service(client, settings, scope))
     delivery = build_delivery(settings, client, provider, caches, notifications, scope)
     return BotGraph(
         client=client,
@@ -316,6 +323,21 @@ def build_delivery(
         ),
         scope=scope,
     )
+
+
+def build_channel_listing_service(
+    client: CyberFriendClient, settings: Settings, scope: ScopeProvider
+) -> ChannelListingService:
+    """`/channels` over this client's live guild cache.
+
+    Late-bound like the others: the guild is read when somebody asks, so a
+    listing reflects access as it is then rather than as it was at startup.
+    """
+
+    def guild() -> Any:
+        return client.get_guild(settings.discord_guild_id)
+
+    return build_channel_listing(guild, scope)
 
 
 def build_indexing_service(

@@ -121,7 +121,13 @@ RESOLVE = Command(
     "Fechar ou descartar algo que eu disse que pediram a você",
 )
 
-ALWAYS_AVAILABLE = (ASK, INDEX, UNINDEX, FORGET, RESOLVE)
+CHANNELS = Command(
+    "channels",
+    "List the channels I archive that you can read",
+    "Listar os canais que eu arquivo e que você pode ler",
+)
+
+ALWAYS_AVAILABLE = (ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE)
 """Commands the bot registers unconditionally.
 
 `notifications` is not here: it is only registered when the feature is on, and

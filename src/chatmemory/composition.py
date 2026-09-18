@@ -125,6 +125,7 @@ from chatmemory.app.authorization import (
     ToolEffect,
 )
 from chatmemory.app.catchup import CatchUpService
+from chatmemory.app.channel_listing import ChannelListingService
 from chatmemory.app.confirmation import ConfirmationDesk, with_confirmation
 from chatmemory.app.conversation import (
     Conversations,
@@ -916,6 +917,20 @@ def available_commands(settings: Settings) -> tuple[Command, ...]:
     if settings.notifications_enabled:
         commands.append(NOTIFICATIONS)
     return tuple(commands)
+
+
+def build_channel_listing(
+    guild: GuildProvider, scope: ScopeProvider
+) -> ChannelListingService:
+    """`/channels`, over the same resolver that scopes retrieval.
+
+    The same `DiscordAclResolver` the ask path uses, deliberately. A listing
+    built from a second permission check could disagree with what the person
+    can actually search, and the disagreement would show up as a channel they
+    were told about returning nothing -- or one they were not told about
+    returning something.
+    """
+    return ChannelListingService(scope, DiscordAclResolver(guild, scope))
 
 
 def build_answers(

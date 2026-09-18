@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Let someone see which channels are archived, without turning the answer
+  into a directory of channels they cannot read
