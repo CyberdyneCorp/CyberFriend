@@ -25,6 +25,7 @@ internet said.
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
+| **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |
 
 ## The rules it keeps
 
@@ -201,6 +202,8 @@ lists the common ones. The settings worth knowing:
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
+| `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 
 Anything that reaches outside the server is off by default. A deployment should
 acquire an outbound boundary because somebody chose it.
@@ -229,6 +232,14 @@ Further reading:
 **It creates a permanent searchable archive of everything said in indexed
 channels.** That needs a retention window, disclosure to the team, and an
 opt-out. All three exist; the policy is a decision, not a default.
+
+**Tracing copies retrieved content into a store with no permission rules.**
+With `TRACING_ENABLED` on, each run's question, answer and evidence are sent to
+Langfuse, which has no notion of who may read a channel. Anyone with access to
+it can read everything the assistant has retrieved, from every channel. Deleting
+a message does follow — the tombstone deletes the traces quoting it, and a
+failed deletion is retried — but the destination still has to be protected the
+way the database is. It is off by default for this reason.
 
 **No bot can read direct messages between people, on any platform.** Questions
 like "what did people ask me today" cover indexed channels and DMs sent to the

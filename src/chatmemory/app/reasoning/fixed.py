@@ -369,6 +369,8 @@ async def finish_run(
         # records this as the turn's provenance: a sentence can paraphrase a
         # window without citing it, and must not outlive a revocation for it.
         answer=replace(answer, consulted_channels=consulted_channels(evidence)),
+        # Carried for tracing only; see RunOutcome.evidence.
+        evidence=evidence.items,
         record=RunRecord(
             path=path,
             status=status,

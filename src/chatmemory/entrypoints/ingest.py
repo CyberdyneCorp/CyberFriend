@@ -83,12 +83,14 @@ from chatmemory.app.asks.worker import (
 from chatmemory.app.conversation import MemoryRetention
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
 from chatmemory.app.notifications import ObligationNotifier
+from chatmemory.app.reasoning.tracing import TraceWithdrawal
 from chatmemory.app.scope import LiveScope, ScopeChange, ScopeProvider
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import (
     build_ask_pipeline,
     build_memory_retention,
     build_obligation_notifier,
+    build_trace_withdrawal,
 )
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
@@ -107,6 +109,8 @@ RECONCILE_INTERVAL_SECONDS = 900.0
 # needs a wider pass run by hand.
 RECONCILE_LOOKBACK = timedelta(hours=24)
 WINDOW_BATCH = 500
+# How often unconfirmed trace deletions are re-attempted.
+TRACE_WITHDRAWAL_INTERVAL_SECONDS = 300.0
 IDLE_SECONDS = 5.0
 # How often open asks are re-examined against what has since been observed.
 # Minutes rather than seconds: every transition comes from a reply or a
@@ -473,6 +477,32 @@ async def notification_sweep_loop(
         await asyncio.sleep(interval)
 
 
+async def trace_withdrawal_loop(
+    withdrawal: TraceWithdrawal,
+    state: HealthState,
+    interval: float = TRACE_WITHDRAWAL_INTERVAL_SECONDS,
+) -> None:
+    """Retry trace deletions the destination has not confirmed.
+
+    The deletion itself is attempted inline, the moment the message is
+    tombstoned. This is what makes that attempt failing survivable: without it
+    a trace store that was down for the minute somebody deleted a message
+    keeps that message, and nothing ever looks again.
+    """
+    while True:
+        try:
+            retried = await withdrawal.retry_pending()
+            if retried:
+                state.details["trace_withdrawal"] = {
+                    "withdrawn": retried,
+                    "last_run_at": time.time(),
+                }
+        except Exception:
+            # The rows stay marked, so the next pass reconsiders exactly them.
+            log.exception("tracing.withdrawal_sweep_failed")
+        await asyncio.sleep(interval)
+
+
 async def memory_retention_loop(
     retention: MemoryRetention,
     state: HealthState,
@@ -574,6 +604,9 @@ async def main() -> None:
         # The provider, not its current value: capture, edits, backfill and
         # windowing all ask it on every decision.
         indexed_channels=scope,
+        # Deleting a message has to reach the trace store too, or the text
+        # stays legible in every exported run that quoted it.
+        traces=build_trace_withdrawal(settings, engine),
     )
     # Registered before any refresh loop runs, so the first stored change is
     # not missed. A channel added in the console gets its history fetched
@@ -662,6 +695,12 @@ async def main() -> None:
         tasks.create_task(
             memory_retention_loop(build_memory_retention(settings, engine), state)
         )
+
+        # Only when tracing is configured: with no destination there is
+        # nothing exported and so nothing to withdraw.
+        withdrawal = build_trace_withdrawal(settings, engine)
+        if withdrawal is not None:
+            tasks.create_task(trace_withdrawal_loop(withdrawal, state))
 
         if asks is not None:
             # The point of the whole ask pipeline: without these tasks the

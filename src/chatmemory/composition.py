@@ -99,6 +99,9 @@ from chatmemory.adapters.store.facts_postgres import PostgresFactStore
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
 from chatmemory.adapters.store.postgres import HybridSearch
+from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
+from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
+from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseTracer
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
@@ -142,6 +145,7 @@ from chatmemory.app.reasoning.capabilities import (
     ModelCapability,
     Stage,
 )
+from chatmemory.app.reasoning.contract import RunTracer
 from chatmemory.app.reasoning.errors import ConfigurationError
 from chatmemory.app.reasoning.evidence import SOURCE_WEB
 from chatmemory.app.reasoning.loop import FederatedSurface, ToolOutcome
@@ -160,6 +164,7 @@ from chatmemory.app.reasoning.retrieval import (
 )
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.stages import ModelSynthesizer, ModelToolProposer
+from chatmemory.app.reasoning.tracing import OptOutAwareTracer, TraceWithdrawal
 from chatmemory.app.scope import LiveScope, ScopeProvider, StaticScope
 from chatmemory.app.self_description import SelfDescriptionAnswerService
 from chatmemory.config import Settings
@@ -867,14 +872,79 @@ def build_answers(
     retrieval: RetrievalTool,
     chat: ChatModel,
     tools: ToolSurface | FederatedSurface | None = None,
+    tracer: RunTracer | None = None,
 ) -> ReasoningAnswerService:
     """The real answer service: both paths, over one retrieval tool.
 
     `tools` is the loop's whole federated capability. A `FederatedSurface`
     reaches the loop as one object that offers, proposes and invokes, so the
     thing that decides what a run may call is the thing that calls it.
+
+    `tracer` is None for a deployment that configured no destination, and a
+    no-op tracer is then used rather than a branch at the call site.
     """
-    return build_answer_service(retrieval, chat, tools=tools)
+    return build_answer_service(retrieval, chat, tools=tools, tracer=tracer)
+
+
+def build_tracer(settings: Settings, engine: AsyncEngine) -> RunTracer | None:
+    """The trace exporter, or None when nothing is configured to receive one.
+
+    Three things have to be true, and a missing one is silence rather than a
+    boot failure: an operator turned it on, named a host, and supplied both
+    keys. Half-configured tracing is the case worth failing on loudly, because
+    a deployment that believes it is recording and is not will discover it the
+    day somebody asks what went wrong.
+    """
+    if not settings.tracing_enabled:
+        return None
+    missing = [
+        name
+        for name, value in (
+            ("LANGFUSE_HOST", settings.langfuse_host),
+            ("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key),
+            ("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError(
+            "TRACING_ENABLED is on but " + ", ".join(missing) + " is not set"
+        )
+    assert settings.langfuse_public_key is not None
+    assert settings.langfuse_secret_key is not None
+    return OptOutAwareTracer(
+        LangfuseTracer(
+            host=settings.langfuse_host,
+            public_key=settings.langfuse_public_key.get_secret_value(),
+            secret_key=settings.langfuse_secret_key.get_secret_value(),
+            index=PostgresTraceIndex(engine),
+            timeout=settings.tracing_timeout_seconds,
+        ),
+        PostgresRetentionStore(engine),
+    )
+
+
+def build_trace_withdrawal(
+    settings: Settings, engine: AsyncEngine
+) -> TraceWithdrawal | None:
+    """The deletion side of tracing, for the ingest process.
+
+    Built from the same three settings as the exporter, because a deployment
+    that exports must withdraw and one that does not has nothing to withdraw.
+    """
+    if not settings.tracing_enabled or not settings.langfuse_host:
+        return None
+    if settings.langfuse_public_key is None or settings.langfuse_secret_key is None:
+        return None
+    return TraceWithdrawal(
+        PostgresTraceIndex(engine),
+        LangfuseTraceDeleter(
+            host=settings.langfuse_host,
+            public_key=settings.langfuse_public_key.get_secret_value(),
+            secret_key=settings.langfuse_secret_key.get_secret_value(),
+            timeout=settings.tracing_timeout_seconds,
+        ),
+    )
 
 
 def build_catch_up(
@@ -1130,8 +1200,10 @@ async def build_answer_stack(
         federated_tool_calls=proposer is not None,
         ask_min_confidence=settings.ask_min_confidence,
     )
+    tracer = build_tracer(settings, engine)
+    log.info("composition.tracing", enabled=tracer is not None)
     reasoning = build_answers(
-        retrieval, chat, tools=federation.surface if federation else None
+        retrieval, chat, tools=federation.surface if federation else None, tracer=tracer
     )
     return AnswerStack(
         engine=engine,
