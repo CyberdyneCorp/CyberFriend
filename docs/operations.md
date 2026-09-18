@@ -201,3 +201,48 @@ curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
 
 The bot logs `composition.tracing enabled=true` at startup when a destination
 is configured, and `reasoning.trace_failed` when an export is dropped.
+
+## Wallet balances
+
+With `WALLET_TOOLS_ENABLED=true` and an `INFURA_KEY`, the assistant can report
+what a `0x` address holds on Ethereum and Base: the native ETH balance and a
+named set of ERC-20 tokens, each with its USD value from the same price source
+the market tools use. One key covers both chains.
+
+### Only an address the asker typed
+
+The lookup is held to the egress guard's **rooting** rule, not to a closed
+vocabulary — addresses have no fixed set to be a member of. Rooting means an
+argument survives only if it appears in the asking person's own question, so:
+
+- an address **you type** is looked up;
+- an address the assistant found in a channel, document or tool result is
+  refused.
+
+That is the property that keeps this from becoming a way to sweep every address
+mentioned across the channels the bot can read, which is more channels than most
+individuals can see. A rooted word that is not a well-formed address is refused
+outright rather than trimmed — trimming an address to whichever part of it was
+valid hex produces a different, valid-looking address belonging to someone else.
+
+### What it cannot see
+
+JSON-RPC cannot enumerate holdings. `eth_getBalance` gives the native balance;
+every token requires knowing a contract to call `balanceOf` on. So the token set
+is **named, not discovered** — currently USDC, USDT, DAI and WETH on Ethereum,
+and USDC, DAI and WETH on Base. A token nobody listed is invisible to the
+lookup rather than absent, and the answer says so. Adding one is a line in
+`adapters/chain/tokens.py`.
+
+Full discovery would need a provider with an indexed view (Alchemy's
+`alchemy_getTokenBalances`, or Etherscan's Pro endpoint) rather than a node.
+
+### It can only read
+
+`eth_getBalance` and `eth_call` are the entire surface. There is no signer, no
+private key and no mnemonic in `adapters/chain`, so nothing there could sign a
+transaction even if later code asked it to — the allowlist entry declares
+`READ_ONLY` and the package agrees with the declaration.
+
+A chain that cannot be reached is reported as unreachable, never as an address
+holding nothing; one endpoint failing still reports the other.
