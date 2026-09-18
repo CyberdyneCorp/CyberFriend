@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import structlog
 
@@ -43,6 +44,7 @@ from chatmemory.app.egress import (
     MARKET_FX_PROVIDER,
     MARKET_INDEX_PROVIDER,
 )
+from chatmemory.app.language import Language, detect
 from chatmemory.app.reasoning.budgets import Budget
 from chatmemory.app.reasoning.contract import (
     AnswerPath,
@@ -77,6 +79,7 @@ from chatmemory.app.routing import (
     market_follow_up,
     market_question,
     mcp_change_request,
+    time_question,
     wallet_question,
 )
 from chatmemory.ports.answers import Answer, Question
@@ -283,6 +286,19 @@ class ReasoningAnswerService:
                 _route(EXTERNAL_ROUTE, f"market_{market.kind}"),
                 replace(outcome, answer=answer),
             )
+        if time_question(text):
+            # The corpus cannot answer what day it is, and asked to try it
+            # abstained -- "I couldn't find anything about that in the
+            # messages you can see", which is the grounding rule working
+            # correctly on a question that should never have reached it.
+            #
+            # Answered from the clock with no model call at all: the date is
+            # a fact this process holds, and a model asked to repeat it could
+            # only get it wrong.
+            log.info("reasoning.external_route", route="time")
+            return _route(EXTERNAL_ROUTE, "time"), refusal(
+                current_time_answer(detect(text))
+            )
         wallet = wallet_question(text)
         if wallet is not None:
             # A balance is never in the corpus. A channel message about a
@@ -327,6 +343,19 @@ class ReasoningAnswerService:
             outcome = await self._loop.run_external(question)
             return _route(EXTERNAL_ROUTE, "explicit_web_search"), outcome
         return None
+
+
+def current_time_answer(language: Language, now: datetime | None = None) -> str:
+    """What the date and time are, said in the asker's language.
+
+    UTC and labelled, like every other time this assistant states. A person
+    reading a bare time reads it as their own, and this one is not.
+    """
+    moment = now or datetime.now(UTC)
+    stamp = moment.strftime("%A %d %B %Y, %H:%M")
+    if language is Language.PORTUGUESE:
+        return f"Agora são **{stamp} UTC**."
+    return f"It is **{stamp} UTC**."
 
 
 def _saved_wallet(question: Question) -> str | None:

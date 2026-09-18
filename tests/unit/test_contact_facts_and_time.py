@@ -183,3 +183,64 @@ def test_the_clock_says_it_is_not_evidence() -> None:
     notice = clock_notice()
     assert "not evidence" in notice
     assert "never a citation" in notice
+
+
+# --- asking what the date is --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # The verbatim message from Discord. It reached retrieval, found
+        # nothing, and was answered "I couldn't find anything about that in
+        # the messages you can see" -- the grounding rule working correctly on
+        # a question that should never have reached it.
+        "what's today's date ?",
+        "what is the date?",
+        "what time is it",
+        "what day is it today",
+        "que dia é hoje?",
+        "qual a data de hoje",
+        "que horas são?",
+    ],
+)
+def test_asking_the_date_is_its_own_route(question: str) -> None:
+    from chatmemory.app.routing import time_question
+
+    assert time_question(question)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "what was decided today",
+        "what time did the deploy finish",
+        "what did people ask me today",
+        "summarise what happened today",
+        "o que foi decidido hoje",
+    ],
+)
+def test_a_question_about_the_corpus_that_mentions_time_is_not_diverted(
+    question: str,
+) -> None:
+    """Anchored at both ends: only a question whose whole content is the clock
+    belongs on this route."""
+    from chatmemory.app.routing import time_question
+
+    assert not time_question(question)
+
+
+def test_the_time_answer_states_its_zone_and_its_language() -> None:
+    from chatmemory.app.language import Language
+    from chatmemory.app.reasoning.service import current_time_answer
+
+    moment = datetime(2026, 9, 18, 20, 39, tzinfo=UTC)
+    english = current_time_answer(Language.ENGLISH, moment)
+    portuguese = current_time_answer(Language.PORTUGUESE, moment)
+
+    for answer in (english, portuguese):
+        assert "18 September 2026" in answer
+        assert "20:39" in answer
+        assert "UTC" in answer, "a time without a zone reads as local"
+    assert english.startswith("It is")
+    assert portuguese.startswith("Agora")

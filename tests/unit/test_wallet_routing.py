@@ -292,3 +292,26 @@ async def test_an_address_in_the_question_still_wins_over_a_saved_one() -> None:
                   ParaphrasingSynthesizer()).answer_run(asked)
 
     assert ADDRESS in surface.invocations[0].question
+
+
+async def test_asking_the_date_never_reaches_the_corpus() -> None:
+    """The regression, end to end through the real answer service.
+
+    In production this was answered "I couldn't find anything about that in
+    the messages you can see": the question went to retrieval, found nothing,
+    and abstained.
+    """
+    surface = ScriptedSurface(WALLET, WEB, completion=WANTS_BALANCES)
+    retrieval = FakeRetrieval([[SOMEBODY_ELSES_PROJECT]])
+
+    outcome = await service(surface, retrieval, ParaphrasingSynthesizer()).answer_run(
+        question(text="what's today's date ?")
+    )
+
+    assert retrieval.calls == [], "the corpus was searched for the date"
+    assert "UTC" in outcome.answer.text
+    assert "couldn't find" not in outcome.answer.text
+    assert decision_outcomes(outcome, EXTERNAL_ROUTE) == ["time"]
+    # No model call: the date is a fact this process holds, and a model asked
+    # to repeat it could only get it wrong.
+    assert surface.invocations == []

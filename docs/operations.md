@@ -388,3 +388,14 @@ unchanged.
 
 One clock, stated as UTC, rather than per-person timezones: an answer that
 names a time says which one, which is the property that matters.
+
+Asking the date outright has its own route, decided before retrieval, and is
+answered without a model call. Carrying the clock in the prompt is not enough
+on its own: the first version did exactly that and still answered "I couldn't
+find anything about that in the messages you can see", because the question
+went to the corpus, found no evidence, and the grounding rule refused — as it
+should for a question the corpus cannot answer.
+
+The route is anchored to questions whose whole content is the clock. "What was
+decided today" and "what time did the deploy finish" are questions about the
+corpus that merely contain the word, and they still go there.
