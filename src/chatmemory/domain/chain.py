@@ -1,10 +1,18 @@
-"""What counts as an address, and why it is refused rather than repaired.
+"""What counts as a chain address. Vocabulary, so both layers can agree.
 
-The egress guard clears a wallet lookup by rooting: the argument survives only
-if the asker typed it. That is the rule that matters, and it is enforced
-elsewhere. This module is the gate immediately after it, and it exists because
-rooting admits *any* word the asker wrote -- "balance", "base", their own name.
-Sending those to an RPC endpoint would be a request per stray word.
+In `domain` rather than beside the adapter because two layers need the same
+answer and must not each keep their own: routing decides whether a question is
+about a wallet, and the adapter decides whether a cleared argument may be sent.
+Two regexes drifting apart would mean a question routed to the tool whose
+argument the tool then refuses, which reads as the feature silently not
+working.
+
+Why refused rather than repaired: the egress guard clears a wallet lookup by
+rooting, so the argument survives only if the asker typed it. That is the rule
+that matters, and it is enforced elsewhere. This is the gate immediately after
+it, and it exists because rooting admits *any* word the asker wrote --
+"balance", "base", their own name. Sending those to an RPC endpoint would be a
+request per stray word.
 
 Refused, never trimmed. The web path retries a not-rooted query with the
 foreign words removed, which is right for prose and catastrophic here: trimming

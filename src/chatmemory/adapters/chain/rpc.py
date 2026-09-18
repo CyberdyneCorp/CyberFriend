@@ -21,8 +21,8 @@ from decimal import Decimal
 import httpx
 import structlog
 
-from chatmemory.adapters.chain.addresses import normalise
 from chatmemory.adapters.chain.tokens import Chain, Token
+from chatmemory.domain.chain import normalise
 
 log = structlog.get_logger()
 

@@ -37,6 +37,7 @@ from dataclasses import replace
 import structlog
 
 from chatmemory.app.egress import (
+    CHAIN_BALANCES_PROVIDER,
     ISO_4217_CODES,
     MARKET_CRYPTO_PROVIDER,
     MARKET_FX_PROVIDER,
@@ -76,6 +77,7 @@ from chatmemory.app.routing import (
     market_follow_up,
     market_question,
     mcp_change_request,
+    wallet_question,
 )
 from chatmemory.ports.answers import Answer, Question
 
@@ -94,6 +96,10 @@ EXTERNAL_ROUTE = "external_route"
 ESCALATION = "escalation"
 
 MARKET_SERVERS = frozenset({MARKET_CRYPTO_PROVIDER, MARKET_FX_PROVIDER, MARKET_INDEX_PROVIDER})
+CHAIN_SERVERS = frozenset({CHAIN_BALANCES_PROVIDER})
+"""The only server a wallet question may reach. Narrowed for the same reason
+the market route is: the offer the call is held to is this set, so a wallet
+question cannot end up searching the web instead."""
 
 MCP_CHANGE_REFUSAL = (
     "I can't add, remove or change MCP servers from chat. Connecting a server "
@@ -118,6 +124,27 @@ adapter's own figure lines, so there is no model prose in which a
 recommendation could appear, and this sentence is the whole of what is said
 about the question's "should I".
 """
+
+
+WALLET_ADDRESS_MISSING = (
+    "Which wallet? Give me the address (it starts with `0x`) and I'll check "
+    "Ethereum and Base.\n"
+    "I can only look up an address you type here - not one I found in a "
+    "channel."
+)
+"""Said when somebody asks about a wallet without naming one.
+
+An answer, not a search. No channel holds a live balance, so searching for one
+returns whatever a colleague once wrote about wallets and presents it as the
+asker's own -- which is the failure this whole route exists to stop.
+"""
+
+WALLET_UNAVAILABLE = (
+    "I couldn't read that address just now - the chain endpoints didn't "
+    "answer. Try again in a moment."
+)
+"""Distinct from "holds nothing", deliberately. Reporting an unreachable
+endpoint as an empty wallet is the one wrong answer somebody would act on."""
 
 
 class ReasoningAnswerService:
@@ -254,6 +281,30 @@ class ReasoningAnswerService:
             log.info("reasoning.external_route", route="market", kind=str(market.kind))
             return (
                 _route(EXTERNAL_ROUTE, f"market_{market.kind}"),
+                replace(outcome, answer=answer),
+            )
+        wallet = wallet_question(text)
+        if wallet is not None:
+            # A balance is never in the corpus. A channel message about a
+            # wallet is a record of what somebody said, and answering "what
+            # does 0x... hold" from one is how the assistant reported a
+            # colleague's project summary as somebody's balance -- which is
+            # exactly what it did before this route existed.
+            if wallet.address is None:
+                log.info("reasoning.external_route", route="wallet_no_address")
+                return (
+                    _route(EXTERNAL_ROUTE, "wallet_address_missing"),
+                    refusal(WALLET_ADDRESS_MISSING),
+                )
+            outcome = await self._loop.run_external(
+                question, CHAIN_SERVERS, verbatim=True
+            )
+            answer = outcome.answer
+            if answer.abstained:
+                answer = replace(answer, text=WALLET_UNAVAILABLE)
+            log.info("reasoning.external_route", route="wallet")
+            return (
+                _route(EXTERNAL_ROUTE, "wallet"),
                 replace(outcome, answer=answer),
             )
         if explicit_web_search(text):
