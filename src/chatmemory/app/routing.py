@@ -308,10 +308,15 @@ _SELF_DESCRIPTION_PATTERNS = (
     "what can you do", "what you can do", "what do you do", "who are you",
     "what are you", "how do you work", "how can you help", "what can i ask",
     "help me use", "how do i use you",
+    # Asking for the command list is asking what the assistant does, however
+    # long the sentence around it is.
+    "list of commands", "your commands", "what commands",
     # Portuguese, because this server speaks it.
     "o que voce faz", "o que você faz", "o que voce pode", "o que você pode",
     "quem e voce", "quem é você", "quem e você", "como voce funciona",
     "como você funciona", "como posso usar",
+    "lista de comandos", "seus comandos", "quais comandos",
+    "o que voce consegue", "o que você consegue",
 )
 
 
@@ -323,12 +328,24 @@ _CAPABILITY_TERMS = frozenset({
     "web access", "internet access", "web search", "search the web",
     "tools", "tool", "ferramentas", "ferramenta", "capabilities",
     "capability", "funcionalidades", "features",
+    "comandos", "comando", "capacidades", "capacidade", "funcoes", "funções",
+    "recursos",
 })
 # Addressing the bot directly.
 _ADDRESS_TERMS = frozenset({
     "you", "your", "yourself", "você", "voce", "vc", "seu", "sua",
+    # Plurals too: "quais sao SUAS capacidades" addresses the bot exactly as
+    # "qual e SUA capacidade" does, and only one of them used to.
+    "seus", "suas", "ti", "te",
     "cyberfriend", "bot",
 })
+_GREETINGS = frozenset({
+    "hi", "hey", "hello", "oi", "ola", "olá", "bom", "dia", "boa", "tarde",
+    "noite", "e", "ai", "aí", "eai", "please", "por", "favor", "pf",
+})
+"""Words that carry no topic. Excluded from the length bound so a polite
+question is judged by what it asks, not by how it opens."""
+
 _WORD_RE = re.compile(r"[^\W_]+(?:\s+(?:access|search|the\s+web))?")
 
 
@@ -354,10 +371,20 @@ def self_description_question(text: str) -> bool:
         # one -- not questions about it. Each has its own answer downstream.
         return False
     lowered = " ".join(text.lower().replace("?", " ").replace(",", " ").split())
+    # "oque" for "o que" is the ordinary way people type it, and every
+    # Portuguese pattern below is written with the space. Normalised rather
+    # than duplicated, so one spelling cannot be added to the list and the
+    # other forgotten.
+    lowered = re.sub(r"\boque\b", "o que", lowered)
     words = lowered.split()
+    # Greetings carry no topic, so they should not consume the length budget
+    # that exists to separate "what can you do" from "what can you do about
+    # the deploy". "Oi, o que voce pode fazer?" is the same question as
+    # "o que voce pode fazer?".
+    significant = [w for w in words if w not in _GREETINGS]
     if any(pattern in lowered for pattern in _SELF_DESCRIPTION_PATTERNS):
-        return len(words) <= 8
-    if len(words) > 10:
+        return len(significant) <= 12
+    if len(significant) > 12:
         return False
 
     padded = f" {lowered} "
