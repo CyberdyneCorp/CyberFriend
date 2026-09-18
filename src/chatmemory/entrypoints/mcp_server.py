@@ -86,6 +86,16 @@ class AclClient(discord.Client):
     async def on_ready(self) -> None:
         self._liveness.mark_live()
 
+    async def on_resumed(self) -> None:
+        # The other half of `on_disconnect`, and not optional. discord.py
+        # fires `on_ready` only when a session is established from scratch;
+        # a resumable blip ends in RESUME, which fires this and nothing else.
+        # Without it the first blip marks the permissions stale for ever: the
+        # guild cache is refused, every viewer resolves to an empty channel
+        # set, and the MCP interface answers nothing for everybody while the
+        # gateway sits happily connected.
+        self._liveness.mark_live()
+
     async def on_disconnect(self) -> None:
         # Resumable blips land here too. The cost of treating one as stale is
         # a few refused queries; the cost of not is serving a revoked

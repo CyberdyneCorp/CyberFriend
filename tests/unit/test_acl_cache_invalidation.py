@@ -364,3 +364,42 @@ def test_both_answering_entrypoints_bind_their_caches_to_their_client() -> None:
         source = (SRC / "entrypoints" / entrypoint).read_text()
         for fragment in expected:
             assert fragment in source, f"{entrypoint} does not wire invalidation: {fragment}"
+
+
+# --- the gateway coming back --------------------------------------------
+
+
+async def test_a_resumed_session_makes_the_permissions_authoritative_again() -> None:
+    """A regression test with a production failure behind it.
+
+    `on_disconnect` marks the permission cache stale, which is right: the
+    guild cache survives the connection and stops updating. The other half was
+    missing. discord.py fires `on_ready` only for a session established from
+    scratch; a resumable blip ends in RESUME, which fires `on_resumed` alone.
+
+    Without a handler for it the first blip was permanent: the MCP server
+    refused its guild cache for ever, every viewer resolved to an empty
+    channel set, and it answered nothing for everybody -- while the gateway
+    logged `successfully RESUMED` and the container looked connected. It ran
+    that way for eight hours and 856 failed health checks.
+    """
+    caches = PermissionCaches()
+    liveness = GatewayLiveness()
+    client = AclClient(caches, liveness)
+
+    await client.on_ready()
+    assert liveness.live
+
+    await client.on_disconnect()
+    assert not liveness.live, "a dead gateway must not serve its stale cache"
+
+    await client.on_resumed()
+    assert liveness.live, (
+        "a resumed session must make the permissions authoritative again; "
+        "on_ready does not fire for a RESUME"
+    )
+
+
+async def test_the_liveness_flag_starts_dead() -> None:
+    """Before the gateway connects there is nothing authoritative to read."""
+    assert not GatewayLiveness().live
