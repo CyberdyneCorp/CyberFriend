@@ -86,6 +86,37 @@ class Settings(BaseSettings):
     # tell a follow-up from an opener.
     ask_extraction_window_messages: int = 20
 
+    # --- Notifications --------------------------------------------------
+    # The assistant messaging somebody who did not ask it anything. Every
+    # other bound below is a number; this one is the switch, and it is here
+    # so an operator can stop the whole behaviour without redeploying a
+    # different image. Default on, because a feature that ships disabled by
+    # default is the feature-that-never-runs defect in a different costume.
+    notifications_enabled: bool = True
+
+    # How long an obligation waits for the others that will share its
+    # message. The whole point of batching: a busy morning is one direct
+    # message rather than nine.
+    notification_batch_window_seconds: int = 300
+
+    # The rate. At most one message per person per interval, enforced as a
+    # predicate on the claim: reaching it makes pending notifications wait,
+    # never dropped.
+    notification_min_interval_seconds: int = 3600
+
+    # No notification is ever queued for an obligation older than this. Not a
+    # comfort setting: the backlog extraction pass reads a year of imported
+    # history, and without a floor the first sweep after a deploy would
+    # message everybody about everything they were ever asked.
+    notification_max_age_hours: int = 24
+
+    # A queued notification nobody could be sent by now is no longer news.
+    # Settled unsent rather than delivered late.
+    notification_expire_hours: int = 72
+
+    # Obligations named in one message. The rest are counted, not listed.
+    notification_max_items: int = 10
+
     # --- Conversation memory -------------------------------------------
     # How many of a person's most recent turns in one place are put in front
     # of the model verbatim. Each is a question and the answer it got, fenced
@@ -289,6 +320,25 @@ class Settings(BaseSettings):
     @classmethod
     def _positive_market_setting(cls, v: float) -> float:
         """Refused at boot: a zero budget registers tools that refuse every call."""
+        if v <= 0:
+            raise ValueError("must be positive")
+        return v
+
+    @field_validator(
+        "notification_batch_window_seconds",
+        "notification_min_interval_seconds",
+        "notification_max_age_hours",
+        "notification_expire_hours",
+        "notification_max_items",
+    )
+    @classmethod
+    def _positive_notification_setting(cls, v: int) -> int:
+        """Refused at boot rather than silently meaning "no bound".
+
+        A zero batching window sends a message per obligation, and a zero
+        rate interval removes the rate limit entirely -- both of which turn
+        the feature into the thing it was bounded to avoid being.
+        """
         if v <= 0:
             raise ValueError("must be positive")
         return v

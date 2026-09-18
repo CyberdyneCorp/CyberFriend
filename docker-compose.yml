@@ -55,6 +55,16 @@ services:
       # How long what people asked the assistant is kept. This process runs
       # the sweep that deletes it; the bot only reads and writes it.
       - MEMORY_RETENTION_DAYS=${MEMORY_RETENTION_DAYS}
+      # Notifications. This process only queues them -- extraction runs
+      # here, Discord does not -- so it is given the switch and the two
+      # bounds that decide what may ever enter the queue. NOTIFICATION_MAX_AGE_HOURS
+      # is the one that matters on a first deploy: the backlog pass reads a
+      # year of imported history, and without a floor on how old an
+      # obligation may be, the first sweep would message everybody about
+      # everything they were ever asked.
+      - NOTIFICATIONS_ENABLED=${NOTIFICATIONS_ENABLED}
+      - NOTIFICATION_MAX_AGE_HOURS=${NOTIFICATION_MAX_AGE_HOURS}
+      - NOTIFICATION_EXPIRE_HOURS=${NOTIFICATION_EXPIRE_HOURS}
       - HEALTH_PORT=8080
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/ready', timeout=5).status==200 else 1)\""]
@@ -115,6 +125,15 @@ services:
       # turns are summarised on EXTRACTION_MODEL in the background.
       - MEMORY_RECENT_TURNS=${MEMORY_RECENT_TURNS}
       - MEMORY_SUMMARISE_AFTER_TURNS=${MEMORY_SUMMARISE_AFTER_TURNS}
+      # Notifications. This process drains the queue, so it is given the
+      # switch and the two bounds that decide how often somebody may be
+      # messaged: the batching window makes several obligations one message,
+      # and the interval is the rate limit. Set here and nowhere else, an
+      # operator's chosen rate would never reach the process that applies it.
+      - NOTIFICATIONS_ENABLED=${NOTIFICATIONS_ENABLED}
+      - NOTIFICATION_BATCH_WINDOW_SECONDS=${NOTIFICATION_BATCH_WINDOW_SECONDS}
+      - NOTIFICATION_MIN_INTERVAL_SECONDS=${NOTIFICATION_MIN_INTERVAL_SECONDS}
+      - NOTIFICATION_MAX_ITEMS=${NOTIFICATION_MAX_ITEMS}
       - HEALTH_PORT=8082
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8082/ready', timeout=5).status==200 else 1)\""]

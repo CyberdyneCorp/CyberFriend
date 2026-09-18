@@ -41,7 +41,7 @@ erased what they asked would say something about what they asked.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from itertools import zip_longest
 from typing import Any, Protocol
 
@@ -69,6 +69,7 @@ from chatmemory.app.asks.model import (
     CorrectionResolution,
     ReportedAsk,
 )
+from chatmemory.app.asks.obligations import MessageUrl
 from chatmemory.app.authorization import ConfirmationPrompt
 from chatmemory.app.confirmation import ConfirmationReply, Undeliverable
 from chatmemory.app.disclosure import ScopedAnswer, withheld_notice
@@ -78,9 +79,15 @@ from chatmemory.app.indexing import (
     IndexingService,
     IndexRequest,
 )
+from chatmemory.app.notifications import NotificationPreferences
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Citation
+from chatmemory.ports.notifications import (
+    DeliveryResult,
+    NotificationDraft,
+    PendingNotification,
+)
 
 UNPLACEABLE_INTERACTION = (
     "I couldn't tell which channel this was asked in, so I didn't answer. "
@@ -162,6 +169,66 @@ INDEXING_DESCRIPTIONS = {
 }
 
 
+# --- notifications ------------------------------------------------------
+#
+# The only place in this file that produces a message nobody asked for, so
+# the wording carries more weight than usual. A person receiving one has not
+# opted into anything: they were named in somebody else's request, and the
+# assistant decided that was worth interrupting them for. So the message says
+# who asked, where, and links to the thing itself, and quotes only enough to
+# recognise it -- the archive is not re-published into a direct message.
+
+#: How the command to stop is spelled. One string, used in the command
+#: definition and in the sentence that tells people about it, because a way
+#: out that is described differently from how it is invoked is not a way out.
+NOTIFICATIONS_COMMAND = "/notifications"
+
+NOTIFICATIONS_UNAVAILABLE = (
+    "Notifications aren't configured on this deployment, so there's nothing "
+    "to turn on or off."
+)
+
+NOTIFICATIONS_TURNED_OFF = (
+    "Done — I won't message you about things people ask of you. "
+    f"`{NOTIFICATIONS_COMMAND} on` brings them back."
+)
+
+NOTIFICATIONS_TURNED_ON = (
+    "Done — I'll message you when someone asks you for something. "
+    f"`{NOTIFICATIONS_COMMAND} off` stops it again."
+)
+
+#: Said in the first message somebody ever receives, and only there. Every
+#: message after it would be noise; the first one has to carry the exit,
+#: because a person who cannot find the off switch will block the bot instead.
+HOW_TO_STOP = (
+    "-# You're getting this because someone addressed a request to you in a "
+    f"channel you can read. `{NOTIFICATIONS_COMMAND} off` stops these."
+)
+
+NOTIFICATION_OPENING = {
+    1: "Someone asked you for something:",
+}
+NOTIFICATION_OPENING_MANY = "{count} things were asked of you:"
+
+#: How each kind of obligation is phrased. Commitments never appear here: an
+#: ask is only queued when the addressee is somebody other than the person who
+#: spoke, and a commitment is addressed to its own speaker.
+NOTIFICATION_PHRASING = {
+    AskKind.REQUEST: "asked you to",
+    AskKind.QUESTION: "asked you",
+    AskKind.COMMITMENT: "noted that you would",
+}
+
+#: The excerpt in a notification is shorter than the one in an answer. A
+#: notification is a pointer to a message, not a delivery of it: the link is
+#: how somebody reads the thing, and a long quotation here would republish
+#: channel content into a direct message nobody asked for.
+NOTIFICATION_EXCERPT_CHARS = 120
+
+NOTIFICATION_LINK_LABEL = "open the message"
+
+
 def _forgotten_note(turns: int, summaries: int, everywhere: bool) -> str:
     if everywhere:
         # Said whatever the counts: forgetting everywhere also deletes the
@@ -183,6 +250,8 @@ CAPABILITIES = (
     "Use `/resolve` to close something I said was asked of you, or to tell me "
     "it was never yours.\n"
     "I remember our conversation so follow-ups make sense; `/forget` erases it.\n"
+    "If someone asks you for something in a channel you can read, I'll send "
+    "you one direct message about it; `/notifications off` stops that.\n"
     "Tell me `call me Leo`, your email, or `reply to me in Portuguese` and I'll "
     "remember it; your email is only ever shown to you, in a DM.\n\n"
     "Answers posted in a channel only use sources everyone here can read. "
@@ -678,6 +747,110 @@ class DiscordIndexNotifier:
         return True
 
 
+def _notification_line(item: PendingNotification, url: MessageUrl) -> str:
+    """One obligation, as a person needs to see it.
+
+    Channel, who asked, what they asked for, a link, and a short quotation --
+    in that order, because the first three are what decides whether the reader
+    cares and the quotation is only there to make it recognisable.
+
+    Everything drawn from the corpus is escaped. The channel name, the asker's
+    display name, the extracted text and the excerpt are all strings somebody
+    else chose, and a display name spelled `x](https://evil.example) [y` would
+    otherwise rewrite the link sitting next to it.
+    """
+    try:
+        phrasing = NOTIFICATION_PHRASING[AskKind(item.kind)]
+    except ValueError:  # pragma: no cover - the store only writes known kinds
+        phrasing = "asked you"
+    link = masked_link(
+        NOTIFICATION_LINK_LABEL, url(item.channel, item.source_message_id)
+    )
+    line = (
+        f"- **#{escape_markdown(item.channel_name)}** — "
+        f"{escape_markdown(item.requester_display)} {phrasing}: "
+        f"{escape_markdown(item.text)} ({link})"
+    )
+    excerpt = _clip(item.excerpt, NOTIFICATION_EXCERPT_CHARS)
+    if excerpt:
+        line += f"\n  -# “{escape_markdown(excerpt)}”"
+    return line
+
+
+def render_notification(draft: NotificationDraft, url: MessageUrl) -> str:
+    """The whole batched message.
+
+    A module-level function rather than a method so the wording can be read
+    and tested without a gateway connection -- this is the one piece of text
+    in the system that arrives uninvited.
+    """
+    count = len(draft.items) + draft.omitted
+    opening = NOTIFICATION_OPENING.get(
+        count, NOTIFICATION_OPENING_MANY.format(count=count)
+    )
+    lines = [opening, *(_notification_line(item, url) for item in draft.items)]
+    if draft.omitted:
+        # Counted rather than listed: the rest are still queued and are not
+        # lost, and a direct message should not become the wall of text this
+        # feature exists to save people from.
+        lines.append(f"-# …and {draft.omitted} more.")
+    if draft.say_how_to_stop:
+        lines.append(HOW_TO_STOP)
+    return "\n".join(lines)
+
+
+class DiscordNotificationSender:
+    """Delivers one batched message as a direct message.
+
+    Distinguishes "they do not accept direct messages from us" from every
+    other failure, because only the first is permanent: Discord answers a
+    closed DM with 403, and treating that as transient means retrying a person
+    who has already refused, on every pass, for ever.
+
+    The user is looked up through a late-bound callable for the same reason
+    every other resolver in this file is: the client's cache does not exist
+    until the gateway connects, and a cold cache must read as "not reachable
+    yet" rather than as "no such person".
+    """
+
+    def __init__(
+        self,
+        user: Callable[[int], Awaitable[Any]],
+        message_url: MessageUrl,
+    ) -> None:
+        self._user = user
+        self._url = message_url
+
+    async def send(self, draft: NotificationDraft) -> DeliveryResult:
+        try:
+            recipient = await self._user(draft.person.platform_user_id)
+        except discord.NotFound:
+            # The account no longer exists. Permanent, and shaped exactly like
+            # a closed DM from here: stop trying.
+            log.info("notifications.user_not_found", person=str(draft.person))
+            return DeliveryResult.CLOSED
+        except discord.HTTPException:
+            log.warning("notifications.user_lookup_failed", person=str(draft.person))
+            return DeliveryResult.FAILED
+        if recipient is None:
+            return DeliveryResult.FAILED
+
+        body = render_notification(draft, self._url)
+        try:
+            for piece in split_message(body):
+                await recipient.send(
+                    piece, allowed_mentions=discord.AllowedMentions.none()
+                )
+        except discord.Forbidden:
+            # Their direct messages are closed, or they have blocked the bot.
+            # Either way this is them having said no.
+            return DeliveryResult.CLOSED
+        except discord.HTTPException:
+            log.warning("notifications.not_delivered", person=str(draft.person))
+            return DeliveryResult.FAILED
+        return DeliveryResult.SENT
+
+
 class CyberFriendClient(discord.Client):
     def __init__(self, asks: AskService, guild_id: int) -> None:
         intents = discord.Intents.default()
@@ -695,6 +868,7 @@ class CyberFriendClient(discord.Client):
         self._guild_id = guild_id
         self.tree = app_commands.CommandTree(self)
         self._indexing: IndexingService | None = None
+        self._notifications: NotificationPreferences | None = None
 
     def attach_indexing(self, indexing: IndexingService) -> None:
         """Give `/index` and `/unindex` somewhere to act.
@@ -704,6 +878,18 @@ class CyberFriendClient(discord.Client):
         are still registered and say indexing is unavailable here.
         """
         self._indexing = indexing
+
+    def attach_notifications(self, notifications: NotificationPreferences) -> None:
+        """Give `/notifications` somewhere to write.
+
+        Attached after construction, like indexing, because the preference
+        store is built over the answer stack's engine rather than from guild
+        state. Without it the command is still registered and says
+        notifications are unavailable here -- which is the safe half: a
+        deployment that wires nothing sends nothing, so there is nothing to
+        turn off.
+        """
+        self._notifications = notifications
 
     async def setup_hook(self) -> None:
         guild = discord.Object(id=self._guild_id)
@@ -716,6 +902,11 @@ class CyberFriendClient(discord.Client):
         # off switch, and a way out that depends on configuration is one that
         # is missing on the deployment somebody needs it on.
         self.tree.add_command(self._build_forget_command(), guild=guild)
+        # And unconditionally again, for the strongest version of the same
+        # reason. This is the only feature that messages people who did not
+        # ask for anything, so the command that stops it must exist on every
+        # deployment -- including one where nothing is wired to send them.
+        self.tree.add_command(self._build_notifications_command(), guild=guild)
         # No `default_permissions`: Manage Channels granted by a channel
         # overwrite, and not guild-wide, must still see the command. The
         # permission is checked on the target channel when it runs.
@@ -749,6 +940,49 @@ class CyberFriendClient(discord.Client):
             await interaction.followup.send(result.message, ephemeral=True)
 
         return command
+
+    def _build_notifications_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/notifications on|off`: the person's own switch, and nobody else's.
+
+        Whose preference it is comes from the interaction, which carries an
+        authenticated account, and never from anything typed -- exactly as
+        `/resolve` and `/forget` do. There is no option for a target person,
+        so turning somebody else's notifications off is not expressible.
+
+        Answered privately. Announcing in a channel that somebody switched off
+        the assistant's reminders says something about them that they did not
+        choose to say.
+        """
+
+        @app_commands.command(
+            name="notifications",
+            description="Turn direct messages about things asked of you on or off",
+        )
+        @app_commands.describe(setting="Whether I may message you about them")
+        @app_commands.choices(
+            setting=[
+                app_commands.Choice(name="off", value="off"),
+                app_commands.Choice(name="on", value="on"),
+            ]
+        )
+        async def notifications(
+            interaction: discord.Interaction, setting: app_commands.Choice[str]
+        ) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if self._notifications is None:
+                await interaction.followup.send(
+                    NOTIFICATIONS_UNAVAILABLE, ephemeral=True
+                )
+                return
+            person = _person(interaction.user)
+            if setting.value == "on":
+                await self._notifications.turn_on(person)
+                await interaction.followup.send(NOTIFICATIONS_TURNED_ON, ephemeral=True)
+                return
+            await self._notifications.turn_off(person)
+            await interaction.followup.send(NOTIFICATIONS_TURNED_OFF, ephemeral=True)
+
+        return notifications
 
     def _build_forget_command(self) -> app_commands.Command[Any, ..., None]:
         """`/forget`: erase the caller's own conversation, here or everywhere."""

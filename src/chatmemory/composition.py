@@ -97,6 +97,7 @@ from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
+from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
@@ -119,6 +120,7 @@ from chatmemory.app.authorization import (
     InvocationRequest,
     ToolEffect,
 )
+from chatmemory.app.catchup import CatchUpService
 from chatmemory.app.confirmation import ConfirmationDesk, with_confirmation
 from chatmemory.app.conversation import (
     Conversations,
@@ -128,6 +130,12 @@ from chatmemory.app.conversation import (
 )
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.limits import RateLimiter
+from chatmemory.app.notifications import (
+    NotificationDelivery,
+    NotificationPolicy,
+    NotificationPreferences,
+    ObligationNotifier,
+)
 from chatmemory.app.reasoning.capabilities import (
     LOOP_STAGES,
     MissingCapabilityError,
@@ -151,12 +159,13 @@ from chatmemory.app.reasoning.retrieval import (
     discord_urls,
 )
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
-from chatmemory.app.reasoning.stages import ModelToolProposer
+from chatmemory.app.reasoning.stages import ModelSynthesizer, ModelToolProposer
 from chatmemory.app.scope import LiveScope, ScopeProvider, StaticScope
 from chatmemory.app.self_description import SelfDescriptionAnswerService
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import AnswerService
+from chatmemory.ports.notifications import NotificationSender
 from chatmemory.ports.sources import EmbeddingClient
 from chatmemory.ports.store import SearchBackend
 
@@ -868,6 +877,24 @@ def build_answers(
     return build_answer_service(retrieval, chat, tools=tools)
 
 
+def build_catch_up(
+    settings: Settings, search: SearchBackend, chat: ChatModel
+) -> CatchUpService:
+    """The catch-up summariser, over the same two things an answer is made of.
+
+    A `CorpusRetrieval` and a `ModelSynthesizer`, built exactly as
+    `build_answer_stack` builds them. Both are stateless adapters over the
+    search backend and the chat handle the process already holds, so a second
+    instance is a second reference and not a second door: what either returns
+    is decided entirely by the viewer it is handed, and `CatchUpService`
+    narrows that viewer rather than widening it.
+    """
+    return CatchUpService(
+        CorpusRetrieval(search, discord_urls(settings.discord_guild_id)),
+        ModelSynthesizer(chat),
+    )
+
+
 def build_tool_proposer(
     settings: Settings, chat: OpenAICompatibleChat
 ) -> ModelToolProposer | None:
@@ -893,6 +920,78 @@ def build_tool_proposer(
         log.error("composition.federation.tool_calling_unavailable", error=str(exc))
         return None
     return ModelToolProposer(caller)
+
+
+def notification_policy(settings: Settings) -> NotificationPolicy:
+    """The bounds on messaging somebody who asked for nothing.
+
+    Built once and shared by both halves, as `ask_policy` is: the confidence
+    the enqueue sweep refuses below is the same one the answer path refuses to
+    report below, and two copies of that number would mean a deployment that
+    direct-messages people about obligations it will not show them in a list.
+    """
+    return NotificationPolicy(
+        batch_window=timedelta(seconds=settings.notification_batch_window_seconds),
+        min_interval=timedelta(seconds=settings.notification_min_interval_seconds),
+        max_age=timedelta(hours=settings.notification_max_age_hours),
+        expire_after=timedelta(hours=settings.notification_expire_hours),
+        max_items=settings.notification_max_items,
+        min_confidence=settings.ask_min_confidence,
+    )
+
+
+def build_obligation_notifier(
+    settings: Settings, engine: AsyncEngine
+) -> ObligationNotifier:
+    """The ingest half: extracted obligations become queue rows.
+
+    Over the engine that process already holds, because the sweep is a write
+    over the `ask` table it has just written to. It reaches no network and
+    sends nothing: the process that can reach Discord is the other one.
+    """
+    log.info(
+        "composition.notifications",
+        batch_window_seconds=settings.notification_batch_window_seconds,
+        min_interval_seconds=settings.notification_min_interval_seconds,
+        max_age_hours=settings.notification_max_age_hours,
+    )
+    return ObligationNotifier(
+        PostgresNotificationQueue(engine), notification_policy(settings)
+    )
+
+
+def build_notification_delivery(
+    settings: Settings,
+    engine: AsyncEngine,
+    guild: GuildProvider,
+    sender: NotificationSender,
+    scope: ScopeProvider | None = None,
+) -> NotificationDelivery:
+    """The bot half: queue rows become one direct message per person.
+
+    The resolver handed in here is the whole send-time permission re-check. It
+    is built over the same live guild state and the same indexing scope every
+    answer is bounded by -- not a set captured when the obligation was
+    extracted -- so a person who lost access to a channel between extraction
+    and delivery is not told what was said in it.
+    """
+    indexed = scope if scope is not None else StaticScope(settings.indexed_channel_ids)
+    return NotificationDelivery(
+        queue=PostgresNotificationQueue(engine),
+        acl=DiscordAclResolver(guild, indexed),
+        sender=sender,
+        policy=notification_policy(settings),
+    )
+
+
+def build_notification_preferences(engine: AsyncEngine) -> NotificationPreferences:
+    """The person's own switch, for `/notifications`.
+
+    Over the same engine as delivery, so the row a person writes with the
+    command is the row the claim statement reads. A second store here would be
+    a switch that turns nothing off.
+    """
+    return NotificationPreferences(PostgresNotificationQueue(engine))
 
 
 def ask_policy(settings: Settings) -> AskPolicy:
@@ -1141,6 +1240,7 @@ def build_ask_service(
     conversations: Conversations | None = None,
     scope: ScopeProvider | None = None,
     facts: PersonalFactsService | None = None,
+    catchup: CatchUpService | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -1170,6 +1270,11 @@ def build_ask_service(
         # them, and rendered into the prompt beside the profile. None answers
         # every fact request that this deployment keeps none.
         facts=facts,
+        # "What did I miss in #x", summarised from the same viewer-scoped
+        # retrieval every answer uses. None answers such a question by
+        # searching the corpus for its words instead -- which is a worse
+        # answer under exactly the same access, never a wider one.
+        catchup=catchup,
         # Without this the withheld-evidence notice is built, tested, and
         # structurally unable to fire: retrieval is pre-scoped to
         # asker INTERSECT audience, so nothing is ever dropped later for the
