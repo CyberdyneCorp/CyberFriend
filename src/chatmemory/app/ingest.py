@@ -34,6 +34,18 @@ class DocumentSink(Protocol):
     async def handle_message_deleted(self, message_id: int, at: datetime | None = None) -> int: ...
 
 
+class TraceSink(Protocol):
+    """The trace store's view of a deletion.
+
+    Tracing copies retrieved text into a second store that has no tombstones
+    of its own. Without this a message deleted from the corpus stays legible
+    in every trace that quoted it, which is the guarantee this project makes
+    most loudly, broken quietly.
+    """
+
+    async def withdraw_message(self, message_id: int) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BackfillReport:
     channel: ChannelRef
@@ -51,6 +63,7 @@ class IngestService:
         indexed_channels: ScopeProvider | frozenset[int],
         page_size: int = 100,
         documents: DocumentSink | None = None,
+        traces: TraceSink | None = None,
     ) -> None:
         self._source = source
         self._store = store
@@ -61,6 +74,7 @@ class IngestService:
         self._scope = as_scope(indexed_channels)
         self._page_size = page_size
         self._documents = documents
+        self._traces = traces
 
     @property
     def scope(self) -> ScopeProvider:
@@ -123,6 +137,13 @@ class IngestService:
             if withdrawn:
                 log.info("ingest.documents_withdrawn", message_id=platform_message_id,
                          count=withdrawn)
+        if self._traces is not None:
+            # Last, and never able to stop the rest. The tombstone above has
+            # already been applied, so a trace store that is down delays the
+            # copy being withdrawn without delaying the deletion itself --
+            # which is the only ordering a person deleting a message would
+            # accept.
+            await self._traces.withdraw_message(platform_message_id)
 
     async def backfill_page(self, channel: ChannelRef) -> BackfillReport:
         """Import one page of history, oldest-ward from the cursor.

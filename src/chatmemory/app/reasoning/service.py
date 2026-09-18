@@ -48,10 +48,13 @@ from chatmemory.app.reasoning.contract import (
     Decision,
     DecisionMaker,
     LoggingRunRecorder,
+    NoRunTracer,
     RunOutcome,
     RunRecord,
     RunRecorder,
     RunStatus,
+    RunTrace,
+    RunTracer,
     TerminalCause,
 )
 from chatmemory.app.reasoning.fixed import CorrectiveDriver, FixedPath
@@ -126,11 +129,13 @@ class ReasoningAnswerService:
         loop: ReasoningLoop,
         recorder: RunRecorder | None = None,
         classifier: Callable[[str], RoutingDecision] = classify,
+        tracer: RunTracer | None = None,
     ) -> None:
         self._fixed = fixed
         self._loop = loop
         self._recorder = recorder or LoggingRunRecorder()
         self._classify = classifier
+        self._tracer = tracer or NoRunTracer()
 
     async def answer(self, question: Question) -> Answer:
         return (await self.answer_run(question)).answer
@@ -142,7 +147,7 @@ class ReasoningAnswerService:
         direct = await self._answer_outside_corpus(question)
         if direct is not None:
             decision, outcome = direct
-            return self._recorded(outcome, [*decisions, decision])
+            return await self._recorded(question, outcome, [*decisions, decision])
         route = routing.route
         if route is Route.FIXED and not question.memory.empty:
             route = Route.LOOP
@@ -188,15 +193,41 @@ class ReasoningAnswerService:
             if _improves_on(outcome, escalated):
                 outcome = escalated
 
-        return self._recorded(outcome, decisions)
+        return await self._recorded(question, outcome, decisions)
 
-    def _recorded(self, outcome: RunOutcome, decisions: list[Decision]) -> RunOutcome:
+    async def _recorded(
+        self, question: Question, outcome: RunOutcome, decisions: list[Decision]
+    ) -> RunOutcome:
         record = replace(
             outcome.record,
             decisions=(*decisions, *outcome.record.decisions),
         )
         self._recorder.record(record)
-        return RunOutcome(answer=outcome.answer, record=record)
+        # After the record, and never in its place: the log line is what an
+        # operator watches live, and must not depend on a remote destination.
+        #
+        # Guarded here as well as in the adapter. `RunTracer` says an
+        # implementation must not raise, and the Langfuse one does not -- but
+        # "must not" is a comment, and the cost of one being wrong is a person
+        # losing their answer to a bookkeeping error. The answer has already
+        # been written by this point; there is nothing left that failing could
+        # usefully abandon.
+        try:
+            await self._tracer.trace(
+                RunTrace(
+                    question=question,
+                    answer=outcome.answer,
+                    record=record,
+                    evidence=outcome.evidence,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - tracing never costs a reply
+            log.warning("reasoning.trace_failed", error=str(exc))
+        # `evidence` is carried through: rebuilding the outcome without it
+        # would leave the tracer holding nothing on any escalated run.
+        return RunOutcome(
+            answer=outcome.answer, record=record, evidence=outcome.evidence
+        )
 
     async def _answer_outside_corpus(
         self, question: Question
@@ -330,6 +361,7 @@ def build_answer_service(
     loop_driver: CorrectiveDriver | None = None,
     recorder: RunRecorder | None = None,
     tools: ToolSurface | None = None,
+    tracer: RunTracer | None = None,
 ) -> ReasoningAnswerService:
     """Wire the default composition.
 
@@ -352,7 +384,7 @@ def build_answer_service(
         writer,
         tools=tools,
     )
-    return ReasoningAnswerService(fixed, loop, recorder)
+    return ReasoningAnswerService(fixed, loop, recorder, tracer=tracer)
 
 
 LOOP_BUDGET = Budget(max_attempts=6, max_model_calls=16, max_tool_calls=24)

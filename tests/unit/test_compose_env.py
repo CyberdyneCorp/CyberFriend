@@ -76,6 +76,15 @@ DEPLOYMENT_SETTINGS = {
     # queueing happens.
     "NOTIFICATION_MAX_AGE_HOURS": ("ingest",),
     "NOTIFICATION_EXPIRE_HOURS": ("ingest",),
+    # Tracing exports from the bot and withdraws from ingest, so both halves
+    # need the same three settings. Declared for the bot alone, a deletion
+    # would never reach the trace store and deleted text would stay legible
+    # there -- the failure this project's deletion guarantee exists to stop.
+    "TRACING_ENABLED": ("ingest", "bot"),
+    "LANGFUSE_HOST": ("ingest", "bot"),
+    "LANGFUSE_PUBLIC_KEY": ("ingest", "bot"),
+    "LANGFUSE_SECRET_KEY": ("ingest", "bot"),
+    "TRACING_TIMEOUT_SECONDS": ("ingest", "bot"),
 }
 
 

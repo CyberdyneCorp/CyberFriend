@@ -208,6 +208,32 @@ class Settings(BaseSettings):
 
     market_timeout_seconds: float = 8.0
 
+    # --- Tracing -------------------------------------------------------
+    tracing_enabled: bool = False
+    """Export each run -- question, answer and retrieved evidence -- for study.
+
+    Off by default, and not only for the usual outbound-boundary reason. What
+    leaves here is not a query rooted in the asker's words, as with the web
+    and market tools; it is the retrieved content itself. The destination
+    therefore holds private-channel text with no viewer scoping, and access to
+    it has to be restricted the way access to the database is. That is a
+    decision an operator makes knowingly or not at all.
+    """
+
+    langfuse_host: str = ""
+    """Absent means tracing is not configured, whatever `tracing_enabled` says."""
+
+    langfuse_public_key: SecretStr | None = None
+    langfuse_secret_key: SecretStr | None = None
+
+    tracing_timeout_seconds: float = 5.0
+    """What an export may cost before it is abandoned.
+
+    Bounded rather than generous: the export happens after the answer is
+    written but before the reply returns, so this is time a person spends
+    waiting for something that is not for them.
+    """
+
     # --- Windowing -----------------------------------------------------
     # Guesses until measured against a real corpus; see design.md.
     window_max_messages: int = 10

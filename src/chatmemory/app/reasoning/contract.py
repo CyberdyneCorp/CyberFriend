@@ -22,8 +22,9 @@ from typing import Protocol
 import structlog
 
 from chatmemory.app.reasoning.budgets import Spend
+from chatmemory.app.reasoning.evidence import Evidence
 from chatmemory.app.reasoning.policy import BlockedAction
-from chatmemory.ports.answers import Answer
+from chatmemory.ports.answers import Answer, Question
 
 log = structlog.get_logger()
 
@@ -139,10 +140,49 @@ class RunOutcome:
 
     answer: Answer
     record: RunRecord
+    # The evidence the run held, carried for tracing and read by nothing else.
+    # `RunRecord` keeps ids only because it is what gets logged, and message
+    # text in an application log is a leak nobody asked for. A tracer needs the
+    # text, and re-reading it from the store later would be a second query
+    # against content the run may no longer be entitled to.
+    evidence: tuple[Evidence, ...] = ()
 
 
 class RunRecorder(Protocol):
     def record(self, run: RunRecord) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RunTrace:
+    """A finished run, in full, for study rather than for operation.
+
+    Distinct from `RunRecord` because it carries content. The record is a log
+    line: shape, cause and spend, safe anywhere logs go. A trace holds the
+    question as asked, the answer as sent and the evidence behind it, which
+    means wherever it is sent inherits the corpus's confidentiality.
+    """
+
+    question: Question
+    answer: Answer
+    record: RunRecord
+    evidence: tuple[Evidence, ...] = ()
+
+
+class RunTracer(Protocol):
+    async def trace(self, run: RunTrace) -> None:
+        """Record a finished run. Must not raise, and must not block long.
+
+        Tracing observes; it never feeds a run. A destination that is down or
+        slow costs an operator a trace, never a requester an answer.
+        """
+        ...
+
+
+class NoRunTracer:
+    """The default. Exports nothing, because nobody configured anywhere to."""
+
+    async def trace(self, run: RunTrace) -> None:
+        return None
 
 
 class LoggingRunRecorder:

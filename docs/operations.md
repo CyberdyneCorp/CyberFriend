@@ -151,3 +151,53 @@ These are real and are not fixed by anything on this page:
   optimisation, not the guarantee — the trigger is the guarantee — but until it
   is wired into `IngestService`, every excluded message costs a round trip to
   the database to be rejected.
+
+## Tracing
+
+With `TRACING_ENABLED=true` and a Langfuse destination configured, every run is
+exported: the question as asked, the answer as sent, the decision trail, and
+each piece of retrieved evidence with its text. This is what makes it possible
+to say later whether the assistant is getting better.
+
+| | |
+|---|---|
+| `TRACING_ENABLED` | Off by default. Both `bot` and `ingest` need it |
+| `LANGFUSE_HOST` | e.g. `https://langfuse.example.com`, no trailing path |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
+| `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
+
+Turning it on with a host but no keys is refused at startup rather than
+silently disabled. A deployment that believes it is recording and is not finds
+out on the day somebody asks what went wrong.
+
+### What this means for confidentiality
+
+The trace store holds verbatim content from every channel the assistant has
+retrieved from, and it has no viewer scoping — none of the rules that decide
+who may read what in Discord apply to it. **Treat access to Langfuse as
+equivalent to access to the database.**
+
+Two things limit the exposure, and it is worth knowing exactly what they do:
+
+- **Deletion follows.** Deleting a message in Discord deletes every exported
+  trace that quoted it. The corpus tombstone is applied first and never waits
+  on the trace store, so a destination that is down delays the withdrawal
+  without delaying the deletion. Unconfirmed withdrawals are retried by a sweep
+  in the `ingest` process every five minutes.
+- **An opt-out is honoured.** Nothing is exported for a person who has opted
+  out of indexing. If the opt-out registry cannot be read, the run is withheld
+  rather than exported.
+
+Neither of these makes the destination safe to share widely. They keep the
+project's deletion and opt-out guarantees true across the copy; they do not
+give the copy permissions of its own.
+
+### Checking it is working
+
+```bash
+curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  "$LANGFUSE_HOST/api/public/projects"
+```
+
+The bot logs `composition.tracing enabled=true` at startup when a destination
+is configured, and `reasoning.trace_failed` when an export is dropped.

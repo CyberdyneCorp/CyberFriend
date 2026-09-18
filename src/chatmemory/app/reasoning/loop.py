@@ -343,6 +343,8 @@ class ReasoningLoop:
         )
         return RunOutcome(
             answer=replace(answer, consulted_channels=consulted_channels(evidence)),
+            # Carried for tracing only; see RunOutcome.evidence.
+            evidence=evidence.items,
             record=RunRecord(
                 path=AnswerPath.LOOP,
                 status=RunStatus.ABSTAINED if answer.abstained else RunStatus.ANSWERED,
