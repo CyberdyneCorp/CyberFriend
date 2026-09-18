@@ -436,6 +436,43 @@ class WalletQuestion:
     address: str | None
 
 
+_TIME_QUESTION = re.compile(
+    r"\A\s*(?:"
+    # English: what is the date / time / day today
+    r"(?:what(?:'s|\s+is)?|which)\s+(?:is\s+)?(?:the\s+|today'?s?\s+)*"
+    r"(?:date|time|day|day\s+of\s+the\s+week)"
+    r"|what\s+day\s+is\s+it"
+    r"|what\s+time\s+is\s+it"
+    r"|do\s+you\s+know\s+(?:what\s+)?(?:the\s+)?(?:date|time|day)"
+    # Portuguese
+    r"|que\s+(?:dia|horas?)\s+(?:é|e|s[ãa]o)"
+    r"|qual\s+(?:é|e)?\s*(?:a\s+)?(?:data|hora)"
+    r"|que\s+dia\s+(?:é|e)\s+hoje"
+    r"|qual\s+o\s+dia\s+de\s+hoje"
+    r")"
+    r"[\s?!.,]*(?:(?:de\s+|of\s+)?(?:hoje|today|now|agora|right\s+now))?[\s?!.,]*\Z",
+    re.IGNORECASE,
+)
+"""Asking what the date or time *is*, and nothing else.
+
+Anchored at both ends, deliberately. "What was decided today" and "what time
+did the deploy finish" are questions about the corpus that merely contain the
+word; only a question whose whole content is the clock belongs here.
+"""
+
+
+def time_question(text: str) -> bool:
+    """Whether this asks the assistant what the date or time is.
+
+    Its own route for the same reason self-description and wallet balances
+    have one: the corpus cannot answer it. Before this existed the question
+    went to retrieval, found nothing, and was answered "I couldn't find
+    anything about that in the messages you can see" -- which is the grounding
+    rule working correctly on a question that should never have reached it.
+    """
+    return bool(_TIME_QUESTION.match(text))
+
+
 def wallet_question(text: str) -> WalletQuestion | None:
     """The wallet lookup being asked for, or None for everything else.
 

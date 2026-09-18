@@ -17,7 +17,12 @@ state which zone it is in.
 
 #### Scenario: Asked the date
 - WHEN a person asks what the date or time is
-- THEN the answer SHALL come from that clock
+- THEN the corpus SHALL NOT be searched
+- AND the answer SHALL come from that clock
+
+#### Scenario: A question about the corpus that mentions time
+- WHEN a question asks what was said or decided at some time
+- THEN it SHALL be answered from the corpus as usual
 
 ### Requirement: The clock is not evidence
 
