@@ -33,6 +33,7 @@ from sqlalchemy.sql.elements import TextClause
 SQL_MODULES = (
     "sql",
     "asks_sql",
+    "notify_sql",
     "documents_sql",
     "retention_sql",
     "admin_sql",
@@ -165,6 +166,66 @@ UNSCOPED: dict[str, str] = {
         "viewer: it acts on the ask whose addressee left the reaction"
     ),
     "asks_sql.MARK_STALE": "write; ageing, which never closes an ask",
+    # --- notify_sql ------------------------------------------------------
+    #
+    # The one statement here that returns content -- PENDING_FOR_VIEWER -- is
+    # not registered below, because it binds :channel_ids like every other
+    # read in the system. The difference is *when*: the set it binds is
+    # resolved from live guild state immediately before a message is sent,
+    # not when the obligation was extracted, which is the whole of the
+    # send-time permission re-check. SETTLE_UNREADABLE binds it too, as that
+    # statement's complement, and is therefore scoped rather than registered.
+    # Everything registered here is a write or a count of rows.
+    "notify_sql.RESOLVE_PERSON_ID": "identity lookup; a person id, no content",
+    "notify_sql.QUEUE_OBLIGATIONS": (
+        "write; queues a notification for an ask addressed to one person. No\n"
+        "viewer: it runs in the ingest process, where there is no requester,\n"
+        "and it returns no row. Its own predicates are the bounds -- an\n"
+        "individual addressee, not the requester, not opted out, not\n"
+        "corrected, above the presentation threshold, and recent"
+    ),
+    "notify_sql.WITHDRAW_SETTLED": (
+        "write; settles queued notifications whose ask was answered or "
+        "corrected before anybody was told"
+    ),
+    "notify_sql.EXPIRE_PENDING": (
+        "write; settles queued notifications too old to be news"
+    ),
+    "notify_sql.RECIPIENTS_DUE": (
+        "identities only; who is owed a batch, as a person id and a platform\n"
+        "account. Deliberately unscoped: this is the step *before* a viewer\n"
+        "exists, and it returns no channel, no ask and no message text. What\n"
+        "each person is told is decided by PENDING_FOR_VIEWER, under the\n"
+        "viewer resolved from live guild state a moment later"
+    ),
+    "notify_sql.MARK_SENT": "write; records delivery of the rows just sent",
+    "notify_sql.RECORD_SENT": (
+        "write; the rate-limit stamp and the record that this person has been "
+        "messaged once, which is what makes the first message say how to stop"
+    ),
+    "notify_sql.RECORD_ATTEMPT": (
+        "write; stamps a delivery that was attempted and failed, so the rate\n"
+        "limit bounds attempts and not only successes. No content, and no\n"
+        "`first_notified_at`: a failed send is no evidence that anybody was\n"
+        "ever messaged, so the first message that lands still says how to stop"
+    ),
+    "notify_sql.RECORD_UNDELIVERABLE": (
+        "write; records that a person's direct messages are closed, so they "
+        "are excluded from every later claim"
+    ),
+    "notify_sql.SETTLE_UNDELIVERABLE": (
+        "write; empties the queue of somebody who cannot be reached"
+    ),
+    "notify_sql.SET_ENABLED": (
+        "write; one person's own switch, keyed on the person id resolved from\n"
+        "their authenticated account. Returns their preference and nothing\n"
+        "else -- there is no path here that reads anybody else's"
+    ),
+    "notify_sql.READ_PREFERENCE": (
+        "the caller's own preference: two booleans, keyed on the person id "
+        "resolved from their authenticated account. No content"
+    ),
+    "notify_sql.QUEUE_DEPTH": "a bounded count for the health endpoint, no content",
     # --- documents_sql ---------------------------------------------------
     "documents_sql.UPSERT_DOCUMENT": "write; returns the document id only",
     "documents_sql.DOCUMENT_CONTENT_HASH": "a hash; lets an unchanged document skip parsing",
@@ -346,6 +407,12 @@ TOMBSTONE_EXEMPT: dict[str, str] = {
         "and person deletion hard-delete them, so there is no deleted_at to test"
     ),
     "memory_sql.RECALL_SUMMARIES": "summaries are hard-deleted, as RECALL_TURNS",
+    "notify_sql.SETTLE_UNREADABLE": (
+        "returns no content: it settles the recipient's own queued rows for "
+        "channels they may no longer read. A notification about a deleted "
+        "message is settled here exactly as one about a live message is, and "
+        "joining `message` to check would leave the row pending for ever"
+    ),
 }
 
 

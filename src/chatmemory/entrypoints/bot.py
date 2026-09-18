@@ -34,6 +34,13 @@ the answer stack's engine -> `build_bot(facts=...)` -> `build_ask_service` ->
 `AskService(facts=...)`, and `tests/unit/test_facts_behaviour.py` reads that
 chain from this file down.
 
+Catch-up summaries arrive the same way: `main` -> `build_catch_up` over the
+answer stack's `search` and `chat` -> `build_bot(catchup=...)` ->
+`build_ask_service` -> `AskService(catchup=...)`, and
+`tests/unit/test_catchup_wiring.py` reads that chain from this file down. A
+process that skips it answers "what did I miss in #x" by searching the corpus
+for those words -- the behaviour before the feature, never a wider one.
+
 Indexing scope is live here as it is in ingest. `main` builds a `LiveScope`
 over the answer stack's engine, refreshes it before identifying, hands it to
 `build_bot` -> `build_ask_service`, where both the ACL and the audience
@@ -42,6 +49,18 @@ gateway. Handed the startup set instead, the bot kept answering from a channel
 an operator removed and never from one they added, while ingest -- which did
 read the store -- captured the new one. `test_scope_and_market_wiring` reads
 that chain from this file down.
+
+Notifications are the one thing this process does that nobody asked for, and
+they are produced somewhere else. Ingest extracts obligations and writes queue
+rows; this process holds the only connection a person can be messaged through,
+so it drains them: `main` -> `build_bot(notifications=stack.engine)` ->
+`build_delivery`, which attaches `/notifications` to the client and builds a
+`NotificationDelivery` over a `DiscordAclResolver` on this client's live guild
+state, and then `main` runs `notification_loop` beside the gateway.
+`tests/unit/test_notifications_wiring.py` reads that chain from this file down.
+The permission re-check is the resolver: a recipient's readable channels are
+resolved at the moment of sending and bound into the query, so access revoked
+between extraction and delivery removes the obligation from the message.
 
 `/index` and `/unindex` act over that same `LiveScope`. `main` builds
 `IndexingStores` over the answer stack's engine -- the configuration editor
@@ -57,8 +76,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Coroutine
+import time
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import structlog
@@ -70,6 +91,7 @@ from chatmemory.adapters.discord.bot import (
     CyberFriendClient,
     DiscordChannelAccess,
     DiscordIndexNotifier,
+    DiscordNotificationSender,
     _IndexingGuild,
 )
 from chatmemory.adapters.discord.gateway import attach_permission_listeners
@@ -81,18 +103,24 @@ from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.admin.audit import ChangeRecordStore
 from chatmemory.app.ask import AskService
 from chatmemory.app.asks.corrections import CorrectionService
+from chatmemory.app.asks.obligations import discord_message_url
 from chatmemory.app.authorization import ConfirmationLedger
+from chatmemory.app.catchup import CatchUpService
 from chatmemory.app.configuration import ConfigurationEditor
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.indexing import ChannelPurge, IndexingService
+from chatmemory.app.notifications import NotificationDelivery
 from chatmemory.app.scope import LiveScope, ScopeProvider
 from chatmemory.composition import (
     ask_policy,
     build_answer_stack,
     build_ask_service,
+    build_catch_up,
     build_conversations,
     build_live_scope,
+    build_notification_delivery,
+    build_notification_preferences,
     build_personal_facts,
 )
 from chatmemory.config import Settings, get_settings
@@ -157,6 +185,10 @@ class BotGraph:
     asks: AskService
     caches: PermissionCaches
     indexing: IndexingService | None = None
+    #: The queue drain. None when no engine was handed in, or when an
+    #: operator has switched notifications off -- in which case nothing in
+    #: this process sends anything, which is the safe half.
+    notifications: NotificationDelivery | None = None
 
 
 def build_bot(
@@ -169,6 +201,8 @@ def build_bot(
     scope: ScopeProvider | None = None,
     indexing: IndexingStores | None = None,
     facts: PersonalFactsService | None = None,
+    catchup: CatchUpService | None = None,
+    notifications: AsyncEngine | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -207,6 +241,10 @@ def build_bot(
         # deployment remembers nothing, and `/forget` everywhere has no facts
         # to delete.
         facts=facts,
+        # Catch-up summaries. Without it "what did I miss in #x" is answered
+        # by searching the corpus for those words, which is the behaviour
+        # this process had before the feature existed.
+        catchup=catchup,
     )
     if corrections is not None:
         # `/resolve` is registered either way, so without this every attempt to
@@ -222,7 +260,62 @@ def build_bot(
         # nothing gets.
         service = build_indexing_service(client, settings.discord_guild_id, indexing)
         client.attach_indexing(service)
-    return BotGraph(client=client, asks=asks, caches=caches, indexing=service)
+    delivery = build_delivery(settings, client, provider, caches, notifications, scope)
+    return BotGraph(
+        client=client,
+        asks=asks,
+        caches=caches,
+        indexing=service,
+        notifications=delivery,
+    )
+
+
+def build_delivery(
+    settings: Settings,
+    client: CyberFriendClient,
+    provider: Callable[[], _Guild | None],
+    caches: PermissionCaches,
+    engine: AsyncEngine | None,
+    scope: ScopeProvider | None,
+) -> NotificationDelivery | None:
+    """Attach `/notifications`, and build the drain that sends them.
+
+    Two halves with different conditions, on purpose.
+
+    The switch is attached whenever there is an engine, even where the
+    operator has turned the feature off: the one thing a person may do to this
+    feature is stop it, and a command that answers "unavailable" on a
+    deployment that has ever sent them anything is not a way out.
+
+    The drain is built only when notifications are enabled, and only here.
+    This process is the only one that can reach a person: the queue is filled
+    in ingest, where extraction runs, and is drained here, where the gateway
+    connection is. Without this the whole feature is rows accumulating in a
+    table nothing reads.
+
+    The sender is given `client.fetch_user` rather than a cached user, and the
+    permission resolver is built over the same live guild state and indexing
+    scope every answer is bounded by -- which is what makes the check a
+    send-time check rather than a repeat of one made at extraction.
+    """
+    if engine is None:
+        return None
+    client.attach_notifications(build_notification_preferences(engine))
+    if not settings.notifications_enabled:
+        log.warning(
+            "bot.notifications_disabled",
+            hint="NOTIFICATIONS_ENABLED=false; nothing queued will be delivered",
+        )
+        return None
+    return build_notification_delivery(
+        settings,
+        engine,
+        LiveGuild(provider, caches),
+        DiscordNotificationSender(
+            client.fetch_user, discord_message_url(settings.discord_guild_id)
+        ),
+        scope=scope,
+    )
 
 
 def build_indexing_service(
@@ -261,8 +354,54 @@ async def scope_loop(scope: LiveScope, state: HealthState) -> None:
         await asyncio.sleep(scope.interval)
 
 
+#: How often the queue is drained. Seconds, not minutes: the batching window
+#: is what decides how long an obligation waits, and this only decides how
+#: long after that window it takes to notice. A pass over an empty queue is
+#: one indexed scan that finds nothing.
+NOTIFICATION_DRAIN_INTERVAL_SECONDS = 15.0
+
+
+async def notification_loop(
+    delivery: NotificationDelivery,
+    state: HealthState,
+    interval: float = NOTIFICATION_DRAIN_INTERVAL_SECONDS,
+    ready: asyncio.Event | None = None,
+) -> None:
+    """Send what ingest queued, to the people it was addressed to.
+
+    Waits for the gateway first, and that is not an optimisation. The
+    permission re-check reads live guild state; before the connection
+    identifies, every member resolves to nothing readable, and a pass in that
+    state would find nothing to say to anybody and log it. Worse, it is the
+    one moment where "they can read no channels" is a lie rather than a fact.
+
+    Absorbs everything. A drain that dies stops the only feature in the
+    system that speaks first, and the symptom is silence -- which is what the
+    feature looks like when nobody has been asked anything. So progress is
+    published on the health endpoint every iteration, including the count of
+    notifications dropped because access had been revoked.
+    """
+    if ready is not None:
+        await ready.wait()
+    while True:
+        try:
+            report = await delivery.deliver(datetime.now(UTC))
+            state.details["notifications"] = {
+                **report.as_dict(),
+                "last_run_at": time.time(),
+            }
+        except Exception:
+            # Nothing is lost: an unsent row stays pending, and the expiry
+            # bound in the sweep stops that being for ever.
+            log.exception("notifications.drain_failed")
+        await asyncio.sleep(interval)
+
+
 async def run_beside_scope(
-    work: Coroutine[Any, Any, None], scope: LiveScope, state: HealthState
+    work: Coroutine[Any, Any, None],
+    scope: LiveScope,
+    state: HealthState,
+    extra: Sequence[Coroutine[Any, Any, None]] = (),
 ) -> None:
     """Run the process's work with the scope refresh loop, ending with whichever ends.
 
@@ -270,8 +409,17 @@ async def run_beside_scope(
     sit refreshing a scope nothing uses; when the loop dies, the process must
     exit rather than serve a frozen scope. Either way the survivor is
     cancelled and a failure is re-raised.
+
+    `extra` is for loops with the same lifetime as the gateway connection --
+    the notification drain is one. They are cancelled with everything else
+    when the process ends, and a failure in one ends the process rather than
+    leaving it running with a feature silently dead.
     """
-    tasks = {asyncio.ensure_future(work), asyncio.ensure_future(scope_loop(scope, state))}
+    tasks = {
+        asyncio.ensure_future(work),
+        asyncio.ensure_future(scope_loop(scope, state)),
+        *(asyncio.ensure_future(c) for c in extra),
+    }
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
@@ -296,7 +444,7 @@ async def main() -> None:
     # `search` is what lets the withheld-evidence notice fire at all: it
     # probes the gap between what the asker may read and what the audience
     # may. Without it the notice is unreachable in the running process.
-    client = build_bot(
+    graph = build_bot(
         settings,
         stack.answers,
         search=stack.search,
@@ -318,13 +466,28 @@ async def main() -> None:
         # Preferred name, email and language, over the same engine as memory.
         # Omitted, the whole feature is built, tested and reachable from nothing.
         facts=build_personal_facts(stack.engine),
-    ).client
+        # "What did I miss in #x", over the same search backend and chat
+        # handle the answer stack holds. Omitted, catch-up is built, tested
+        # and reachable from nothing -- which is this project's failure mode.
+        catchup=build_catch_up(settings, stack.search, stack.chat),
+        # The other end of the queue the ingest process fills. Omitted, the
+        # notification tables are written by one process and read by none:
+        # `/notifications` says it is unavailable, and nobody is ever told
+        # that anything was asked of them.
+        notifications=stack.engine,
+    )
+    client = graph.client
 
     original_on_ready = client.on_ready
+    # Set before the drain starts: the permission re-check reads live guild
+    # state, and a pass that runs before the gateway identifies sees every
+    # member as able to read nothing.
+    gateway_ready = asyncio.Event()
 
     async def on_ready() -> None:
         await original_on_ready()
         state.gateway_connected = True
+        gateway_ready.set()
 
     client.on_ready = on_ready  # type: ignore[method-assign]
 
@@ -336,7 +499,18 @@ async def main() -> None:
             hint="add a channel in the admin console or set INDEXED_CHANNEL_IDS",
         )
 
-    await run_beside_scope(client.start(settings.discord_token.get_secret_value()), scope, state)
+    # The notification drain runs beside the gateway, in this process,
+    # because this is the only process that can reach a person. Ingest queues;
+    # this sends. Without this line the queue fills and nothing ever drains
+    # it -- the eleventh time that failure would have shipped here.
+    drains = (
+        [notification_loop(graph.notifications, state, ready=gateway_ready)]
+        if graph.notifications is not None
+        else []
+    )
+    await run_beside_scope(
+        client.start(settings.discord_token.get_secret_value()), scope, state, drains
+    )
 
 
 if __name__ == "__main__":

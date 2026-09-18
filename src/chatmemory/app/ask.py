@@ -42,6 +42,13 @@ the answer services and is never remembered as conversation: the message may
 hold an email address, and memory is recalled into prompts for channel replies.
 Whose facts are touched is always `request.asker`; a request for anyone else's
 gets one fixed refusal that neither reads the store nor varies with it.
+
+And it is where "what did I miss in #x" becomes an answer. A catch-up is not
+a second way into the corpus: `_produce` below swaps which collaborator
+writes the answer, and everything around it -- the viewer, the audience, the
+delivery guard, the remembered turn -- is the same code every other question
+goes through. See `app.catchup` for why the channel bound is a viewer and not
+a query field.
 """
 
 from __future__ import annotations
@@ -60,6 +67,7 @@ from chatmemory.app.asks.model import (
     CorrectionResolution,
     ReportedAsk,
 )
+from chatmemory.app.catchup import CatchUpService, catch_up_request
 from chatmemory.app.confirmation import (
     ConfirmationChannel,
     ConfirmationDesk,
@@ -321,6 +329,7 @@ class AskService:
         conversations: Conversations | None = None,
         profiles: AskerProfileResolver | None = None,
         facts: PersonalFactsService | None = None,
+        catchup: CatchUpService | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
@@ -337,6 +346,12 @@ class AskService:
         # Without it a fact request is answered that facts are unavailable,
         # never searched for in the corpus.
         self._facts = facts
+        # Optional like memory and facts, and proven wired the same way:
+        # `test_catchup_wiring` reads the chain from the entrypoint down.
+        # Without it "what did I miss in #x" is answered by searching the
+        # corpus for those words -- a worse answer, never a wider one, since
+        # that search is scoped by the same viewer this would have been.
+        self._catchup = catchup
         # Optional because the notice is the only thing that needs it: a
         # deployment without one answers exactly as before, and simply never
         # tells anyone that asking privately would get them more.
@@ -412,21 +427,14 @@ class AskService:
             memory=memory,
             asker_profile=profile,
         )
-        # Concurrent, and not merely for speed. Run after the answer, the
-        # probe would add its latency only for askers who have channels the
-        # room does not -- which makes "this person can see more than you" a
-        # property of how long the bot took to reply.
-        # The channel is opened around the whole of answer production, and
-        # closed the moment it ends: a confirmation cannot be collected for a
-        # run that is already over, and the next asker gets their own.
-        # `gather` copies the current context into each task it starts, so a
-        # tool call made deep inside the answer finds this channel and no
-        # other.
+        # The confirmation channel is opened around the whole of answer
+        # production, and closed the moment it ends: a confirmation cannot be
+        # collected for a run that is already over, and the next asker gets
+        # their own. `gather` inside `_produce` copies the current context
+        # into each task it starts, so a tool call made deep inside the
+        # answer finds this channel and no other.
         with self._attending(request.asker, confirm), answering_with_facts(facts):
-            answer, withheld = await asyncio.gather(
-                self._answers.answer(question),
-                self._withheld_channels(viewer, audience, request.text),
-            )
+            answer, withheld = await self._produce(request, question, viewer, audience)
         scoped = enforce_audience(answer, audience, viewer, withheld_by_scoping=withheld)
 
         await self._remember(scope, location, request.text, answer, scoped, memory)
@@ -442,6 +450,48 @@ class AskService:
             remembered_summaries=len(memory.summaries),
         )
         return AskOutcome(scoped)
+
+    async def _produce(
+        self,
+        request: AskRequest,
+        question: Question,
+        viewer: Viewer,
+        audience: Audience,
+    ) -> tuple[Answer, frozenset[ChannelRef]]:
+        """The answer, and what audience scoping cost this asker.
+
+        Two ways to produce one answer, not two answer paths. A catch-up is
+        the ordinary retrieval and the ordinary synthesiser with the viewer
+        pinned to one channel and the query pinned to a period, so what comes
+        back is an `Answer` like any other -- cited, audience-checked below,
+        and remembered as a turn. A deployment that wires no catch-up service
+        answers the question by searching the corpus, exactly as before.
+
+        No withheld-evidence probe for a catch-up, and that is not an
+        omission. The probe asks "is there more about this question in
+        channels the room cannot read", and for a catch-up the answer is a
+        statement about the one channel named -- which is the very thing the
+        refusal above declines to disclose.
+        """
+        catch_up = catch_up_request(request.text)
+        if catch_up is not None and self._catchup is not None:
+            log.info(
+                "ask.catch_up",
+                asker=str(request.asker),
+                period_named=catch_up.period_named,
+                named_a_channel=catch_up.named_a_channel,
+            )
+            summary = await self._catchup.summarise(question, catch_up, request.destination)
+            return summary, frozenset()
+        # Concurrent, and not merely for speed. Run after the answer, the
+        # probe would add its latency only for askers who have channels the
+        # room does not -- which makes "this person can see more than you" a
+        # property of how long the bot took to reply.
+        answer, withheld = await asyncio.gather(
+            self._answers.answer(question),
+            self._withheld_channels(viewer, audience, request.text),
+        )
+        return answer, withheld
 
     async def forget(self, request: ForgetRequest) -> MemoryPurge | None:
         """Erase the requester's own conversation, here or everywhere.

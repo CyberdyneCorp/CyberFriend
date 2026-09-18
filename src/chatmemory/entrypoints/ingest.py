@@ -4,7 +4,7 @@ Runs exactly one replica. Two containers sharing a bot token both identify to
 the gateway and ingest every message twice; Discord does not error, so the
 duplication is silent. See docker-compose.yml.
 
-Ten concurrent jobs make up the process, each a loop that survives its own
+Eleven concurrent jobs make up the process, each a loop that survives its own
 failures because none of them may take the others down:
 
   scope        indexing scope re-read from runtime configuration
@@ -16,6 +16,7 @@ failures because none of them may take the others down:
   extraction   asks read out of newly captured conversation
   ask backlog  asks read out of everything backfill imported
   ask state    open/answered/stale, applied from observed events only
+  notify       obligations addressed to one person, queued for the bot to send
   memory       remembered conversation past its retention window, deleted
 
 Indexing scope is read live, not once at startup. Every job below asks the
@@ -38,6 +39,14 @@ each time, and can only see whatever retrieval happened to surface. It is also
 the job whose failure is quietest -- a dead extractor and a quiet server look
 identical from outside, because "nothing outstanding" is a plausible answer --
 so it reports its own progress on the health endpoint.
+
+Notifications are produced here and sent somewhere else. Obligations are
+extracted in this process; Discord is reachable only from the bot, which holds
+the gateway connection people can be messaged through. The two share no
+memory, so the `notification` table is the seam: the sweep below turns asks
+addressed to an individual into queue rows, and the bot drains them, re-checks
+the recipient's access and sends. Nothing in this process ever messages
+anybody.
 """
 
 from __future__ import annotations
@@ -73,9 +82,14 @@ from chatmemory.app.asks.worker import (
 )
 from chatmemory.app.conversation import MemoryRetention
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
+from chatmemory.app.notifications import ObligationNotifier
 from chatmemory.app.scope import LiveScope, ScopeChange, ScopeProvider
 from chatmemory.app.windowing import WindowBuilder
-from chatmemory.composition import build_ask_pipeline, build_memory_retention
+from chatmemory.composition import (
+    build_ask_pipeline,
+    build_memory_retention,
+    build_obligation_notifier,
+)
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
@@ -105,6 +119,12 @@ ASK_STATE_INTERVAL_SECONDS = 300.0
 # minute rather than as fast as the database can serve it. A channel that
 # stopped changing months ago pays one empty index scan a minute for it.
 BACKLOG_EXTRACTION_INTERVAL_SECONDS = 60.0
+# How often extracted obligations are turned into queued notifications.
+# A minute: the batching window is minutes long and nothing is sent from this
+# process, so a pass is a bounded INSERT ... SELECT and two updates over rows
+# that changed. Faster would buy nothing; much slower would make the batching
+# window a lie, because an obligation cannot be batched before it is queued.
+NOTIFICATION_SWEEP_INTERVAL_SECONDS = 60.0
 # How often expired conversation memory is deleted. Hourly: a window measured
 # in days is honoured to within an hour, and a pass is two indexed deletes.
 MEMORY_RETENTION_INTERVAL_SECONDS = 3600.0
@@ -418,6 +438,41 @@ async def ask_state_loop(
         await asyncio.sleep(interval)
 
 
+async def notification_sweep_loop(
+    notifier: ObligationNotifier,
+    state: HealthState,
+    interval: float = NOTIFICATION_SWEEP_INTERVAL_SECONDS,
+) -> None:
+    """Queue notifications for obligations addressed to an individual.
+
+    Here rather than in the bot because this is where extraction runs, and
+    only here: the live pass and the backlog pass both write asks, and a sweep
+    over the table catches both without either of them having to remember to
+    call anything. The bot cannot do it -- it never sees an extraction -- and
+    this process cannot send anything, because Discord is reachable only from
+    the one holding the gateway connection. The queue table is the seam, in
+    exactly the way the extraction watermark is the seam between the live and
+    backlog passes.
+
+    Absorbs everything, like every other pass here. A sweep that dies leaves
+    obligations unqueued, which looks identical to "nobody asked anybody
+    anything" -- so progress is published every iteration and a stalled sweep
+    is visible as a pending count that stops moving.
+    """
+    while True:
+        try:
+            swept = await notifier.sweep(datetime.now(UTC))
+            state.details["notifications"] = {
+                **swept.as_dict(),
+                "last_run_at": time.time(),
+            }
+        except Exception:
+            # Nothing is lost by failing: the queue is derived from the ask
+            # table, so the next pass re-derives exactly the same rows.
+            log.exception("notifications.sweep_failed")
+        await asyncio.sleep(interval)
+
+
 async def memory_retention_loop(
     retention: MemoryRetention,
     state: HealthState,
@@ -636,6 +691,30 @@ async def main() -> None:
                 )
             )
             tasks.create_task(ask_state_loop(asks.state, state))
+
+            # The queue the bot drains. Inside the `asks is not None` branch
+            # deliberately: with extraction off there are no obligations to
+            # notify anybody about, and a sweep over an ask table nothing
+            # writes would be a pass that runs for ever and finds nothing.
+            #
+            # Without this task the whole notification feature is code that
+            # runs in no process: rows are never queued, the bot's drain finds
+            # an empty table on every pass, and nobody is ever told anything.
+            if settings.notifications_enabled:
+                tasks.create_task(
+                    notification_sweep_loop(
+                        build_obligation_notifier(settings, engine), state
+                    )
+                )
+            else:
+                # Said out loud for the same reason extraction says it:
+                # "nobody is being notified" and "notifications are switched
+                # off" are indistinguishable from outside, and one of them is
+                # a decision somebody made.
+                log.warning(
+                    "ingest.notifications_disabled",
+                    hint="NOTIFICATIONS_ENABLED=false; nothing will be queued to send",
+                )
 
 
 if __name__ == "__main__":

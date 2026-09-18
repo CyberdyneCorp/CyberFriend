@@ -60,6 +60,22 @@ DEPLOYMENT_SETTINGS = {
     "MEMORY_RECENT_TURNS": ("bot",),
     "MEMORY_SUMMARISE_AFTER_TURNS": ("bot",),
     "MEMORY_RETENTION_DAYS": ("ingest",),
+    # Notifications are produced in one process and delivered by another, so
+    # each half gets the settings it actually applies. The switch reaches
+    # both: an operator turning it off in the platform must stop the queueing
+    # and the sending, and a half-off feature would queue rows for ever.
+    "NOTIFICATIONS_ENABLED": ("ingest", "bot"),
+    # The batching window and the rate are applied where the sending happens.
+    # Declared only in the platform and never passed here, an operator's
+    # chosen rate would be a number nothing reads while the bot messages
+    # people on the hardcoded default.
+    "NOTIFICATION_BATCH_WINDOW_SECONDS": ("bot",),
+    "NOTIFICATION_MIN_INTERVAL_SECONDS": ("bot",),
+    "NOTIFICATION_MAX_ITEMS": ("bot",),
+    # The two bounds on what may enter the queue are applied where the
+    # queueing happens.
+    "NOTIFICATION_MAX_AGE_HOURS": ("ingest",),
+    "NOTIFICATION_EXPIRE_HOURS": ("ingest",),
 }
 
 

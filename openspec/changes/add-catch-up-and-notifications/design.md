@@ -15,6 +15,18 @@ obligation names, only for obligations naming an individual, batched into one
 message, rate-limited, stoppable in one command, never to someone who opted out,
 and never at all if they cannot still read the channel it came from.
 
+### The rate limit counts attempts, not deliveries
+
+A send that failed may still have reached the person: a batch the platform
+renders as more than one message can fail after the first has landed, and a
+response lost after the platform accepted the send is indistinguishable from
+one that never arrived. So a failed delivery stamps the person's interval too.
+Nothing is settled by it -- the obligations are still owed and are tried again
+once the interval has passed -- and it is recorded separately from "we have
+messaged them", so the first message that does land still says how to stop.
+Without it the retry interval would be the drain loop's, seconds rather than
+the configured hour.
+
 ### Permission is re-checked at send time
 
 Extraction and delivery are separated by a queue, and access can change in
