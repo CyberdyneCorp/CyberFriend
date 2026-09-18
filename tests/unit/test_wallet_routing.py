@@ -16,6 +16,7 @@ route is decided before retrieval, exactly as it is for a current price.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from chatmemory.app.egress import CHAIN_BALANCES_PROVIDER
 from chatmemory.app.reasoning.budgets import Budget
@@ -217,3 +218,77 @@ async def test_a_question_about_what_people_said_still_reaches_the_corpus() -> N
     )
 
     assert retrieval.calls, "a question about the conversation must be retrieved"
+
+
+# --- a saved wallet ------------------------------------------------------
+
+
+SAVED = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
+
+
+async def test_a_saved_wallet_answers_what_is_my_balance() -> None:
+    """Without this, somebody who told the assistant their wallet is still
+    asked for an address every time."""
+    surface = ScriptedSurface(
+        WALLET, WEB, completion=WANTS_BALANCES, outcome=balances_outcome()
+    )
+    retrieval = FakeRetrieval([[SOMEBODY_ELSES_PROJECT]])
+    asked = replace(question(text="qual o saldo da minha carteira?"),
+                    asker_values=frozenset({SAVED}))
+
+    outcome = await service(surface, retrieval, ParaphrasingSynthesizer()).answer_run(asked)
+
+    assert retrieval.calls == []
+    assert "1.500000 ETH" in outcome.answer.text
+    # The address is spelled out for the tool proposal, which sees the question
+    # and nothing else.
+    assert SAVED in surface.invocations[0].question
+    # And it travels as an authorised value, not merely as text in a question.
+    assert SAVED in surface.invocations[0].asker_values
+
+
+async def test_without_a_saved_wallet_an_address_is_still_asked_for() -> None:
+    surface = ScriptedSurface(WALLET, WEB, completion=WANTS_BALANCES)
+    retrieval = FakeRetrieval([[SOMEBODY_ELSES_PROJECT]])
+
+    outcome = await service(surface, retrieval, ParaphrasingSynthesizer()).answer_run(
+        question(text="qual o balanco da carteira?")
+    )
+
+    assert retrieval.calls == []
+    assert outcome.answer.text == WALLET_ADDRESS_MISSING
+    assert surface.invocations == []
+
+
+async def test_a_saved_bitcoin_wallet_is_not_sent_to_an_evm_node() -> None:
+    """An Ethereum lookup of a Bitcoin address returns a confident zero.
+
+    Note the phrasing: a wallet question must name a wallet. "what is my
+    balance" alone stays with the corpus, because in a channel about money it
+    is as likely to be about something somebody said as about a chain.
+    """
+    surface = ScriptedSurface(WALLET, WEB, completion=WANTS_BALANCES)
+    retrieval = FakeRetrieval([[SOMEBODY_ELSES_PROJECT]])
+    asked = replace(
+        question(text="what is my wallet balance?"),
+        asker_values=frozenset({"bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"}),
+    )
+
+    outcome = await service(surface, retrieval, ParaphrasingSynthesizer()).answer_run(asked)
+
+    assert outcome.answer.text == WALLET_ADDRESS_MISSING
+    assert surface.invocations == []
+
+
+async def test_an_address_in_the_question_still_wins_over_a_saved_one() -> None:
+    surface = ScriptedSurface(
+        WALLET, WEB, completion=WANTS_BALANCES, outcome=balances_outcome()
+    )
+    asked = replace(
+        question(text=f"what does {ADDRESS} hold?"), asker_values=frozenset({SAVED})
+    )
+
+    await service(surface, FakeRetrieval([[SOMEBODY_ELSES_PROJECT]]),
+                  ParaphrasingSynthesizer()).answer_run(asked)
+
+    assert ADDRESS in surface.invocations[0].question

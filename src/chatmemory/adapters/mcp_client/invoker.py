@@ -261,7 +261,10 @@ def _query_for(request: InvocationRequest, permit: ToolPermit) -> ProvenancedQue
     # containment. Rooting is for calls made WITHOUT that review.
     if permit.effect.mutates:
         return ProvenancedQuery(
-            text=request.question, origin=QueryOrigin.ASKER, question=request.question
+            text=request.question,
+            origin=QueryOrigin.ASKER,
+            question=request.question,
+            asker_facts=request.asker_values,
         )
 
     # EVERY string argument, not one named key. Checking only `query` left
@@ -278,16 +281,27 @@ def _query_for(request: InvocationRequest, permit: ToolPermit) -> ProvenancedQue
         # Nothing textual leaves, so there is nothing to root. Recorded
         # against the question so the audit line still names the run.
         return ProvenancedQuery(
-            text=request.question, origin=QueryOrigin.ASKER, question=request.question
+            text=request.question,
+            origin=QueryOrigin.ASKER,
+            question=request.question,
+            asker_facts=request.asker_values,
         )
 
     combined = " ".join(texts)
+    # A single argument that is exactly one of the requester's own saved
+    # values is their words, typed when they saved it. Labelled as such so an
+    # audit line says why it was allowed, rather than reading as a model
+    # reformulation that happened to pass.
+    exact_fact = len(texts) == 1 and texts[0] in request.asker_values
     return ProvenancedQuery(
         text=combined,
         origin=(
             QueryOrigin.ASKER
             if len(texts) == 1 and texts[0] == request.question.strip()
+            else QueryOrigin.ASKER_FACT
+            if exact_fact
             else QueryOrigin.MODEL_REFORMULATION
         ),
         question=request.question,
+        asker_facts=request.asker_values,
     )

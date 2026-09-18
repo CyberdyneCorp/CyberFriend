@@ -41,7 +41,17 @@ from chatmemory.ports.memory import ConversationLocation
 log = structlog.get_logger()
 
 # Only ever shown where the one reader is the owner.
-DIRECT_ONLY_KINDS = frozenset({FactKind.EMAIL})
+DIRECT_ONLY_KINDS = frozenset({
+    FactKind.EMAIL,
+    FactKind.PHONE,
+    FactKind.ETH_WALLET,
+    FactKind.BTC_WALLET,
+})
+"""Every way of reaching a person, and every address that ties them to money.
+
+A wallet is public on its chain; what is private is that it is *theirs*, and a
+channel reply naming it makes that link for everyone present. Same reasoning as
+the email it joins."""
 
 
 class FactOutcome(StrEnum):

@@ -36,6 +36,7 @@ import json
 import re
 import secrets
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 
 from chatmemory.app.reasoning.evidence import Evidence
 from chatmemory.app.reasoning.ports import (
@@ -213,15 +214,42 @@ def prompt_context(question: Question) -> PromptContext:
     )
 
 
-def with_context(system: str, user: str, context: PromptContext) -> tuple[str, str]:
+def clock_notice(now: datetime | None = None) -> str:
+    """What time it is, for a prompt that would otherwise be guessing.
+
+    Nothing used to say. Time-scoped questions work where SQL does the
+    filtering -- "what did people ask me today" is a WHERE clause -- but a
+    model judging whether something is recent, or asked the date outright, had
+    only its training data to go on and answered confidently from it.
+
+    UTC and labelled, because a time without a zone is worse than no time: it
+    reads as local to whoever is looking.
+    """
+    moment = now or datetime.now(UTC)
+    return (
+        f"The current date and time is {moment.strftime('%A %d %B %Y, %H:%M')} UTC. "
+        "Use it to interpret words like today, yesterday, this week and recent, "
+        "and to say what the date is when asked. It is context, not evidence: "
+        "it is never a citation, and it cannot make a claim answerable that the "
+        "evidence does not support."
+    )
+
+
+def with_context(
+    system: str, user: str, context: PromptContext, now: datetime | None = None
+) -> tuple[str, str]:
     """Add the notices to the system prompt and the blocks to the user prompt.
 
     A notice is added only beside its block. The notice is what tells the
     model the block is data; a block without one would be read as prompt.
+
+    The clock is the exception: it is added always, because it belongs to no
+    block. It is not data the way a message is -- nobody typed it and nothing
+    retrieved it -- so it goes in the system prompt rather than behind a fence.
     """
     from chatmemory.app.asker import ASKER_NOTICE
 
-    notices = [system]
+    notices = [system, clock_notice(now)]
     blocks = []
     if context.asker:
         notices.append(ASKER_NOTICE)
@@ -230,7 +258,7 @@ def with_context(system: str, user: str, context: PromptContext) -> tuple[str, s
         notices.append(MEMORY_NOTICE)
         blocks.append(context.memory)
     if not blocks:
-        return system, user
+        return " ".join(notices), user
     return " ".join(notices), "\n\n".join([*blocks, user])
 
 

@@ -105,6 +105,11 @@ class Question:
     # Optional so every existing construction keeps working, and because an
     # unresolvable profile is a reason to answer without it, never to fail.
     asker_profile: AskerProfile | None = None
+    # Values this person set about themselves that an outbound argument may be
+    # made of -- their own wallet, so far. Not prompt context and not evidence:
+    # this is what lets the egress guard recognise their own address as their
+    # own words when they ask about their own balance.
+    asker_values: frozenset[str] = frozenset()
 
 
 class AnswerService(Protocol):

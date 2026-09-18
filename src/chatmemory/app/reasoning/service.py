@@ -290,14 +290,29 @@ class ReasoningAnswerService:
             # does 0x... hold" from one is how the assistant reported a
             # colleague's project summary as somebody's balance -- which is
             # exactly what it did before this route existed.
+            asked = question
             if wallet.address is None:
-                log.info("reasoning.external_route", route="wallet_no_address")
-                return (
-                    _route(EXTERNAL_ROUTE, "wallet_address_missing"),
-                    refusal(WALLET_ADDRESS_MISSING),
-                )
+                saved = _saved_wallet(question)
+                if saved is None:
+                    log.info("reasoning.external_route", route="wallet_no_address")
+                    return (
+                        _route(EXTERNAL_ROUTE, "wallet_address_missing"),
+                        refusal(WALLET_ADDRESS_MISSING),
+                    )
+                # Spelled out for the tool proposal, which sees the question
+                # and nothing else: "what's my balance" names no address, so a
+                # model reading it alone cannot produce one.
+                #
+                # This is a hint, not the authorisation. The guard admits the
+                # address because it is one of `asker_values` -- the exact
+                # strings the store holds for this person -- so a wrong
+                # address put here would be refused rather than sent. Same
+                # arrangement as the market follow-up above, where the
+                # addition is checked by membership rather than trusted.
+                asked = replace(question, text=f"{question.text} {saved}")
+                log.info("reasoning.external_route", route="wallet_saved_address")
             outcome = await self._loop.run_external(
-                question, CHAIN_SERVERS, verbatim=True
+                asked, CHAIN_SERVERS, verbatim=True
             )
             answer = outcome.answer
             if answer.abstained:
@@ -312,6 +327,21 @@ class ReasoningAnswerService:
             outcome = await self._loop.run_external(question)
             return _route(EXTERNAL_ROUTE, "explicit_web_search"), outcome
         return None
+
+
+def _saved_wallet(question: Question) -> str | None:
+    """The asker's own Ethereum address, if they have told the assistant one.
+
+    Only an address: `asker_values` may hold a Bitcoin wallet too, and this
+    lookup reads Ethereum and Base. Sending a Bitcoin address to an EVM node
+    would return a confident zero.
+    """
+    from chatmemory.domain.chain import is_address
+
+    for value in sorted(question.asker_values):
+        if is_address(value):
+            return value
+    return None
 
 
 def _market_request(question: Question) -> tuple[MarketQuestion | None, Question]:

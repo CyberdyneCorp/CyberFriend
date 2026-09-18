@@ -40,6 +40,9 @@ class FactKind(StrEnum):
     PREFERRED_NAME = "preferred_name"
     EMAIL = "email"
     PREFERRED_LANGUAGE = "preferred_language"
+    PHONE = "phone"
+    ETH_WALLET = "eth_wallet"
+    BTC_WALLET = "btc_wallet"
 
 
 class FactRejection(StrEnum):
@@ -148,10 +151,75 @@ def _normalise_language(value: str) -> str:
     return language
 
 
+# E.164 allows fifteen digits; the rest is punctuation people type.
+MAX_PHONE_CHARS = 32
+MIN_PHONE_DIGITS = 7
+MAX_PHONE_DIGITS = 15
+_PHONE_ALLOWED = frozenset(" +-().")
+
+# Base58 (1..., 3...) and bech32 (bc1...). Deliberately a shape check and not a
+# checksum: a checksum would reject a valid address on a chain this does not
+# know, and the cost of storing a typo is that a lookup returns an empty
+# wallet, which is visible. Nothing is signed with it, ever.
+_BTC = re.compile(r"\A(?:[13][a-km-zA-HJ-NP-Z1-9]{25,34}|bc1[a-z0-9]{11,71})\Z")
+
+
+def _normalise_phone(value: str) -> str:
+    """Digits and the punctuation people type around them, and nothing else.
+
+    Not `_only`, which permits letters in every script -- right for a name and
+    wrong here, because "call me on my mobile" would otherwise be a phone
+    number.
+    """
+    phone = _collapse(value)
+    if not phone:
+        raise InvalidFact(FactKind.PHONE, FactRejection.EMPTY)
+    if len(phone) > MAX_PHONE_CHARS:
+        raise InvalidFact(FactKind.PHONE, FactRejection.TOO_LONG)
+    if any(not c.isdigit() and c not in _PHONE_ALLOWED for c in phone):
+        raise InvalidFact(FactKind.PHONE, FactRejection.DISALLOWED_CHARACTERS)
+    digits = [c for c in phone if c.isdigit()]
+    if not MIN_PHONE_DIGITS <= len(digits) <= MAX_PHONE_DIGITS:
+        raise InvalidFact(FactKind.PHONE, FactRejection.MALFORMED)
+    return phone
+
+
+def _normalise_eth_wallet(value: str) -> str:
+    """A 20-byte hex address, stored lowercase.
+
+    The same vocabulary the wallet tool uses, from `domain.chain`, so the
+    address somebody saves is exactly the shape the lookup will accept. Two
+    definitions would let a person store an address the tool then refuses.
+    """
+    from chatmemory.domain.chain import is_address, normalise
+
+    wallet = _collapse(value)
+    if not wallet:
+        raise InvalidFact(FactKind.ETH_WALLET, FactRejection.EMPTY)
+    if not is_address(wallet):
+        raise InvalidFact(FactKind.ETH_WALLET, FactRejection.MALFORMED)
+    # Lowercase, for the reason `domain.chain` gives: EIP-55 mixes case as a
+    # checksum, and lowercase is the form that cannot be a *wrong* checksum.
+    return normalise(wallet)
+
+
+def _normalise_btc_wallet(value: str) -> str:
+    wallet = _collapse(value)
+    if not wallet:
+        raise InvalidFact(FactKind.BTC_WALLET, FactRejection.EMPTY)
+    if not _BTC.fullmatch(wallet):
+        raise InvalidFact(FactKind.BTC_WALLET, FactRejection.MALFORMED)
+    # bech32 is defined lowercase; base58 is case-sensitive and left alone.
+    return wallet.lower() if wallet.lower().startswith("bc1") else wallet
+
+
 _NORMALISERS = {
     FactKind.PREFERRED_NAME: _normalise_name,
     FactKind.EMAIL: _normalise_email,
     FactKind.PREFERRED_LANGUAGE: _normalise_language,
+    FactKind.PHONE: _normalise_phone,
+    FactKind.ETH_WALLET: _normalise_eth_wallet,
+    FactKind.BTC_WALLET: _normalise_btc_wallet,
 }
 
 
