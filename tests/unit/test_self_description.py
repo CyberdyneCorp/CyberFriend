@@ -106,3 +106,55 @@ def test_web_search_is_only_claimed_when_it_is_configured() -> None:
     described = describe_capabilities(["wikipedia:search", "serpapi:search"])
     assert "web" in described
     assert "labelled" in described, "must say outside answers are marked as such"
+
+
+# --- what tracing caught in production ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # The exact message from the server, verbatim. Three things defeated
+        # it at once: "oque" written without the space, the greeting spending
+        # the length budget, and "comandos" naming machinery the term set did
+        # not know.
+        "Oi oque voce pode fazer? Me de a sua lista de comandos",
+        "oque voce faz?",
+        "quais sao suas capacidades?",
+        "quais são suas funções?",
+        "me fala seus comandos",
+        "o que voce consegue fazer",
+        "give me your list of commands",
+        "what commands do you have",
+    ],
+)
+def test_capability_questions_are_recognised_however_they_are_phrased(
+    question: str,
+) -> None:
+    """A regression test with a traced production failure behind it.
+
+    Asked "Oi oque voce pode fazer? Me de a sua lista de comandos", the bot
+    searched the corpus, found a colleague describing a different crypto
+    product, and listed that product's features as its own -- the exact
+    failure this module's docstring says it exists to prevent, reaching it
+    through Portuguese instead of through a missing phrase.
+
+    It was invisible until run tracing recorded the question, the answer and
+    the thirty windows of evidence behind it.
+    """
+    assert self_description_question(question)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "what was decided about the deploy last week",
+        "what did people ask me to do today",
+        "summarise the discussion in general yesterday",
+        "quais ferramentas o time usa para deploy em producao hoje em dia",
+    ],
+)
+def test_questions_about_the_team_still_reach_the_corpus(question: str) -> None:
+    """The bound that matters in the other direction: a question mentioning
+    tools is usually about the team's tools, not the assistant's."""
+    assert not self_description_question(question)
