@@ -167,7 +167,12 @@ from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answe
 from chatmemory.app.reasoning.stages import ModelSynthesizer, ModelToolProposer
 from chatmemory.app.reasoning.tracing import OptOutAwareTracer, TraceWithdrawal
 from chatmemory.app.scope import LiveScope, ScopeProvider, StaticScope
-from chatmemory.app.self_description import SelfDescriptionAnswerService
+from chatmemory.app.self_description import (
+    ALWAYS_AVAILABLE,
+    NOTIFICATIONS,
+    Command,
+    SelfDescriptionAnswerService,
+)
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import AnswerService
@@ -900,6 +905,19 @@ def _federated_tools(
     )
 
 
+def available_commands(settings: Settings) -> tuple[Command, ...]:
+    """The commands this deployment registers, for the capability reply.
+
+    Kept beside the wiring rather than inside `self_description`, because
+    whether a command exists is a deployment question and that module must not
+    read settings to answer it.
+    """
+    commands = list(ALWAYS_AVAILABLE)
+    if settings.notifications_enabled:
+        commands.append(NOTIFICATIONS)
+    return tuple(commands)
+
+
 def build_answers(
     retrieval: RetrievalTool,
     chat: ChatModel,
@@ -1255,6 +1273,10 @@ async def build_answer_stack(
                 sorted(federation.federation.permits) if federation is not None else ()
             ),
             personal_facts=personal_facts,
+            # Only the commands this deployment actually registers. Listing
+            # `/notifications` where the feature is off tells somebody to use
+            # a command Discord will not show them.
+            commands=available_commands(settings),
         ),
         reasoning=reasoning,
         obligations=obligations,

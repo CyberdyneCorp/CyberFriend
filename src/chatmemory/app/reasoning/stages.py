@@ -294,6 +294,19 @@ FORMAT_NOTICE = (
     "those are added for you."
 )
 
+LANGUAGE_NOTICE = (
+    "Write the answer in the same language the question was asked in. Quote "
+    "evidence as it was written -- a citation that does not match its source "
+    "is worse than one in another language. A preferred language in the "
+    "asker's profile overrides this, because that is a choice they made."
+)
+"""Said explicitly because nothing used to say it.
+
+A model answers in the prompt's language often enough to look deliberate and
+not often enough to rely on: asked "Oque voce pode fazer?" it replied in
+English to somebody who had just written a whole sentence of Portuguese.
+"""
+
 SYNTHESIS_SYSTEM = (
     "You answer a question using only the evidence given. Every claim must "
     "rest on evidence, and you must list the window_id of each piece you "
@@ -304,6 +317,8 @@ SYNTHESIS_SYSTEM = (
     + SOURCE_NOTICE
     + " "
     + FORMAT_NOTICE
+    + " "
+    + LANGUAGE_NOTICE
     + " "
     + DATA_NOTICE
 )
