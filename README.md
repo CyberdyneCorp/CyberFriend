@@ -19,6 +19,7 @@ internet said.
 | **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve` |
 | **Conversation memory** | Follow-ups keep context, per person and per place, and stop being recalled if you lose access to a channel behind them |
 | **Personal facts** | *call me Leo*, *my email is …*, *reply in Portuguese*. Your email is only ever shown in a DM to you |
+| **Answers in your language** | An answer is written in the language you asked in; a saved preferred language still wins |
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
 | **Web and MCP** | Wikipedia, Google via SerpApi, and any MCP server an operator allowlists |
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
