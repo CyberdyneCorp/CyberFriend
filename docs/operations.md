@@ -276,7 +276,8 @@ It uses the same address rules as balances: the address must be in the question
 or be the asker's saved wallet, and a question with neither is answered by
 asking for one. A question needs an address or a first-person reference ("my
 pools") to route here — "what did we decide about the pool" stays a corpus
-question.
+question. A follow-up such as "show me the v4 position" uses the address from
+the asker's own last three questions, if one named an address.
 
 ### How positions are found
 
@@ -286,8 +287,11 @@ question.
 - **Uniswap v4**'s position manager cannot list an owner's tokens, and Infura
   limits `eth_getLogs` to 10,000 blocks. The token IDs come from Blockscout's
   public API (no key), and each is then confirmed with `ownerOf` on-chain. The
-  explorer is trusted for nothing else. If it is down, the answer says how many
-  v4 positions exist but could not be listed.
+  explorer is trusted for nothing else. It also lags: when the chain reports
+  more v4 positions than it returns, recent blocks are searched directly with
+  `eth_getLogs` (newest first, up to 24 windows of 10,000 blocks), and each
+  hit is confirmed with `ownerOf` too. Only what neither finds is reported as
+  "could not be listed".
 - **Aave v3** contracts are resolved from each chain's addresses provider, so
   an Aave upgrade is followed automatically.
 
