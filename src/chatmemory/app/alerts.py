@@ -68,6 +68,7 @@ from chatmemory.ports.alerts import (
     PositionObserver,
     ReadFailure,
 )
+from chatmemory.ports.notifications import DeliveryResult
 
 log = structlog.get_logger()
 
@@ -456,10 +457,17 @@ class AlertRunner:
             await self._store.record(alert.id, evaluation.update, now)
             return False
         text = render_alert(evaluation.firing, self._sweep)
-        if await self._messenger.deliver(alert.person, alert.id, text):
+        result = await self._messenger.deliver(alert.person, alert.id, text)
+        if result is DeliveryResult.SENT:
             await self._store.record(alert.id, evaluation.update, now)
             log.info("alerts.fired", alert_id=alert.id, kind=str(evaluation.firing.kind))
             return True
+        if result is DeliveryResult.FAILED:
+            # A Discord blip, not a refusal. Nothing is recorded, so the
+            # stored state still predates the change and the next sweep
+            # finds it again and retries the message.
+            log.warning("alerts.not_delivered", alert_id=alert.id)
+            return False
         # Their direct messages are closed. Every alert of theirs stops, as
         # scheduled tasks do: the obstacle is the person's settings, not
         # this alert. The reading is still recorded: it was true whether or

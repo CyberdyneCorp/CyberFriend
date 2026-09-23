@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -45,7 +46,7 @@ WALLET = "0xdd8a0000000000000000000000000000000063d6"
 TYPED = "0xb26b933a075fbb3d4e8b0925cad4f2bc345475e0"
 
 
-def health(threshold: str = "1.3", **changes: object) -> NewAlert:
+def health(threshold: str = "1.3", **changes: Any) -> NewAlert:
     alert = NewAlert(
         person=LEO,
         kind=AlertKind.AAVE_HEALTH,
@@ -57,10 +58,10 @@ def health(threshold: str = "1.3", **changes: object) -> NewAlert:
         state=AlertState.OK,
         last_value=Decimal("1.4268"),
     )
-    return replace(alert, **changes)  # type: ignore[arg-type]
+    return replace(alert, **changes)
 
 
-def lp(token_id: int, **changes: object) -> NewAlert:
+def lp(token_id: int, **changes: Any) -> NewAlert:
     target = LpTarget(
         LpProtocol.UNISWAP_V3,
         token_id,
@@ -82,7 +83,7 @@ def lp(token_id: int, **changes: object) -> NewAlert:
         state=AlertState.IN_RANGE,
         last_value=Decimal(-197404),
     )
-    return replace(alert, **changes)  # type: ignore[arg-type]
+    return replace(alert, **changes)
 
 
 async def count(engine: AsyncEngine) -> int:

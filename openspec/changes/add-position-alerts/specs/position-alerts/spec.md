@@ -158,10 +158,19 @@ not liquidation protection.
 The system SHALL stop checking every alert of a person whose direct messages
 cannot be delivered to, and SHALL record why.
 
+The system SHALL NOT stop alerts for a transient delivery failure (a platform
+error or timeout); the change SHALL stay unrecorded so a later check tells it.
+
 #### Scenario: Direct messages closed
-- WHEN a message to a person cannot be delivered
+- WHEN a message to a person is refused because their direct messages are
+  closed or their account is gone
 - THEN all their alerts SHALL stop
 - AND the reason SHALL be recorded
+
+#### Scenario: A transient delivery failure
+- WHEN a message to a person fails for a transient reason
+- THEN none of their alerts SHALL stop
+- AND the next check SHALL try to tell the same change again
 
 ### Requirement: Forgetting and removing a person removes their alerts
 

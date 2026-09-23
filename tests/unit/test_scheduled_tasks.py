@@ -22,6 +22,7 @@ from chatmemory.app.schedules import (
 )
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import Answer
+from chatmemory.ports.notifications import DeliveryResult
 from chatmemory.ports.schedules import DueTask, ScheduledTask, TaskOutcome
 
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
@@ -95,15 +96,14 @@ class FakeAsks:
 
 
 class FakeMessenger:
-    def __init__(self, delivers: bool = True) -> None:
-        self.delivers = delivers
+    def __init__(self, result: DeliveryResult = DeliveryResult.SENT) -> None:
+        self.result = result
         self.sent: list[tuple[PersonRef, str]] = []
 
     async def deliver(self, person, task_id, text):  # noqa: ANN001
-        if not self.delivers:
-            return False
-        self.sent.append((person, text))
-        return True
+        if self.result is DeliveryResult.SENT:
+            self.sent.append((person, text))
+        return self.result
 
 
 def runner(store: FakeStore, asks: FakeAsks, messenger: FakeMessenger) -> ScheduledTaskRunner:
@@ -291,13 +291,25 @@ async def test_closed_direct_messages_stop_every_task_of_that_person() -> None:
     would be knocking on a door already shut."""
     store = FakeStore()
     await ScheduleService(store).create(LEO, "q", 1, now=NOW - timedelta(hours=2))  # type: ignore[arg-type]
-    messenger = FakeMessenger(delivers=False)
+    messenger = FakeMessenger(DeliveryResult.CLOSED)
 
     sent = await runner(store, FakeAsks(Answer(text="something")), messenger).run_due(NOW)
 
     assert sent == 0
     assert store.disabled and store.disabled[0][0] == LEO
     assert store.runs == [(1, TaskOutcome.CLOSED)]
+
+
+async def test_a_transient_send_failure_is_a_failed_run_and_stops_nothing() -> None:
+    store = FakeStore()
+    await ScheduleService(store).create(LEO, "q", 1, now=NOW - timedelta(hours=2))  # type: ignore[arg-type]
+    messenger = FakeMessenger(DeliveryResult.FAILED)
+
+    sent = await runner(store, FakeAsks(Answer(text="something")), messenger).run_due(NOW)
+
+    assert sent == 0
+    assert store.disabled == []
+    assert store.runs == [(1, TaskOutcome.FAILED)]
 
 
 # --- reached from the process that runs ---------------------------------

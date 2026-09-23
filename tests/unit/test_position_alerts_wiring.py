@@ -8,6 +8,7 @@ sweep, on the edges' clock, after the gateway identifies.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import re
 from pathlib import Path
@@ -23,6 +24,7 @@ from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints.bot import alert_loop
 from chatmemory.health import HealthState
+from chatmemory.ports.notifications import DeliveryResult
 from tests.unit.test_assembly_seam import _calls, _function
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,8 +44,8 @@ def settings(**overrides: object) -> Settings:
 
 
 class _Messenger:
-    async def deliver(self, person: PersonRef, task_id: int, text: str) -> bool:
-        return True
+    async def deliver(self, person: PersonRef, task_id: int, text: str) -> DeliveryResult:
+        return DeliveryResult.SENT
 
 
 # --- off by default ---------------------------------------------------------------
@@ -106,7 +108,13 @@ def test_main_starts_the_sweep_only_when_it_was_built() -> None:
     ready = next(k.value for k in call.keywords if k.arg == "ready")
     assert getattr(interval, "attr", None) == "alert_sweep_seconds"
     assert getattr(ready, "id", None) == "gateway_ready"
-    assert "if graph.alerts is not None:" in BOT.read_text()
+    [guard] = [
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "graph.alerts is not None"
+    ]
+    guarded = [c for statement in guard.body for c in _calls(statement, "alert_loop")]
+    assert guarded == [call], "alert_loop is started only under the guard"
 
 
 async def test_the_sweep_waits_for_the_gateway() -> None:
@@ -153,5 +161,5 @@ async def test_the_messenger_heads_a_message_only_when_given_a_heading(
 
     messenger = DiscordTaskMessenger(user, prefix=prefix)
 
-    assert await messenger.deliver(PersonRef("discord", 1), 1, "hello")
+    assert await messenger.deliver(PersonRef("discord", 1), 1, "hello") is DeliveryResult.SENT
     assert recipient.sent == [expected]

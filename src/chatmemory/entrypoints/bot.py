@@ -75,8 +75,9 @@ Position alerts ride on the scheduled-task path without its model run:
 `assemble` -> `build_bot(alert_transport=edges.http_transport)` ->
 `build_alert_runner`, which reads the chain through the process's transport
 and sends through the same `DiscordTaskMessenger`, and `main` runs
-`alert_loop` beside the scheduled sweep on the edges' clock. Off unless
-`ALERTS_ENABLED`, in which case `BotGraph.alerts` is None and nothing starts.
+`alert_loop` beside the scheduled sweep on the edges' clock. Off by default:
+without `ALERTS_ENABLED` (and an Infura key) `BotGraph.alerts` is None and
+nothing starts.
 
 `main` and `assemble` are split at the network. `assemble(settings, edges)`
 builds the whole object graph -- every chain above -- over an `Edges` value

@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -41,6 +42,7 @@ from chatmemory.ports.alerts import (
     PositionAlert,
     ReadFailure,
 )
+from chatmemory.ports.notifications import DeliveryResult
 
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 EARLIER = NOW - timedelta(hours=3)
@@ -59,7 +61,7 @@ LP = LpTarget(
 )
 
 
-def lp_alert(state: AlertState = AlertState.IN_RANGE, **changes: object) -> PositionAlert:
+def lp_alert(state: AlertState = AlertState.IN_RANGE, **changes: Any) -> PositionAlert:
     alert = PositionAlert(
         id=7,
         person=LEO,
@@ -73,10 +75,10 @@ def lp_alert(state: AlertState = AlertState.IN_RANGE, **changes: object) -> Posi
         next_check_at=NOW,
         lp=LP,
     )
-    return replace(alert, **changes)  # type: ignore[arg-type]
+    return replace(alert, **changes)
 
 
-def health_alert(state: AlertState = AlertState.OK, **changes: object) -> PositionAlert:
+def health_alert(state: AlertState = AlertState.OK, **changes: Any) -> PositionAlert:
     alert = PositionAlert(
         id=8,
         person=LEO,
@@ -90,7 +92,7 @@ def health_alert(state: AlertState = AlertState.OK, **changes: object) -> Positi
         next_check_at=NOW,
         threshold=Decimal("1.30"),
     )
-    return replace(alert, **changes)  # type: ignore[arg-type]
+    return replace(alert, **changes)
 
 
 def reading(tick: int, *, liquidity: int = 10**15, owned: bool = True) -> LpObservation:
@@ -511,15 +513,14 @@ class FakeObserver:
 
 
 class FakeMessenger:
-    def __init__(self, open_dm: bool = True) -> None:
-        self.open = open_dm
+    def __init__(self, result: DeliveryResult = DeliveryResult.SENT) -> None:
+        self.result = result
         self.sent: list[tuple[PersonRef, int, str]] = []
 
-    async def deliver(self, person: PersonRef, task_id: int, text: str) -> bool:
-        if not self.open:
-            return False
-        self.sent.append((person, task_id, text))
-        return True
+    async def deliver(self, person: PersonRef, task_id: int, text: str) -> DeliveryResult:
+        if self.result is DeliveryResult.SENT:
+            self.sent.append((person, task_id, text))
+        return self.result
 
 
 async def test_the_sweep_reads_everything_due_in_one_batch_and_sends_what_changed() -> None:
@@ -555,6 +556,7 @@ async def test_an_observer_that_raises_fails_every_alert_and_sends_nothing() -> 
     sent = await AlertRunner(store, FakeObserver(RuntimeError("boom")), messenger).run_due(NOW)
 
     assert sent == 0 and messenger.sent == []
+    assert len(store.records) == 2
     assert all(update.failed for _, update in store.records)
 
 
@@ -564,12 +566,30 @@ async def test_closed_direct_messages_stop_every_alert_of_that_person() -> None:
     store = MemoryStore([first, second])
     observer = FakeObserver({first.id: hf("1.1"), second.id: hf("1.1")})
 
-    sent = await AlertRunner(store, observer, FakeMessenger(open_dm=False)).run_due(NOW)
+    sent = await AlertRunner(store, observer, FakeMessenger(DeliveryResult.CLOSED)).run_due(NOW)
 
     assert sent == 0
     assert store.disabled == [(LEO, DIRECT_MESSAGES_CLOSED)], "disabled once, for the person"
     assert [i for i, _ in store.records] == [first.id]
     assert not store.records[0][1].fired
+
+
+async def test_a_transient_send_failure_stops_nothing_and_retries_next_sweep() -> None:
+    """A Discord blip is not a closed door: disabling on it would silence a
+    liquidation warning for good, under a reason that is not true."""
+    alert = health_alert()
+    store = MemoryStore([alert])
+    observer = FakeObserver({alert.id: hf("1.1")})
+
+    sent = await AlertRunner(store, observer, FakeMessenger(DeliveryResult.FAILED)).run_due(NOW)
+
+    assert sent == 0
+    assert store.disabled == []
+    assert store.records == [], "the change stays unrecorded, so it is found again"
+
+    messenger = FakeMessenger()
+    assert await AlertRunner(store, observer, messenger).run_due(NOW) == 1
+    assert [i for _, i, _ in messenger.sent] == [alert.id]
 
 
 async def test_nothing_due_reads_nothing() -> None:

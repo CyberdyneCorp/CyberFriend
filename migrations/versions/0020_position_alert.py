@@ -6,6 +6,13 @@ nothing about what the previous run found. An alert is the opposite -- no
 model, and the previous state is the whole point, because it messages on a
 change and never on a repeat.
 
+Beyond the table it adds two row triggers on existing tables:
+`person_opt_out` (after insert or update) deletes the person's alerts, and
+`person_fact` (after delete, or update of value, of an `eth_wallet` fact)
+deletes the alerts that watched that saved wallet. They run on today's
+opt-out, `/forget` and save-a-wallet paths; while `position_alert` is empty
+each is a DELETE that matches nothing.
+
 Revision ID: 0020
 Revises: 0019
 """
