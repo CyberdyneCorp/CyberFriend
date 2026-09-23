@@ -1070,32 +1070,43 @@ class CyberFriendClient(discord.Client):
 
     async def setup_hook(self) -> None:
         guild = discord.Object(id=self._guild_id)
-        self.tree.add_command(self._build_ask_command(), guild=guild)
-        # Registered unconditionally, next to `/ask`. A list that only ever
-        # grows is one people stop reading, so the way out of it is not a
-        # thing to make conditional on configuration somebody has to find.
-        self.tree.add_command(self._build_resolve_command(), guild=guild)
-        # Registered unconditionally for the same reason: memory ships with its
-        # off switch, and a way out that depends on configuration is one that
-        # is missing on the deployment somebody needs it on.
-        self.tree.add_command(self._build_forget_command(), guild=guild)
-        # And unconditionally again, for the strongest version of the same
-        # reason. This is the only feature that messages people who did not
-        # ask for anything, so the command that stops it must exist on every
-        # deployment -- including one where nothing is wired to send them.
-        self.tree.add_command(self._build_notifications_command(), guild=guild)
-        # No `default_permissions`: Manage Channels granted by a channel
-        # overwrite, and not guild-wide, must still see the command. The
-        # permission is checked on the target channel when it runs.
+        # Commands about the person themselves are global and allowed in a DM
+        # with the bot. They were registered on the guild only, and Discord
+        # never lists guild commands in a DM -- so "/forget" was missing from
+        # the menu exactly where it matters, and typed as text it cannot run.
+        # Every one of them is keyed on the interaction's user and already
+        # handled a DM; none acts on a channel.
+        for command in (
+            self._build_ask_command(),
+            # Registered unconditionally, next to `/ask`. A list that only ever
+            # grows is one people stop reading, so the way out of it is not a
+            # thing to make conditional on configuration somebody has to find.
+            self._build_resolve_command(),
+            # Unconditional for the same reason: memory ships with its off
+            # switch, and a way out that depends on configuration is one that
+            # is missing on the deployment somebody needs it on.
+            self._build_forget_command(),
+            # And again, for the strongest version of the same reason: this is
+            # the only feature that messages people who did not ask, so the
+            # command that stops it must exist on every deployment.
+            self._build_notifications_command(),
+            # A channel being archived is something everyone in it is owed
+            # disclosure about, and disclosure nobody can check is not
+            # disclosure.
+            self._build_channels_command(),
+            # A group rather than three flat commands: `create`, `list` and
+            # `delete` are one concept, and Discord shows them together.
+            self._build_schedule_group(),
+        ):
+            self.tree.add_command(_in_guild_and_dm(command))
+        # Guild only: these act on a channel. No `default_permissions`: Manage
+        # Channels granted by a channel overwrite, and not guild-wide, must
+        # still see the command. The permission is checked when it runs.
         for action in IndexAction:
             self.tree.add_command(self._build_indexing_command(action), guild=guild)
-        # Unconditional, and next to them on purpose: a channel being archived
-        # is something everyone in it is owed disclosure about, and disclosure
-        # nobody can check is not disclosure.
-        self.tree.add_command(self._build_channels_command(), guild=guild)
-        # A group rather than three flat commands: `create`, `list` and
-        # `delete` are one concept, and Discord shows them together under it.
-        self.tree.add_command(self._build_schedule_group(), guild=guild)
+        await self.tree.sync()
+        # Syncing the guild set also removes the guild copies of the commands
+        # that are now global, which would otherwise show twice in the server.
         await self.tree.sync(guild=guild)
 
     def _build_schedule_group(self) -> app_commands.Group:
@@ -1496,3 +1507,19 @@ class CyberFriendClient(discord.Client):
             # DMs closed. Staying silent is correct: the alternative is
             # saying it in the channel, which is the disclosure we avoid.
             log.info("notice.dm_blocked", user_id=user.id)
+
+
+_AnyCommand = app_commands.Command[Any, ..., None] | app_commands.Group
+
+
+def _in_guild_and_dm(command: _AnyCommand) -> _AnyCommand:
+    """Usable in the server and in a DM with the bot; installed with the bot only.
+
+    Not user-installable: the bot answers from one server's archive, and a
+    person who has not joined it has nothing to ask about.
+    """
+    command.allowed_contexts = app_commands.AppCommandContext(
+        guild=True, dm_channel=True, private_channel=False
+    )
+    command.allowed_installs = app_commands.AppInstallationType(guild=True, user=False)
+    return command
