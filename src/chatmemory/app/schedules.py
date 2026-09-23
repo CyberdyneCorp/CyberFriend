@@ -39,6 +39,7 @@ import structlog
 
 from chatmemory.app.ask import AskRequest, AskService
 from chatmemory.domain.identity import PersonRef
+from chatmemory.ports.notifications import DeliveryResult
 from chatmemory.ports.schedules import (
     MAX_INTERVAL_HOURS,
     MIN_INTERVAL_HOURS,
@@ -76,8 +77,9 @@ class CreateResult:
 class TaskMessenger(Protocol):
     """Sends one finished answer to the person who scheduled it."""
 
-    async def deliver(self, person: PersonRef, task_id: int, text: str) -> bool:
-        """True when it arrived. False means their direct messages are closed."""
+    async def deliver(self, person: PersonRef, task_id: int, text: str) -> DeliveryResult:
+        """SENT when it arrived, CLOSED when the person refuses direct messages
+        (or is gone), FAILED for anything transient. Only CLOSED stops work."""
         ...
 
 
@@ -171,8 +173,12 @@ class ScheduledTaskRunner:
             await self._store.record_run(task.id, TaskOutcome.NOTHING, now)
             return False
 
-        delivered = await self._messenger.deliver(task.person, task.id, scoped.answer.text)
-        if not delivered:
+        result = await self._messenger.deliver(task.person, task.id, scoped.answer.text)
+        if result is DeliveryResult.FAILED:
+            # A Discord blip, not a refusal: this run is lost, the task stays.
+            await self._store.record_run(task.id, TaskOutcome.FAILED, now)
+            return False
+        if result is DeliveryResult.CLOSED:
             # Their direct messages are closed. Stopping every task of theirs
             # rather than this one: the obstacle is the person's settings, not
             # this question, and retrying the rest would be the assistant

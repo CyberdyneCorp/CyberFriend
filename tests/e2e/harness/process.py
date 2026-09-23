@@ -7,7 +7,7 @@ nothing -- is an omission here too.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -25,7 +25,21 @@ LEADERSHIP = 300
 LEAD = "lead"
 
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
-"""The clock every scenario runs at."""
+"""The clock every scenario starts at."""
+
+
+class FakeClock:
+    """`Edges.clock`, standing still at `NOW` until a scenario moves it."""
+
+    def __init__(self, now: datetime = NOW) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, by: timedelta) -> datetime:
+        self.now += by
+        return self.now
 
 
 def layout() -> GuildLayout:
@@ -77,7 +91,7 @@ async def start(settings: Settings, engine: AsyncEngine, seal: NetworkSeal) -> E
         embeddings=embeddings,
         engine=engine,
         http_transport=web.transport,
-        clock=lambda: NOW,
+        clock=FakeClock(),
     )
     process = await assemble(settings, edges)
     wire = FakeDiscord(process.graph.client, layout())

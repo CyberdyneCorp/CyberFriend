@@ -134,6 +134,10 @@ services:
       - SCHEDULED_TASKS_ENABLED=${SCHEDULED_TASKS_ENABLED}
       - SCHEDULED_TASKS_PER_PERSON=${SCHEDULED_TASKS_PER_PERSON}
       - SCHEDULED_SWEEP_SECONDS=${SCHEDULED_SWEEP_SECONDS}
+      # Position alerts: range and health-factor watches, read from the chain
+      # with INFURA_KEY and sent as direct messages. Off unless enabled.
+      - ALERTS_ENABLED=${ALERTS_ENABLED:-false}
+      - ALERT_SWEEP_SECONDS=${ALERT_SWEEP_SECONDS:-300}
       - TRACING_ENABLED=${TRACING_ENABLED}
       - LANGFUSE_HOST=${LANGFUSE_HOST}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}

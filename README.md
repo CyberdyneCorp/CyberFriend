@@ -397,6 +397,7 @@ lists the common ones. The settings worth knowing:
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
+| `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Position alerts (range and health factor). Off by default; no way to create one yet |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 

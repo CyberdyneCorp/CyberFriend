@@ -106,6 +106,10 @@ class FakeWeb:
             raise UnexpectedEgress(f"no fixture for {request.method} {request.url.host}")
         return handler(request)
 
+    def script(self, host: str, handler: Handler) -> None:
+        """Answer `host` with `handler` from now on, replacing any fixture."""
+        self._fixtures[host] = handler
+
     def unscript(self, host: str) -> None:
         """Stop answering for `host`, as if no fixture had ever covered it."""
         del self._fixtures[host]

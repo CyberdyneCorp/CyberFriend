@@ -58,6 +58,7 @@ ROUTES = [
     (HTTPClient.send_message, "'/channels/{channel_id}/messages'"),
     (HTTPClient.send_typing, "'/channels/{channel_id}/typing'"),
     (HTTPClient.start_private_message, "'/users/@me/channels'"),
+    (HTTPClient.get_user, "'/users/{user_id}'"),
     (HTTPClient.bulk_upsert_global_commands, "'/applications/{application_id}/commands'"),
     (
         HTTPClient.bulk_upsert_guild_commands,
@@ -105,6 +106,7 @@ def test_routes_still_carry_what_the_wire_reads() -> None:
     webhook = Route("POST", "/w/{webhook_id}/{webhook_token}", webhook_id=1, webhook_token="t")
     assert (webhook.webhook_id, webhook.webhook_token) == (1, "t")
     assert Route("PUT", "/g/{guild_id}", guild_id=2).guild_id == 2
+    assert Route("GET", "/users/{user_id}", user_id=3).url.endswith("/users/3")
 
 
 async def test_a_real_http_client_cannot_reach_the_network() -> None:

@@ -94,6 +94,11 @@ messages, and SHALL record why.
 - THEN their tasks SHALL stop running
 - AND the reason SHALL be visible when they list their tasks
 
+#### Scenario: A transient delivery failure
+- WHEN an answer fails to send for a transient reason (a platform error)
+- THEN the run SHALL be recorded as failed
+- AND no task SHALL stop running
+
 ### Requirement: Removing a person removes their tasks
 
 The system SHALL delete a person's scheduled tasks when their data is removed.

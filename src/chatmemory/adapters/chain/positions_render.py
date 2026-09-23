@@ -55,19 +55,25 @@ def fee_tier(fee: int) -> str:
     return f"{Decimal(fee) / 10000:f}".rstrip("0").rstrip(".") + "%"
 
 
-def _quote(p: LiquidityPosition) -> tuple[TokenInfo, TokenInfo, Decimal, Decimal, Decimal]:
+def orient(
+    t0: TokenInfo, t1: TokenInfo, price: Decimal, low: Decimal, high: Decimal
+) -> tuple[TokenInfo, TokenInfo, Decimal, Decimal, Decimal]:
     """(base, quote, price, low, high) in the orientation people read.
 
     Priced in the stablecoin when there is one, else in ether, else as the
-    pool orders them. The pool's own price is token1 per token0.
+    pool orders them. The pool's own price is token1 per token0. Public
+    because a position alert quotes the same range the same way.
     """
-    t0, t1 = p.token0, p.token1
     invert = (t0.is_stable and not t1.is_stable) or (
         t0.is_ether and not t1.is_ether and not t1.is_stable
     )
-    if not invert or not p.price:
-        return t0, t1, p.price, p.price_lower, p.price_upper
-    return t1, t0, 1 / p.price, 1 / p.price_upper, 1 / p.price_lower
+    if not invert or not price:
+        return t0, t1, price, low, high
+    return t1, t0, 1 / price, 1 / high, 1 / low
+
+
+def _quote(p: LiquidityPosition) -> tuple[TokenInfo, TokenInfo, Decimal, Decimal, Decimal]:
+    return orient(p.token0, p.token1, p.price, p.price_lower, p.price_upper)
 
 
 def _range_line(p: LiquidityPosition) -> str:

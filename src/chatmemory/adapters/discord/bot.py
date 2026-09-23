@@ -971,41 +971,46 @@ class DiscordTaskMessenger:
     """Delivers a scheduled task's answer as a direct message.
 
     Separate from `DiscordNotificationSender` although both send a DM: that one
-    renders a notification draft and reports a three-way `DeliveryResult`, and
-    this one sends an answer somebody asked for and needs only "did it arrive".
-    Sharing them would mean one class serving two vocabularies.
+    renders a notification draft, and this one sends a finished text somebody
+    asked for. Both report the same three-way `DeliveryResult`, so a caller
+    stops work only on CLOSED and a Discord blip (FAILED) stops nothing.
 
     The 403 handling is the same because the fact is the same: Discord answers
     a closed DM with 403, and treating that as transient means knocking on a
     door that has been shut.
     """
 
-    def __init__(self, user: Callable[[int], Awaitable[Any]]) -> None:
+    def __init__(
+        self, user: Callable[[int], Awaitable[Any]], prefix: str = SCHEDULED_PREFIX
+    ) -> None:
         self._user = user
+        # Empty for position alerts, whose text carries its own heading in the
+        # language the alert was made in.
+        self._prefix = prefix
 
-    async def deliver(self, person: PersonRef, task_id: int, text: str) -> bool:
+    async def deliver(self, person: PersonRef, task_id: int, text: str) -> DeliveryResult:
         try:
             recipient = await self._user(person.platform_user_id)
         except discord.NotFound:
             # The account is gone. Permanent, and shaped like a closed DM.
             log.info("schedules.user_not_found", person=str(person))
-            return False
+            return DeliveryResult.CLOSED
         except discord.HTTPException:
+            # Transient: nothing was sent, and nothing is stopped for it.
             log.warning("schedules.user_lookup_failed", person=str(person))
-            # Transient: reported as undelivered, but the caller only stops a
-            # task on a refusal, so this simply means nothing was sent.
-            return False
+            return DeliveryResult.FAILED
         if recipient is None:
-            return False
+            return DeliveryResult.CLOSED
         try:
-            for piece in split_message(f"{SCHEDULED_PREFIX}\n{text}"):
+            body = f"{self._prefix}\n{text}" if self._prefix else text
+            for piece in split_message(body):
                 await recipient.send(piece, allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
-            return False
+            return DeliveryResult.CLOSED
         except discord.HTTPException:
             log.warning("schedules.not_delivered", person=str(person), task_id=task_id)
-            return False
-        return True
+            return DeliveryResult.FAILED
+        return DeliveryResult.SENT
 
 
 class CyberFriendClient(discord.Client):
