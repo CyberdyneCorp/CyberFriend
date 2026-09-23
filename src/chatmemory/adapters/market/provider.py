@@ -95,6 +95,7 @@ class MarketProvider(ABC):
         client: httpx.AsyncClient | None = None,
         secret_values: Sequence[str] = (),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if closed_vocabulary_for(server) is None:
             raise ValueError(
@@ -110,6 +111,7 @@ class MarketProvider(ABC):
         self._limiter = limiter or RateLimiter()
         self._timeout = timeout_seconds
         self._client = client
+        self._transport = transport
         self._now = now
         # SerpApi takes its key as a query parameter, and an HTTP error's text
         # carries the URL. Anything secret is scrubbed from every log line.
@@ -190,6 +192,7 @@ class MarketProvider(ABC):
             # Frankfurter's old host answers with one, which is why the
             # endpoint is the new host rather than a followed redirect.
             follow_redirects=False,
+            transport=self._transport,
         )
 
     # --- the guarded call ------------------------------------------------

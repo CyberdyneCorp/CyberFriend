@@ -39,12 +39,12 @@ way.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
 
 import structlog
 
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.reasoning.budgets import Budget, BudgetLedger
 from chatmemory.app.reasoning.contract import Decision, failure_answer
 from chatmemory.app.reasoning.errors import RetrievalUnavailable
@@ -400,7 +400,7 @@ class CatchUpService:
         synthesizer: Synthesizer,
         *,
         limit: int = CATCH_UP_WINDOWS,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Clock = utc_now,
     ) -> None:
         self._retrieval = retrieval
         self._synthesizer = synthesizer

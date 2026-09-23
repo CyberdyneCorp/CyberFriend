@@ -5,8 +5,8 @@ thing it reaches the outside world through. Two things are proved here: that
 production still builds the same edges it always did, and that nothing inside
 `assemble` or `build_answer_stack` builds a model, embedding client or engine
 of its own -- which is what would let an end-to-end test silently exercise a
-different graph. Outbound HTTP (federation, tracing) is not routed through the
-edges yet, so it is not checked here.
+different graph. The HTTP transport and the clock are proved to reach their
+users in `test_transport_and_clock_seam`.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from chatmemory.adapters.llm.chat import OpenAICompatibleChat
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
+from chatmemory.app.clock import utc_now
 from chatmemory.app.reasoning.errors import ConfigurationError
 from chatmemory.app.reasoning.ports import (
     ChatModel,
@@ -29,7 +30,7 @@ from chatmemory.app.reasoning.ports import (
     ToolCompletion,
     ToolDefinition,
 )
-from chatmemory.composition import Edges, build_answer_stack, utc_now
+from chatmemory.composition import Edges, build_answer_stack
 from chatmemory.config import Settings
 from chatmemory.entrypoints.bot import Process, assemble, build_bot
 from tests.unit.test_composition import FakeEmbeddings
@@ -142,8 +143,8 @@ def test_nothing_between_the_edges_builds_a_model_or_engine_of_its_own() -> None
     """Each of these is an edge; built inside, a fake handed in is ignored.
 
     Only calls made directly in the two bodies are checked, and only for the
-    model, embedding and engine edges: federation and tracing still open their
-    own HTTP clients until the transport is threaded through.
+    model, embedding and engine edges; the transport and clock are checked
+    where they are used, in `test_transport_and_clock_seam`.
     """
     stack = _function(COMPOSITION, "build_answer_stack")
     for edge in ("build_chat_model", "build_embeddings", "create_async_engine"):

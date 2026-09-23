@@ -36,8 +36,9 @@ import json
 import re
 import secrets
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.reasoning.evidence import Evidence
 from chatmemory.app.reasoning.ports import (
     NO_CONTEXT,
@@ -225,7 +226,7 @@ def clock_notice(now: datetime | None = None) -> str:
     UTC and labelled, because a time without a zone is worse than no time: it
     reads as local to whoever is looking.
     """
-    moment = now or datetime.now(UTC)
+    moment = now or utc_now()
     return (
         f"The current date and time is {moment.strftime('%A %d %B %Y, %H:%M')} UTC. "
         "Use it to interpret words like today, yesterday, this week and recent, "
@@ -421,8 +422,9 @@ class ModelCritic:
 
 
 class ModelPlanner:
-    def __init__(self, model: ChatModel) -> None:
+    def __init__(self, model: ChatModel, clock: Clock = utc_now) -> None:
         self._model = model
+        self._clock = clock
 
     async def plan(
         self, question: str, max_steps: int, context: PromptContext = NO_CONTEXT
@@ -431,6 +433,7 @@ class ModelPlanner:
             PLANNER_SYSTEM,
             f"Question: {as_untrusted(question)}\nReturn at most {max_steps} lookups.",
             context,
+            self._clock(),
         )
         completion = await self._model.complete_json(
             system, user, PLANNER_SCHEMA, "question_plan"
@@ -448,8 +451,9 @@ class ModelPlanner:
 
 
 class ModelSynthesizer:
-    def __init__(self, model: ChatModel) -> None:
+    def __init__(self, model: ChatModel, clock: Clock = utc_now) -> None:
         self._model = model
+        self._clock = clock
 
     async def synthesize(
         self,
@@ -461,6 +465,7 @@ class ModelSynthesizer:
             SYNTHESIS_SYSTEM,
             f"Question: {as_untrusted(question)}\n\n{fence(evidence)}",
             context,
+            self._clock(),
         )
         completion = await self._model.complete_json(
             system, user, SYNTHESIS_SCHEMA, "grounded_answer"

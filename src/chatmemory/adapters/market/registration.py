@@ -94,6 +94,9 @@ class MarketToolsConfig:
     coingecko_endpoint: str = COINGECKO_ENDPOINT
     frankfurter_endpoint: str = FRANKFURTER_ENDPOINT
     serpapi_endpoint: str = SERPAPI_ENDPOINT
+    transport: httpx.AsyncBaseTransport | None = None
+    """What every client this package opens sends through. None is httpx's
+    own network transport; a test hands a mock here and nothing leaves."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +162,7 @@ def build_market_tools(
                 limiter=RateLimiter(settings.min_interval_seconds),
                 timeout_seconds=settings.timeout_seconds,
                 client=client,
+                transport=settings.transport,
             ),
             settings.coingecko_endpoint,
         ),
@@ -170,6 +174,7 @@ def build_market_tools(
                 limiter=RateLimiter(settings.min_interval_seconds),
                 timeout_seconds=settings.timeout_seconds,
                 client=client,
+                transport=settings.transport,
             ),
             settings.frankfurter_endpoint,
         ),
@@ -184,6 +189,7 @@ def build_market_tools(
             limiter=RateLimiter(settings.min_interval_seconds),
             timeout_seconds=settings.timeout_seconds,
             client=client,
+            transport=settings.transport,
         )
         providers.append((index, settings.serpapi_endpoint))
     else:

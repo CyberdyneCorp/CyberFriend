@@ -86,6 +86,7 @@ class CoinGeckoProvider(MarketProvider):
         limiter: RateLimiter | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         super().__init__(
             server=MARKET_CRYPTO_PROVIDER,
@@ -97,6 +98,7 @@ class CoinGeckoProvider(MarketProvider):
             limiter=limiter,
             timeout_seconds=timeout_seconds,
             client=client,
+            transport=transport,
         )
 
     def check_arguments(self, arguments: Mapping[str, object]) -> ArgumentCheck:

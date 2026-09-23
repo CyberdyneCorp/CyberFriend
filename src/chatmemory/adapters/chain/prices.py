@@ -47,8 +47,10 @@ class CoinGeckoPrices:
         endpoint: str = COINGECKO_ENDPOINT,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         timeout_seconds: float = 8.0,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._client = client
+        self._transport = transport
         self._endpoint = endpoint
         self._ttl = ttl_seconds
         self._timeout = timeout_seconds
@@ -74,7 +76,7 @@ class CoinGeckoPrices:
         if self._client is not None:
             await self._refresh_with(self._client)
             return
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             await self._refresh_with(client)
 
     async def _refresh_with(self, client: httpx.AsyncClient) -> None:

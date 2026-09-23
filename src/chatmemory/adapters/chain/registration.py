@@ -77,6 +77,9 @@ class ChainToolsConfig:
     max_calls_per_run: int = DEFAULT_CALLS_PER_RUN
     min_interval_seconds: float = DEFAULT_MIN_INTERVAL
     positions_timeout_seconds: float = POSITIONS_TIMEOUT
+    transport: httpx.AsyncBaseTransport | None = None
+    """What every client this package opens sends through. None is httpx's
+    own network transport; a test hands a mock here and nothing leaves."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +139,7 @@ def build_chain_tools(
             key,
             client=client,
             timeout_seconds=settings.timeout_seconds,
+            transport=settings.transport,
         )
         for chain in CHAINS
     ]
@@ -145,7 +149,12 @@ def build_chain_tools(
         RateLimiter(settings.min_interval_seconds),
         # Default rather than required: a deployment that wants raw balances
         # passes its own, and one that passes nothing still gets USD values.
-        prices=prices or CoinGeckoPrices(client=client, timeout_seconds=settings.timeout_seconds),
+        prices=prices
+        or CoinGeckoPrices(
+            client=client,
+            timeout_seconds=settings.timeout_seconds,
+            transport=settings.transport,
+        ),
     )
     positions = PositionsProvider(
         DEPLOYMENTS,
@@ -154,6 +163,7 @@ def build_chain_tools(
         RateLimiter(settings.min_interval_seconds),
         client=client,
         timeout_seconds=settings.positions_timeout_seconds,
+        transport=settings.transport,
     )
     return ChainTools(
         servers=(

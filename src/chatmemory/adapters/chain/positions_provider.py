@@ -107,6 +107,7 @@ class PositionsProvider:
         client: httpx.AsyncClient | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT,
         endpoints: Mapping[str, str] | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not deployments:
             raise ValueError("a positions provider needs at least one chain to read")
@@ -117,6 +118,7 @@ class PositionsProvider:
         self._client = client
         self._timeout = timeout_seconds
         self._endpoints = dict(endpoints or {})
+        self._transport = transport
 
     @asynccontextmanager
     async def opened(self) -> AsyncIterator[ToolSession]:
@@ -151,7 +153,7 @@ class PositionsProvider:
         """The rendered answer. Assumes the address is already cleared."""
         if self._client is not None:
             return await self._report(tool, address, self._client)
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             return await self._report(tool, address, client)
 
     async def _report(self, tool: str, address: str, client: httpx.AsyncClient) -> str:

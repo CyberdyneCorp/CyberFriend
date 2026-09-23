@@ -87,6 +87,7 @@ class WikipediaProvider(WebProvider):
         max_result_chars: int = DEFAULT_MAX_RESULT_CHARS,
         timeout_seconds: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         super().__init__(
             server=WIKIPEDIA_SERVER,
@@ -98,6 +99,7 @@ class WikipediaProvider(WebProvider):
             max_result_chars=max_result_chars,
             timeout_seconds=timeout_seconds,
             client=client,
+            transport=transport,
         )
         split = urlsplit(endpoint)
         # Article links are built against the wiki the API belongs to, so a
