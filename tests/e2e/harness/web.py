@@ -2,7 +2,8 @@
 
 One `httpx.MockTransport` is handed to the graph as `Edges.http_transport`,
 and every provider the federation builds sends through it. A request to a host
-nobody scripted raises rather than returning a default: a scenario that
+nobody scripted raises rather than returning a default, and is recorded, so
+the turn fails even when the provider swallows the error: a scenario that
 reaches somewhere new has changed, and should say so.
 
 The fixtures here are shaped like the real APIs but hold nothing: a wallet
@@ -31,6 +32,26 @@ EMPTY_WORD = "0x" + "0" * 64
 
 class UnexpectedEgress(AssertionError):
     """The graph reached a host no fixture answers for."""
+
+
+class NetworkCanary(AssertionError):
+    """Something opened a real HTTP connection from an end-to-end test."""
+
+
+class NetworkSeal:
+    """The real connections refused while the network is sealed, by host.
+
+    Raising alone is not enough: every provider catches its own failures and
+    answers "could not be reached", so the refusal is also written down here
+    for the harness to fail the turn on afterwards.
+    """
+
+    def __init__(self) -> None:
+        self.refused: list[str] = []
+
+    def refuse(self, request: httpx.Request) -> NetworkCanary:
+        self.refused.append(request.url.host)
+        return NetworkCanary(f"real network call to {request.url.host}")
 
 
 def _rpc_result(call: Mapping[str, Any]) -> object:
@@ -73,14 +94,21 @@ class FakeWeb:
     def __init__(self, fixtures: Mapping[str, Handler]) -> None:
         self._fixtures = dict(fixtures)
         self.calls: list[httpx.Request] = []
+        self.refused: list[str] = []
+        """Hosts refused, kept because the provider that asked swallows the error."""
         self.transport = httpx.MockTransport(self._handle)
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request)
         handler = self._fixtures.get(request.url.host)
         if handler is None:
+            self.refused.append(request.url.host)
             raise UnexpectedEgress(f"no fixture for {request.method} {request.url.host}")
         return handler(request)
+
+    def unscript(self, host: str) -> None:
+        """Stop answering for `host`, as if no fixture had ever covered it."""
+        del self._fixtures[host]
 
     def hosts(self, since: int = 0) -> frozenset[str]:
         return frozenset(r.url.host for r in self.calls[since:])

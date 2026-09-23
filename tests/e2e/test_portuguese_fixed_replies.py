@@ -10,9 +10,11 @@ The known-open replies are strict xfails naming their constant: the suite is
 green, the debt is listed, and fixing one turns its xfail into a failure that
 forces the marker off. `NOTHING_FOUND` is localised today and guards the table.
 
-A broken precondition -- the question no longer reaching the reply it is here
-for -- raises `ScenarioBroken` rather than `AssertionError`, so it errors
-instead of hiding inside an expected failure.
+Each xfail expects `LanguageMismatch` and nothing else, and first checks that
+the reply sent *is* the constant it names. A broken precondition raises
+`ScenarioBroken`, and a harness violation (a command not offered, an
+unscripted host) raises its own error; neither is a `LanguageMismatch`, so
+both fail instead of hiding inside an expected failure.
 """
 
 from __future__ import annotations
@@ -21,9 +23,12 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
+from chatmemory.adapters.discord.bot import CAPABILITIES
+from chatmemory.app.catchup import NAME_THE_CHANNEL
 from chatmemory.app.localise import PORTUGUESE
 from chatmemory.app.reasoning.contract import NOTHING_FOUND
-from tests.e2e.harness.conversation import E2EBot, Turn
+from chatmemory.app.reasoning.service import MCP_CHANGE_REFUSAL
+from tests.e2e.harness.conversation import E2EBot, LanguageMismatch, Turn
 
 
 class ScenarioBroken(RuntimeError):
@@ -37,7 +42,7 @@ def precondition(holds: bool, what: str) -> None:
 
 def open_item(constant: str) -> pytest.MarkDecorator:
     return pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason=f"{constant} is English-only"
+        strict=True, raises=LanguageMismatch, reason=f"{constant} is English-only"
     )
 
 
@@ -61,6 +66,7 @@ async def test_a_bare_mention_from_a_portuguese_speaker(bot: E2EBot) -> None:
     turn = await bot.channel("general", ana).mention_only()
 
     precondition(bool(turn.sent) and not turn.searched, "a bare mention no longer replies")
+    precondition(turn.text.strip() == CAPABILITIES.strip(), f"not CAPABILITIES: {turn.text!r}")
     turn.assert_language("pt")
 
 
@@ -76,27 +82,31 @@ Say = Callable[[E2EBot, str], Awaitable[Turn]]
 
 
 @pytest.mark.parametrize(
-    ("say", "text"),
+    ("say", "text", "reply"),
     [
         pytest.param(
             _say_in_dm,
             "adicione um servidor MCP de issues",
+            MCP_CHANGE_REFUSAL,
             marks=open_item("app.reasoning.service.MCP_CHANGE_REFUSAL"),
             id="mcp-change-refusal",
         ),
         pytest.param(
             _say_in_general,
             "resuma o que perdi em #inexistente",
+            NAME_THE_CHANNEL,
             marks=open_item("app.catchup.NAME_THE_CHANNEL"),
             id="catch-up-refusal",
         ),
     ],
 )
-async def test_a_fixed_refusal_to_a_portuguese_question(bot: E2EBot, say: Say, text: str) -> None:
+async def test_a_fixed_refusal_to_a_portuguese_question(
+    bot: E2EBot, say: Say, text: str, reply: str
+) -> None:
     turn = await say(bot, text)
 
     precondition(
-        bool(turn.sent) and turn.edge() == "NONE",
-        f"{text!r} no longer gets a fixed reply: {turn}",
+        turn.edge() == "NONE" and turn.text.strip() == reply.strip(),
+        f"{text!r} no longer gets the reply its xfail names: {turn}",
     )
     turn.assert_language("pt")

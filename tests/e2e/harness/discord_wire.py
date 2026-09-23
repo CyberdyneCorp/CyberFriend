@@ -36,6 +36,8 @@ import discord
 from discord.http import HTTPClient, Route
 from discord.webhook.async_ import AsyncWebhookAdapter, async_context
 
+from chatmemory.adapters.discord.bot import CyberFriendClient
+
 APP_ID = 424242
 BOT_ID = 900001
 OWNER_ID = 900002
@@ -320,7 +322,7 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
     """
 
     def __init__(self, wire: FakeDiscord) -> None:
-        super().__init__()
+        super().__init__()  # type: ignore[no-untyped-call]
         self._wire = wire
         self.events: list[tuple[str, dict[str, Any]]] = []
 
@@ -348,7 +350,7 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
 class FakeDiscord:
     """One guild, the bot's client inside it, and the wire it talks over."""
 
-    def __init__(self, client: discord.Client, layout: GuildLayout) -> None:
+    def __init__(self, client: CyberFriendClient, layout: GuildLayout) -> None:
         self.client = client
         self.layout = layout
         self.bot_user = user_payload(BOT_ID, "CyberFriend", bot=True)
@@ -372,7 +374,7 @@ class FakeDiscord:
         self.state.http = self.http
         self.client.tree._http = self.http
         await self.client._async_setup_hook()
-        self.state.user = discord.ClientUser(state=self.state, data=self.bot_user)
+        self.state.user = discord.ClientUser(state=self.state, data=self.bot_user)  # type: ignore[arg-type]
         self.state.application_id = APP_ID
         bot_member = member_payload(self.bot_user, [])
         self.guild = self.state._add_guild_from_data(guild_payload(self.layout, bot_member))

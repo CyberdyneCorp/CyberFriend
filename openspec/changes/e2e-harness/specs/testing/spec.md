@@ -111,6 +111,8 @@ were reached, which model stages ran, and memory and fact rows read by SQL.
 - WHEN a scenario makes an HTTP request to a host no fixture answers for, or
   any HTTP client not built over the edges' transport opens a connection
 - THEN the scenario SHALL fail naming the host
+- AND it SHALL fail even when the provider that made the request catches the
+  error and answers as if the host were unreachable
 
 #### Scenario: No database is available
 - WHEN the end-to-end database is unreachable and the run requires one
@@ -129,3 +131,9 @@ were reached, which model stages ran, and memory and fact rows read by SQL.
 #### Scenario: A known-open defect is fixed
 - WHEN a scenario marked as a known-open defect starts passing
 - THEN the suite SHALL fail until the marker is removed
+
+#### Scenario: A known-open defect scenario breaks some other way
+- WHEN a scenario marked as a known-open defect fails for a reason other than
+  the defect it names -- the reply is no longer the one it names, or a
+  harness check fails
+- THEN the scenario SHALL fail rather than count as the expected failure

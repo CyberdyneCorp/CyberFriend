@@ -16,19 +16,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from chatmemory.composition import available_commands
+from chatmemory.app.self_description import ALWAYS_AVAILABLE, NOTIFICATIONS, SCHEDULED
 from tests.e2e.harness.conversation import E2EBot
 from tests.e2e.harness.discord_wire import CommandNotOffered
-from tests.e2e.harness.process import GUILD_ID, e2e_settings
+from tests.e2e.harness.process import GUILD_ID
 
 SNAPSHOT = Path(__file__).parent / "snapshots" / "commands.json"
 PERSONAL = {"ask", "resolve", "forget", "notifications", "channels", "schedule"}
 GUILD_ONLY = {"index", "unindex"}
+_EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED)
+_LISTED = re.compile(r"`/([a-z]+)")
 
 
 def _registration(bot: E2EBot) -> dict[str, Any]:
@@ -71,11 +74,29 @@ def test_the_registration_matches_the_snapshot(bot: E2EBot) -> None:
     assert registration == json.loads(SNAPSHOT.read_text())
 
 
-def test_every_command_self_description_advertises_is_offered(
-    bot: E2EBot, e2e_database_url: str
+@pytest.mark.parametrize("where", ["dm", "general"])
+async def test_every_command_self_description_advertises_is_offered(
+    bot: E2EBot, where: str
 ) -> None:
-    advertised = {c.name.split()[0] for c in available_commands(e2e_settings(e2e_database_url))}
-    assert advertised <= bot.discord.offered(dm=False)
+    """Asked in a DM, the reply named `/index` and `/unindex`, which Discord
+    lists only in the server. `E2EBot.turn` fails on that; this also pins that
+    the reply lists commands at all, so the check has something to check."""
+    ana = bot.person("Ana")
+    talk = bot.dm(ana) if where == "dm" else bot.channel(where, ana)
+
+    turn = await talk.say("what can you do?")
+
+    advertised = set(_LISTED.findall(turn.text))
+    assert not turn.searched
+    assert {"ask", "forget"} <= advertised
+    assert advertised <= bot.discord.offered(dm=where == "dm")
+
+
+def test_the_guild_only_commands_described_are_the_ones_synced_to_the_guild(
+    bot: E2EBot,
+) -> None:
+    guild = {c["name"] for c in bot.discord.http.guild_commands[GUILD_ID]}
+    assert {c.name for c in _EVERY_COMMAND if c.guild_only} == guild
 
 
 async def test_forget_typed_in_a_dm_points_at_a_command_that_is_there(bot: E2EBot) -> None:

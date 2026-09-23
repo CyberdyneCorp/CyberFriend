@@ -22,12 +22,24 @@ from discord.http import HTTPClient, Route
 from discord.state import ConnectionState
 from discord.webhook import async_ as webhook_async
 
-from tests.e2e.conftest import NetworkCanary
-from tests.e2e.harness.web import FakeWeb, UnexpectedEgress
+from chatmemory.adapters.chain.rpc import ChainReader
+from chatmemory.adapters.chain.tokens import ETHEREUM
+from tests.e2e.harness.conversation import E2EBot, LanguageMismatch
+from tests.e2e.harness.discord_wire import (
+    CommandMentionedButNotOffered,
+    CommandNotOffered,
+    UnexpectedDiscordCall,
+)
+from tests.e2e.harness.model import UnscriptedCall
+from tests.e2e.harness.web import INFURA_HOSTS, FakeWeb, NetworkCanary, UnexpectedEgress
+
+WALLET = "0xB26B933a075fBB3D4E8b0925CAd4f2bc345475e0"
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Every private name `harness/discord_wire.py` touches, by owner.
+# Every private name `harness/discord_wire.py` touches, by owner. Instance
+# attributes (`Client._connection`, `CommandTree._http`) have no class
+# attribute to find, so each has a source check below instead.
 INTERNALS = [
     (ConnectionState, "_add_guild_from_data"),
     (ConnectionState, "_get_private_channel"),
@@ -69,6 +81,11 @@ def test_the_webhook_adapter_is_chosen_per_context() -> None:
     assert isinstance(webhook_async.async_context, ContextVar)
 
 
+def test_the_client_keeps_its_connection_state_in_connection() -> None:
+    """`FakeDiscord.state`: every guild, member, message and interaction is built on it."""
+    assert "self._connection" in inspect.getsource(discord.Client.__init__)
+
+
 def test_the_command_tree_keeps_its_own_http_client() -> None:
     """Why `FakeDiscord.start` replaces `tree._http` as well as `client.http`."""
     assert "self._http = client.http" in inspect.getsource(app_commands.CommandTree.__init__)
@@ -101,3 +118,49 @@ async def test_a_host_no_fixture_answers_for_is_refused() -> None:
     async with httpx.AsyncClient(transport=web.transport) as client:
         with pytest.raises(UnexpectedEgress):
             await client.get("https://example.com/")
+
+
+async def test_a_provider_that_swallows_an_unscripted_host_still_fails_the_turn(
+    bot: E2EBot,
+) -> None:
+    """The chain provider catches the refusal and answers "could not be
+    reached"; the turn must fail anyway, naming the host."""
+    for host in INFURA_HOSTS:
+        bot.web.unscript(host)
+
+    with pytest.raises(UnexpectedEgress, match="mainnet.infura.io"):
+        await bot.dm(bot.person("Leo")).say(f"Que posicoes no Uniswap temos em {WALLET}")
+
+
+async def test_a_provider_off_the_transport_fails_the_turn_it_ran_in(bot: E2EBot) -> None:
+    """A real provider built without the edges' transport: it swallows the
+    canary and reports the chain unreachable, and the turn still fails."""
+    reader = ChainReader(ETHEREUM, "e2e-infura")
+    read: list[object] = []
+
+    async def act() -> None:
+        read.append(await reader.balances(WALLET, ()))
+
+    with pytest.raises(NetworkCanary, match="mainnet.infura.io"):
+        await bot.turn(act)
+    assert read and getattr(read[0], "unreachable", None), "the provider did not swallow it"
+
+
+@pytest.mark.parametrize(
+    "violation",
+    [
+        CommandMentionedButNotOffered,
+        CommandNotOffered,
+        UnexpectedDiscordCall,
+        UnexpectedEgress,
+        NetworkCanary,
+        UnscriptedCall,
+    ],
+    ids=lambda v: v.__name__,
+)
+def test_a_harness_violation_cannot_satisfy_a_known_open_language_xfail(
+    violation: type[Exception],
+) -> None:
+    """The open-item xfails expect `LanguageMismatch` only; a violation that
+    were one would be absorbed as the expected failure."""
+    assert not issubclass(violation, LanguageMismatch)

@@ -29,6 +29,7 @@ from sqlalchemy.pool import NullPool
 
 from tests.e2e.harness.conversation import E2EBot
 from tests.e2e.harness.process import NOW, e2e_settings, start
+from tests.e2e.harness.web import NetworkSeal
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_URL = "postgresql+asyncpg://chatmemory:chatmemory@localhost:5432/chatmemory"
@@ -146,35 +147,37 @@ async def clean(e2e_database_url: str) -> AsyncIterator[AsyncEngine]:
 # --- the network ----------------------------------------------------------
 
 
-class NetworkCanary(AssertionError):
-    """Something opened a real HTTP connection from an end-to-end test."""
-
-
 @pytest.fixture(autouse=True)
-def sealed_network(monkeypatch: pytest.MonkeyPatch) -> None:
+def sealed_network(monkeypatch: pytest.MonkeyPatch) -> NetworkSeal:
     """Every httpx client not built over `Edges.http_transport` fails loudly.
 
     The fake transport is an `httpx.MockTransport`, so it is untouched; httpx's
-    real transports -- which the OpenAI SDK also sends through -- raise.
+    real transports -- which the OpenAI SDK also sends through -- raise, and
+    the seal records the host so `E2EBot.turn` fails even when a provider
+    catches the error.
     """
+    seal = NetworkSeal()
 
     async def refuse_async(self: Any, request: httpx.Request) -> httpx.Response:
-        raise NetworkCanary(f"real network call to {request.url.host}")
+        raise seal.refuse(request)
 
     def refuse(self: Any, request: httpx.Request) -> httpx.Response:
-        raise NetworkCanary(f"real network call to {request.url.host}")
+        raise seal.refuse(request)
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", refuse_async)
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", refuse)
+    return seal
 
 
 # --- the bot ----------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
-async def bot(clean: AsyncEngine, e2e_database_url: str) -> AsyncIterator[E2EBot]:
+async def bot(
+    clean: AsyncEngine, e2e_database_url: str, sealed_network: NetworkSeal
+) -> AsyncIterator[E2EBot]:
     """The production process over fake edges, in a guild with a seeded corpus."""
-    e2e = await start(e2e_settings(e2e_database_url), clean)
+    e2e = await start(e2e_settings(e2e_database_url), clean, sealed_network)
     await e2e.seed_corpus(DEFAULT_CORPUS)
     try:
         yield e2e

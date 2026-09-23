@@ -133,7 +133,10 @@ calls recorded), a scripted chat model and hashed embeddings, and one
 `httpx.MockTransport` for every outbound provider. The database is real:
 `TEST_DATABASE_URL` (the compose pgvector, after `just migrate`), or a
 throwaway testcontainers pgvector when that is unreachable. Any other HTTP
-connection fails the test.
+connection, or a request to a host no fixture answers for, fails the turn that
+made it -- also when the provider that made it caught the error and answered
+"could not be reached". The corpus is seeded through the production store and
+embedding worker, so its windows carry message ids as ingest leaves them.
 
 Scenarios assert only what an outsider could see: what Discord received,
 whether the corpus was searched, which hosts were reached, which model stages
@@ -149,6 +152,10 @@ checked against the commands Discord offers where it said it.
   them and fails first on an upgrade that moves one.
 - A known-open defect is a strict `xfail` whose reason names the constant.
   Fixing it turns the xfail into a failure, so the marker comes off with the fix.
+  It expects `LanguageMismatch` only, and first checks the reply sent is that
+  constant, so a harness failure or a changed reply is not absorbed by it.
+- `mypy` checks `tests/e2e` as well as the package, so the harness's
+  `type: ignore`s against discord.py are verified, not assumed.
 
 A fix for a production bug adds a scenario here that replays the transcript
 that failed -- the message, and the reply that was wrong -- as well as a unit

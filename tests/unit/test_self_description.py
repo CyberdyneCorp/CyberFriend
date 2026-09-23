@@ -6,10 +6,13 @@ import pytest
 
 from chatmemory.app.routing import self_description_question
 from chatmemory.app.self_description import (
+    ALWAYS_AVAILABLE,
+    INDEX,
+    UNINDEX,
     SelfDescriptionAnswerService,
     describe_capabilities,
 )
-from chatmemory.domain.audience import private_audience
+from chatmemory.domain.audience import Audience, DeliveryMode, private_audience
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.answers import Answer, Question
 
@@ -158,3 +161,30 @@ def test_questions_about_the_team_still_reach_the_corpus(question: str) -> None:
     """The bound that matters in the other direction: a question mentioning
     tools is usually about the team's tools, not the assistant's."""
     assert not self_description_question(question)
+
+
+def _in_channel(text: str) -> Question:
+    visible = frozenset({GENERAL})
+    audience = Audience(
+        mode=DeliveryMode.PUBLIC_CHANNEL,
+        members=frozenset({ASKER}),
+        readable_channels=visible,
+        destination=GENERAL,
+    )
+    return Question(text=text, asker=Viewer(ASKER, visible), audience=audience)
+
+
+async def test_a_dm_is_not_told_about_guild_only_commands() -> None:
+    """Asked in a DM, the reply named `/index` and `/unindex`, which Discord
+    only lists in the server: a person told to pick them found no such entry."""
+    service = SelfDescriptionAnswerService(Recording(), commands=ALWAYS_AVAILABLE)
+
+    in_dm = (await service.answer(q("what can you do?"))).text
+    in_channel = (await service.answer(_in_channel("what can you do?"))).text
+
+    for command in (INDEX, UNINDEX):
+        assert f"`/{command.name}`" not in in_dm
+        assert f"`/{command.name}`" in in_channel
+    for command in ALWAYS_AVAILABLE:
+        if not command.guild_only:
+            assert f"`/{command.name}`" in in_dm

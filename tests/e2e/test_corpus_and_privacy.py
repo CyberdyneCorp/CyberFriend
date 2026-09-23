@@ -34,7 +34,7 @@ async def test_a_channel_question_is_answered_from_the_archive_and_cited(bot: E2
     assert reply.via == "reply" and reply.channel_id == GENERAL
     assert COFFEE in reply.content
     assert "-# **From this server:**" in reply.content
-    assert f"https://discord.com/channels/7/{GENERAL}" in reply.content
+    assert f"https://discord.com/channels/7/{GENERAL}/{bot.corpus[COFFEE]}" in reply.content
     assert COLLEAGUE_CRYPTO not in reply.content
     turn.assert_language("en")
 

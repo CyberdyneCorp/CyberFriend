@@ -7,8 +7,10 @@ the real tables, never from the service under test. None of that depends on
 how the bot decides a route internally, so these scenarios keep passing
 unchanged when the routing is rewritten -- and fail when its effect changes.
 
-After every turn the harness drains background summaries and checks that each
-`/name` the bot said is a command Discord offers where it said it.
+After every turn the harness drains background summaries, fails if any request
+was refused -- a host no fixture answers for, or a real connection -- even when
+the provider that made it swallowed the error, and checks that each `/name` the
+bot said is a command Discord offers where it said it.
 """
 
 from __future__ import annotations
@@ -26,16 +28,37 @@ from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.discord import bot as discord_bot
+from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app import ask, catchup, localise
 from chatmemory.app.asks import obligations
+from chatmemory.app.ingest import EmbeddingWorker
 from chatmemory.app.language import Language, detect
 from chatmemory.app.reasoning import contract, loop, service
+from chatmemory.domain.identity import ChannelRef, PersonRef
+from chatmemory.domain.messages import Message, Window
 from chatmemory.entrypoints.bot import Process
-from tests.e2e.harness.discord_wire import CommandMentionedButNotOffered, FakeDiscord, Sent
+from tests.e2e.harness.discord_wire import (
+    CommandMentionedButNotOffered,
+    FakeDiscord,
+    Sent,
+    snowflake,
+)
 from tests.e2e.harness.model import HashEmbeddings, ScriptedChat
-from tests.e2e.harness.web import BLOCKSCOUT_HOSTS, INFURA_HOSTS, PRICE_HOSTS, FakeWeb
+from tests.e2e.harness.web import (
+    BLOCKSCOUT_HOSTS,
+    INFURA_HOSTS,
+    PRICE_HOSTS,
+    FakeWeb,
+    NetworkCanary,
+    NetworkSeal,
+    UnexpectedEgress,
+)
 
 Edge = Literal["CORPUS", "CHAIN", "MARKET", "WEB", "NONE"]
+
+PLATFORM = discord_bot.PLATFORM
+COLLEAGUE = PersonRef(PLATFORM, 800_001)
+"""Who wrote the seeded corpus: somebody who is not a member in any scenario."""
 
 CHAIN_HOSTS = frozenset(INFURA_HOSTS + BLOCKSCOUT_HOSTS)
 MARKET_HOSTS = frozenset({*PRICE_HOSTS, "api.frankfurter.dev"})
@@ -90,6 +113,14 @@ def english_fixed_replies() -> frozenset[str]:
 ENGLISH_FIXED_REPLIES = english_fixed_replies()
 
 
+class LanguageMismatch(AssertionError):
+    """A turn said something in the other language.
+
+    Its own type, so a known-open language defect can be marked as expecting
+    exactly this -- and a harness violation in the same scenario still fails.
+    """
+
+
 @dataclass(frozen=True)
 class Turn:
     """What one message or command produced, seen from outside the process."""
@@ -120,10 +151,12 @@ class Turn:
         for line in self.text.splitlines():
             if line.startswith("-#") or len(line.split()) < 4:
                 continue
-            assert detect(line) is not other, f"{other} line in a {lang} turn: {line!r}"
+            if detect(line) is other:
+                raise LanguageMismatch(f"{other} line in a {lang} turn: {line!r}")
         if lang == "pt":
             leaked = sorted(s for s in ENGLISH_FIXED_REPLIES if s in self.text)
-            assert not leaked, f"fixed English reply in a Portuguese turn: {leaked}"
+            if leaked:
+                raise LanguageMismatch(f"fixed English reply in a Portuguese turn: {leaked}")
 
 
 class _SearchSpy:
@@ -205,13 +238,16 @@ class E2EBot:
         chat: ScriptedChat,
         web: FakeWeb,
         embeddings: HashEmbeddings,
+        seal: NetworkSeal,
     ) -> None:
         self.process = process
+        self.seal = seal
         self.discord = discord
         self.chat = chat
         self.web = web
         self.embeddings = embeddings
         self.engine: AsyncEngine = process.stack.engine
+        self.corpus: dict[str, int] = {}
         self._search = _SearchSpy(process.stack.search)
         # An instance attribute shadows the method for this object only: the
         # real search still runs, and every other instance is untouched.
@@ -230,8 +266,10 @@ class E2EBot:
         """Run one inbound event to completion and report what it touched."""
         sent, hosts, calls = len(self.discord.http.sent), len(self.web.calls), len(self.chat.calls)
         searches = self._search.calls
+        refused, sealed = len(self.web.refused), len(self.seal.refused)
         await act()
         await self.process.conversations.drain()
+        self._check_nothing_refused(self.web.refused[refused:], self.seal.refused[sealed:])
         turn = Turn(
             sent=tuple(self.discord.http.sent[sent:]),
             searched=self._search.calls > searches,
@@ -240,6 +278,15 @@ class E2EBot:
         )
         self._check_commands_offered(turn)
         return turn
+
+    @staticmethod
+    def _check_nothing_refused(unscripted: Sequence[str], real: Sequence[str]) -> None:
+        """Providers answer "could not be reached" rather than raise, so a
+        refused request is failed here, after the fact, naming the host."""
+        if real:
+            raise NetworkCanary(f"real network call to {', '.join(sorted(set(real)))}")
+        if unscripted:
+            raise UnexpectedEgress(f"no fixture for {', '.join(sorted(set(unscripted)))}")
 
     def _check_commands_offered(self, turn: Turn) -> None:
         for sent in turn.sent:
@@ -254,31 +301,22 @@ class E2EBot:
                     )
 
     async def seed_corpus(self, windows: Sequence[tuple[str, str, datetime]]) -> None:
-        """Archived conversation windows, inserted the way ingest leaves them."""
-        async with self.engine.begin() as conn:
-            for spec in self.discord.layout.channels:
-                await conn.execute(
-                    text(
-                        "INSERT INTO channel (id, platform, name, is_indexed) "
-                        "VALUES (:id, 'discord', :n, TRUE) ON CONFLICT DO NOTHING"
-                    ),
-                    {"id": spec.id, "n": spec.name},
-                )
-            for name, body, at in windows:
-                await conn.execute(
-                    text(
-                        "INSERT INTO conversation_window "
-                        "(channel_id, text, starts_at, ends_at, search_tsv, embedding) "
-                        "VALUES (:c, :t, :s, :s, to_tsvector('english', :t), "
-                        "CAST(:e AS vector))"
-                    ),
-                    {
-                        "c": self.discord.channel(name).id,
-                        "t": body,
-                        "s": at,
-                        "e": "[" + ",".join(f"{v:.6f}" for v in self.embeddings.vector(body)) + "]",
-                    },
-                )
+        """Archived messages, each its own window, written the way ingest writes them.
+
+        Through the production store and embedding worker, so a window carries
+        its message ids and a citation links to the message. `corpus` maps
+        each text to its message id.
+        """
+        store = PostgresStore(self.engine)
+        for name, body, at in windows:
+            channel = ChannelRef(PLATFORM, self.discord.channel(name).id)
+            message_id = snowflake()
+            await store.upsert_messages(
+                [Message(message_id, channel, COLLEAGUE, body, at, author_display="Colleague")]
+            )
+            await store.replace_windows(channel, [Window(channel, (message_id,), body, at, at)])
+            self.corpus[body] = message_id
+        await EmbeddingWorker(store, self.embeddings, batch_size=len(windows) or 1).run_once()
 
     async def facts_of(self, who: discord.Member) -> dict[str, str]:
         """The person's stored facts, by SQL."""
