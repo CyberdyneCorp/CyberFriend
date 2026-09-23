@@ -15,6 +15,7 @@ import pytest
 
 from chatmemory.app.language import Language, detect
 from chatmemory.app.self_description import (
+    ALERTS,
     ALWAYS_AVAILABLE,
     NOTIFICATIONS,
     SCHEDULED,
@@ -193,5 +194,15 @@ def _registered_commands() -> set[str]:
 def test_the_described_commands_are_exactly_the_registered_ones() -> None:
     """A command added to the bot and forgotten here goes unmentioned for
     ever, which is how it came to list one of six."""
-    described = {c.name for c in (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED)}
+    described = {c.name for c in (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED, *ALERTS)}
     assert described == _registered_commands()
+
+
+def test_the_alert_commands_are_described_in_both_languages() -> None:
+    """`/alert list` and `/alert delete` are registered, and so described."""
+    assert {c.name for c in ALERTS} == {"alert list", "alert delete"}
+    english = describe_capabilities((), commands=ALERTS, language=Language.ENGLISH)
+    portuguese = describe_capabilities((), commands=ALERTS, language=Language.PORTUGUESE)
+    for command in ALERTS:
+        assert f"`/{command.name}` — {command.english}" in english
+        assert f"`/{command.name}` — {command.portuguese}" in portuguese

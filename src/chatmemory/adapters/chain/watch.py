@@ -203,7 +203,7 @@ def calls_for(alert: PositionAlert, deployment: Deployment, aave_pool: str) -> l
 
 def decode(alert: PositionAlert, results: Sequence[bytes | None]) -> Observation:
     if alert.kind is AlertKind.AAVE_HEALTH:
-        return _health(results[0])
+        return health_reading(results[0])
     if alert.lp is None:
         return ReadFailure("no position stored")
     if alert.lp.protocol is LpProtocol.UNISWAP_V3:
@@ -269,7 +269,7 @@ def lp_observation(
     )
 
 
-def _health(raw: bytes | None) -> Observation:
+def health_reading(raw: bytes | None) -> Observation:
     if raw is None:
         return ReadFailure("Aave did not answer")
     collateral, debt, _, _, _, health = abi.words(raw)[:6]

@@ -136,6 +136,7 @@ from chatmemory.composition import (
     AnswerStack,
     Edges,
     ask_policy,
+    build_alert_requests,
     build_alert_runner,
     build_answer_stack,
     build_ask_service,
@@ -215,7 +216,7 @@ class BotGraph:
     # which is also when the commands say it is unavailable.
     tasks: ScheduledTaskRunner | None = None
     #: The position-alert sweep. None unless `ALERTS_ENABLED` with an Infura
-    #: key, and there is still no way to create one until the commands land.
+    #: key; alerts are created by asking and confirming, under the same switch.
     alerts: AlertRunner | None = None
     #: The queue drain. None when no engine was handed in, or when an
     #: operator has switched notifications off -- in which case nothing in
@@ -236,6 +237,7 @@ def build_bot(
     catchup: CatchUpService | None = None,
     notifications: AsyncEngine | None = None,
     alert_transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock = utc_now,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -254,6 +256,14 @@ def build_bot(
         # against fakes, not to re-describe discord.py's type hierarchy.
         return cast(_Guild | None, client.get_guild(settings.discord_guild_id))
 
+    # Alert requests: the creation read through `alert_transport`, the first
+    # check timed by `clock`. None unless alerts are on with an Infura key, and
+    # then a request is answered that alerts are not available here.
+    alert_requests = (
+        build_alert_requests(settings, notifications, alert_transport, clock)
+        if notifications is not None
+        else None
+    )
     asks = build_ask_service(
         settings,
         LiveGuild(provider, caches),
@@ -278,6 +288,7 @@ def build_bot(
         # by searching the corpus for those words, which is the behaviour
         # this process had before the feature existed.
         catchup=catchup,
+        alerts=alert_requests,
     )
     if corrections is not None:
         # `/resolve` is registered either way, so without this every attempt to
@@ -286,6 +297,10 @@ def build_bot(
         asks.attach_corrections(corrections)
     client = CyberFriendClient(asks, settings.discord_guild_id)
     attach_permission_listeners(client, caches)
+    if alert_requests is not None:
+        # `/alert list|delete` and the Confirm button. Without it both say
+        # alerts are unavailable here.
+        client.attach_alerts(alert_requests)
     service = None
     if indexing is not None:
         # Without this `/index` and `/unindex` are registered and say they are
@@ -643,6 +658,9 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # every other outbound call, so a test that fakes the network fakes
         # this too.
         alert_transport=edges.http_transport,
+        # When a new alert is first checked: one sweep after it is created, on
+        # the clock the sweep itself runs on.
+        clock=edges.clock,
     )
     return Process(
         graph=graph,

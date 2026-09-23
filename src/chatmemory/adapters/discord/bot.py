@@ -49,12 +49,21 @@ import discord
 import structlog
 from discord import app_commands
 
+from chatmemory.adapters.discord.alerts import (
+    alert_listing,
+    follow_up_with_confirmation,
+    locale_language,
+    reply_with_confirmation,
+)
+from chatmemory.adapters.discord.alerts import word as alert_word
 from chatmemory.adapters.discord.formatting import (
     escape_markdown,
     masked_link,
     sanitize_answer,
     split_message,
 )
+from chatmemory.adapters.discord.views import RequesterOnlyView
+from chatmemory.app.alert_requests import AlertProposal, AlertRequests
 from chatmemory.app.ask import (
     AskRequest,
     AskService,
@@ -592,17 +601,19 @@ class _EditableMessage(Protocol):
     async def edit(self, *, content: str, view: discord.ui.View) -> object: ...
 
 
-class _ApprovalView(discord.ui.View):
+class _ApprovalView(RequesterOnlyView):
     """Two buttons, answerable by one account, for a bounded time.
 
     `requester_id` is taken from the prompt rather than from whoever the
     message was sent to: the prompt says whose decision this is, and that is
-    the only account `interaction_check` will accept.
+    the only account `interaction_check` will accept. A direct-message prompt
+    lives in a real message, and a shared or forwarded one could in principle
+    be pressed by another account; the check means a second person's click
+    never becomes a `ConfirmationReply` at all.
     """
 
     def __init__(self, requester_id: int, window_seconds: float) -> None:
-        super().__init__(timeout=window_seconds)
-        self._requester_id = requester_id
+        super().__init__(requester_id, NOT_YOUR_CONFIRMATION, timeout=window_seconds)
         self._window_seconds = window_seconds
         # The wait is on an event of our own rather than on `View.wait()`.
         # discord.py only starts a view's timer once the message reaches its
@@ -619,28 +630,6 @@ class _ApprovalView(discord.ui.View):
     def sent_as(self, message: _EditableMessage | None) -> None:
         """Remember what the prompt was posted as, so it can be retired."""
         self._message = message
-
-    async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
-        """Refuse a click from anyone but the requester.
-
-        Reachable in a way the ephemeral case is not: a direct-message prompt
-        lives in a real message, and a shared or forwarded one could in
-        principle be pressed by another account. Refusing here means a second
-        person's click never becomes a `ConfirmationReply` at all.
-        """
-        if interaction.user.id == self._requester_id:
-            return True
-        log.warning(
-            "confirmation.button.not_requester",
-            requester_id=self._requester_id,
-            clicked_by=interaction.user.id,
-        )
-        try:
-            await interaction.response.send_message(NOT_YOUR_CONFIRMATION, ephemeral=True)
-        except discord.HTTPException:
-            # Saying so is a courtesy; refusing is the requirement.
-            log.info("confirmation.button.refusal_not_shown")
-        return False
 
     # Approve is styled as the destructive action because it is the one: the
     # green-button habit is what turns a confirmation into a reflex.
@@ -678,9 +667,7 @@ class _ApprovalView(discord.ui.View):
         self.stop()
 
     def _disable_buttons(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        self.disable_buttons()
 
     async def _redraw(self, interaction: discord.Interaction, note: str) -> None:
         try:
@@ -1033,6 +1020,7 @@ class CyberFriendClient(discord.Client):
         self._notifications: NotificationPreferences | None = None
         self._channels: ChannelListingService | None = None
         self._schedules: ScheduleService | None = None
+        self._alerts: AlertRequests | None = None
 
     def attach_indexing(self, indexing: IndexingService) -> None:
         """Give `/index` and `/unindex` somewhere to act.
@@ -1060,6 +1048,15 @@ class CyberFriendClient(discord.Client):
         feature sends messages nobody asked for in the moment.
         """
         self._schedules = schedules
+
+    def attach_alerts(self, alerts: AlertRequests) -> None:
+        """Give `/alert` and the Confirm button somewhere to read and write.
+
+        Attached after construction like the rest. Without it `/alert` is still
+        registered and says alerts are unavailable, and no request can get as
+        far as a Confirm button: the ask service answers it the same way.
+        """
+        self._alerts = alerts
 
     def attach_notifications(self, notifications: NotificationPreferences) -> None:
         """Give `/notifications` somewhere to write.
@@ -1102,6 +1099,10 @@ class CyberFriendClient(discord.Client):
             # A group rather than three flat commands: `create`, `list` and
             # `delete` are one concept, and Discord shows them together.
             self._build_schedule_group(),
+            # Alerts are created by asking in words and pressing Confirm; the
+            # group is how somebody sees and stops them, so it exists wherever
+            # the bot does, like `/notifications`.
+            self._build_alert_group(),
         ):
             self.tree.add_command(_in_guild_and_dm(command))
         # Guild only: these act on a channel. No `default_permissions`: Manage
@@ -1179,6 +1180,57 @@ class CyberFriendClient(discord.Client):
             )
 
         return group
+
+    def _build_alert_group(self) -> app_commands.Group:
+        """`/alert list|delete`: a person's own position alerts.
+
+        No `create`: an alert is asked for in words and confirmed with a
+        button, which shows exactly what will be watched before anything is.
+        Whose alerts these are comes from the interaction, as for `/schedule`,
+        and every reply is private, in the language of the person's client.
+        """
+        alert_group = app_commands.Group(
+            name="alert", description="Your position alerts (range and health factor)"
+        )
+
+        @alert_group.command(name="list", description="Show your position alerts")
+        async def listing(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            language = locale_language(interaction.locale)
+            if self._alerts is None:
+                await interaction.followup.send(
+                    alert_word("unavailable", language), ephemeral=True
+                )
+                return
+            alerts = await self._alerts.list_for(_person(interaction.user))
+            await interaction.followup.send(
+                alert_listing(alerts, language),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        @alert_group.command(name="delete", description="Stop one of your position alerts")
+        @app_commands.describe(alert="The number shown by `/alert list`")
+        async def delete(interaction: discord.Interaction, alert: int) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            language = locale_language(interaction.locale)
+            if self._alerts is None:
+                await interaction.followup.send(
+                    alert_word("unavailable", language), ephemeral=True
+                )
+                return
+            deleted = await self._alerts.delete(_person(interaction.user), alert)
+            # One sentence for "not yours" and "no such alert", as for tasks.
+            note = "deleted" if deleted else "not_yours_alert"
+            await interaction.followup.send(alert_word(note, language), ephemeral=True)
+
+        return alert_group
+
+    async def _confirm_alerts(self, proposal: AlertProposal) -> str:
+        """What the Confirm button does: create what the prompt listed."""
+        if self._alerts is None:
+            return alert_word("unavailable", proposal.language)
+        return await self._alerts.confirm(proposal)
 
     def _build_channels_command(self) -> app_commands.Command[Any, ..., None]:
         """`/channels`: the archived channels this person can read.
@@ -1423,6 +1475,11 @@ class CyberFriendClient(discord.Client):
                 )
                 return
 
+            if outcome.alert is not None:
+                await follow_up_with_confirmation(
+                    interaction, outcome.alert, self._confirm_alerts
+                )
+                return
             assert outcome.scoped is not None
             for part in _messages(outcome.scoped):
                 await interaction.followup.send(
@@ -1472,6 +1529,9 @@ class CyberFriendClient(discord.Client):
             )
             return
 
+        if outcome.alert is not None:
+            await reply_with_confirmation(message, outcome.alert, self._confirm_alerts)
+            return
         assert outcome.scoped is not None
         for index, part in enumerate(_messages(outcome.scoped)):
             if index == 0:

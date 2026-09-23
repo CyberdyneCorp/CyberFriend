@@ -39,10 +39,10 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 import structlog
 
-from chatmemory.app.schedules import TaskMessenger
 from chatmemory.domain.chain import is_address, normalise
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.alerts import (
@@ -69,6 +69,11 @@ from chatmemory.ports.alerts import (
     ReadFailure,
 )
 from chatmemory.ports.notifications import DeliveryResult
+
+if TYPE_CHECKING:
+    # Only a type here: `schedules` imports the ask service, which imports the
+    # alert request flow, which imports this module.
+    from chatmemory.app.schedules import TaskMessenger
 
 log = structlog.get_logger()
 
@@ -394,13 +399,18 @@ def _render_health(firing: Firing, reading: HealthObservation, minutes: int) -> 
 
 
 def render_alert(firing: Firing, sweep_seconds: float = DEFAULT_SWEEP_SECONDS) -> str:
-    """The direct message, in the language fixed when the alert was made."""
+    """The direct message, in the language fixed when the alert was made.
+
+    The last line names the commands that list and stop it, with this alert's
+    number, so the way out is in the message that might prompt it.
+    """
     reading = firing.observation
     if isinstance(reading, LpObservation):
         body = _render_lp(firing, reading)
     else:
         body = _render_health(firing, reading, max(1, round(sweep_seconds / 60)))
-    return f"{PREFIX[firing.alert.language]} — {body}"
+    commands = f"-# `/alert list` · `/alert delete {firing.alert.id}`"
+    return f"{PREFIX[firing.alert.language]} — {body}\n{commands}"
 
 
 # --- running --------------------------------------------------------------

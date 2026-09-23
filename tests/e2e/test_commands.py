@@ -22,15 +22,15 @@ from typing import Any
 
 import pytest
 
-from chatmemory.app.self_description import ALWAYS_AVAILABLE, NOTIFICATIONS, SCHEDULED
+from chatmemory.app.self_description import ALERTS, ALWAYS_AVAILABLE, NOTIFICATIONS, SCHEDULED
 from tests.e2e.harness.conversation import E2EBot
 from tests.e2e.harness.discord_wire import CommandNotOffered
 from tests.e2e.harness.process import GUILD_ID
 
 SNAPSHOT = Path(__file__).parent / "snapshots" / "commands.json"
-PERSONAL = {"ask", "resolve", "forget", "notifications", "channels", "schedule"}
+PERSONAL = {"ask", "resolve", "forget", "notifications", "channels", "schedule", "alert"}
 GUILD_ONLY = {"index", "unindex"}
-_EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED)
+_EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED, *ALERTS)
 _LISTED = re.compile(r"`/([a-z]+)")
 
 

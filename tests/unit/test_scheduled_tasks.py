@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from chatmemory.app.alert_requests import AlertProposal
 from chatmemory.app.ask import AskOutcome, AskRequest
 from chatmemory.app.disclosure import ScopedAnswer
 from chatmemory.app.schedules import (
@@ -21,6 +22,7 @@ from chatmemory.app.schedules import (
     ScheduleService,
 )
 from chatmemory.domain.identity import PersonRef
+from chatmemory.ports.alerts import AlertLanguage
 from chatmemory.ports.answers import Answer
 from chatmemory.ports.notifications import DeliveryResult
 from chatmemory.ports.schedules import DueTask, ScheduledTask, TaskOutcome
@@ -257,6 +259,27 @@ async def test_a_run_with_nothing_to_say_sends_nothing(answer: Answer | None) ->
     assert sent == 0
     assert messenger.sent == []
     # Recorded, so the owner can tell this from a task that never ran.
+    assert store.runs == [(1, TaskOutcome.NOTHING)]
+
+
+async def test_an_alert_proposal_is_never_sent_as_a_scheduled_answer() -> None:
+    """A proposal is a prompt with Confirm and Cancel for somebody present. As
+    plain text in a DM it asks to press buttons that are not there."""
+    store = FakeStore()
+    await ScheduleService(store).create(  # type: ignore[arg-type]
+        LEO, "tell me when my LP goes out of range", 1, now=NOW - timedelta(hours=2)
+    )
+    messenger = FakeMessenger()
+    proposal = AlertProposal(LEO, AlertLanguage.ENGLISH, True, (), "Press **Confirm**")
+
+    class ProposingAsks(FakeAsks):
+        async def ask(self, request, confirm=None, *, metered=True):  # noqa: ANN001
+            answer = ScopedAnswer(Answer(text=proposal.text), frozenset())
+            return AskOutcome(answer, alert=proposal)
+
+    sent = await runner(store, ProposingAsks(), messenger).run_due(NOW)
+
+    assert sent == 0 and messenger.sent == []
     assert store.runs == [(1, TaskOutcome.NOTHING)]
 
 

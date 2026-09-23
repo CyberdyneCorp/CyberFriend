@@ -166,6 +166,22 @@ Naming a command Discord will not show is worse than omitting one, and this is
 the feature where that matters most: somebody told they can schedule a question
 and then unable to will reasonably conclude the assistant is broken."""
 
+ALERT_LIST = Command(
+    "alert list",
+    "Show your position alerts (LP range, Aave health factor) and their state",
+    "Mostrar seus alertas de posição (faixa de LP, health factor do Aave) e o estado",
+)
+ALERT_DELETE = Command(
+    "alert delete",
+    "Stop one of your position alerts",
+    "Parar um dos seus alertas de posição",
+)
+
+ALERTS = (ALERT_LIST, ALERT_DELETE)
+"""Listed only where alerts are on, like `SCHEDULED`. An alert is created by
+asking ("tell me when my LP goes out of range") and pressing Confirm; these are
+how somebody sees and stops theirs."""
+
 ALWAYS_AVAILABLE = (ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE)
 """Commands the bot registers unconditionally.
 
@@ -344,7 +360,7 @@ class SelfDescriptionAnswerService:
         return self._commands
 
 
-_EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED)
+_EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED, *ALERTS)
 
 _TYPED_COMMAND = {
     Language.ENGLISH: (

@@ -64,6 +64,8 @@ class LiquidityPosition:
     #: One side has no oracle price and was valued at this pool's own price,
     #: which for a thin pool can be far from anything it would sell for.
     pool_priced: bool = False
+    #: The v3 pool address or the v4 pool id: what an alert reads the tick from.
+    pool_ref: str = ""
 
     @property
     def in_range(self) -> bool:

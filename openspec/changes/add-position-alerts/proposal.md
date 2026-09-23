@@ -37,9 +37,25 @@ This change is delivered in two pull requests, and this proposal covers both.
 - **Settings** `ALERTS_ENABLED` (default false) and `ALERT_SWEEP_SECONDS`
   (default 300, at least 60), declared in `docker-compose.yml`.
 
-**PR-A2, the surface** (the second half): creating an alert from natural
-language with a confirm button, `/alert list` and `/alert delete`, and the
-deployment switch turned on.
+**PR-A2, the surface** (the second half):
+
+- **Creating an alert by asking**, in English or Portuguese: "tell me when my
+  LP goes out of range", "me avisa se o health factor cair abaixo de 1,3". A
+  deterministic recogniser (`app/alert_intent.py`, route label
+  `ALERT_CREATE`) runs before retrieval and before the positions and wallet
+  routes. The address is one the asker typed (here or in a recent question of
+  theirs) or their saved wallet. The chain is read once and the reply lists
+  exactly what would be watched, with the reading now, and Confirm / Cancel
+  buttons only the asker can press; nothing is stored until Confirm.
+- **`/alert list` and `/alert delete`**, global commands usable in the server
+  and in a DM, keyed on the interaction's user, answered privately in the
+  client's language, and described by the capability reply where alerts are on.
+- **Messages name `/alert list` and `/alert delete <id>`.**
+- **With alerts off** (the setting, or no Infura key) a request is answered
+  that alerts are not available here, never searched for.
+
+The switch stays off by default; the operator turns `ALERTS_ENABLED` on in the
+deployment's configuration.
 
 Non-goals:
 
@@ -73,7 +89,13 @@ side.
 - `DiscordTaskMessenger` takes an optional heading; `positions_render.orient`
   is made public for the watcher.
 - With `ALERTS_ENABLED=false`, the default, nothing is built and nothing is
-  started: production behaves exactly as before.
+  started, and an alert request gets a fixed "not available" reply.
+- PR-A2 adds `app/alert_intent.py`, `app/alert_requests.py`,
+  `adapters/chain/alert_targets.py`, `adapters/discord/alerts.py` and
+  `adapters/discord/views.py` (the requester-only button check, now shared
+  with the tool-approval prompt). `AskOutcome` carries an optional proposal;
+  the positions reader's result carries each position's pool reference, which
+  the positions answer does not show.
 
 ## Risk
 

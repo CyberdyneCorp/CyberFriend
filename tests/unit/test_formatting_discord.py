@@ -41,6 +41,7 @@ class Outcome:
     scoped: ScopedAnswer
     rate_limited: bool = False
     retry_after_seconds: float = 0.0
+    alert: None = None
 
 
 @dataclass

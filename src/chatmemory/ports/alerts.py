@@ -245,6 +245,63 @@ class AlertUpdate:
     disable_reason: str | None = None
 
 
+# --- what creation reads ---------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class LpCandidate:
+    """An open position found at creation, with what the sweep will need.
+
+    The baseline -- in range or not, and where -- is what the confirmation
+    shows, and becomes the alert's first state.
+    """
+
+    chain: str
+    target: LpTarget
+    state: AlertState
+    tick: int
+    price: Decimal
+    price_lower: Decimal
+    price_upper: Decimal
+    base_symbol: str
+    quote_symbol: str
+
+
+@dataclass(frozen=True, slots=True)
+class HealthCandidate:
+    """An Aave account found at creation. `health_factor` is None with no debt."""
+
+    chain: str
+    health_factor: Decimal | None
+    collateral_usd: Decimal = Decimal(0)
+    debt_usd: Decimal = Decimal(0)
+
+
+@dataclass(frozen=True, slots=True)
+class TargetsRead:
+    """What one read of an address found, chain by chain.
+
+    `unreachable` and `incomplete` are chain keys, kept apart from "nothing
+    there": a chain that could not be read must not be confirmed as empty.
+    """
+
+    lp: tuple[LpCandidate, ...] = ()
+    health: tuple[HealthCandidate, ...] = ()
+    unreachable: tuple[str, ...] = ()
+    #: Chains where some positions could not be listed.
+    incomplete: tuple[str, ...] = ()
+
+
+class AlertTargets(Protocol):
+    async def read(self, address: str, kind: AlertKind, chain: str | None) -> TargetsRead:
+        """Open positions or Aave accounts of an already-cleared address.
+
+        `chain` None reads every chain. Never raises for a chain: a chain that
+        fails is named in `unreachable`.
+        """
+        ...
+
+
 class PositionObserver(Protocol):
     async def observe(self, alerts: Sequence[PositionAlert]) -> Mapping[int, Observation]:
         """A reading per alert id. An id left out is a failed reading."""

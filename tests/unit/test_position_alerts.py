@@ -311,10 +311,16 @@ def test_borrowing_from_no_debt_straight_below_the_limit_fires() -> None:
 # --- the messages -------------------------------------------------------------
 
 
-def _fired(alert: PositionAlert, observation: Observation) -> str:
+def _message(alert: PositionAlert, observation: Observation) -> str:
     result = evaluate(alert, observation, NOW)
     assert result.firing is not None
     return render_alert(result.firing)
+
+
+def _fired(alert: PositionAlert, observation: Observation) -> str:
+    """The message without its last line, which names the commands."""
+    body, _, _ = _message(alert, observation).rpartition("\n")
+    return body
 
 
 def test_out_of_range_in_english() -> None:
@@ -390,13 +396,15 @@ def test_small_prices_keep_their_significant_digits() -> None:
     assert number(Decimal("0.000371234"), AlertLanguage.PORTUGUESE) == "0,000371234"
 
 
-def test_no_message_names_a_command_that_does_not_exist_yet() -> None:
-    """`/alert` arrives with the commands; until then a DM must not point at it."""
-    texts = [
-        _fired(lp_alert(pending_state=AlertState.OUT_OF_RANGE, pending_count=1), OUT),
-        _fired(health_alert(), hf("1.28")),
-    ]
-    assert not any("/alert" in t for t in texts)
+def test_every_message_names_the_commands_that_list_and_stop_it() -> None:
+    """The way out is in the message that might prompt somebody to want it."""
+    lp = lp_alert(pending_state=AlertState.OUT_OF_RANGE, pending_count=1)
+    health = health_alert()
+
+    assert _message(lp, OUT).endswith(f"\n-# `/alert list` · `/alert delete {lp.id}`")
+    assert _message(health, hf("1.28")).endswith(
+        f"\n-# `/alert list` · `/alert delete {health.id}`"
+    )
 
 
 # --- creating ------------------------------------------------------------------

@@ -26,6 +26,7 @@ internet said.
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
 | **Wallet balances** | What a `0x` address holds on Ethereum, Base and Arbitrum, with USD values. An address you typed, or the one you saved |
 | **DeFi positions** | Open Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
+| **Position alerts** | Ask *tell me when my LP goes out of range* or *me avisa se o health factor cair abaixo de 1,3*. A Confirm button shows exactly what will be watched, and a DM arrives once when it changes. `/alert list`, `/alert delete`. Off by default |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
@@ -70,10 +71,13 @@ mindmap
       Open Uniswap v3 and v4 positions
       Range, fees, in or out of range
       Aave supplies, borrows, health factor
+      Alerts: LP out of range, health factor below a limit
+      Asked in words, created with a Confirm button
     Commands
       /ask /channels /forget
       /resolve /notifications
       /schedule create, list, delete
+      /alert list, delete
       In the server and in DMs
       /index /unindex in the server
     Operators
@@ -117,6 +121,8 @@ graph LR
     WHEN --> W1["/schedule create, hourly to daily"]
     WHEN --> W2["/schedule list &middot; delete"]
     WHEN --> W3["a DM only when there is something"]
+    WHEN --> W4["tell me when my LP goes out of range &middot; Confirm"]
+    WHEN --> W5["/alert list &middot; delete"]
 
     style P fill:#C8E6C9,stroke:#2E7D32
     style CORPUS fill:#E3F2FD,stroke:#1565C0
@@ -127,8 +133,8 @@ graph LR
 ```
 
 Yellow is everything that leaves the server, and all of it is off until an
-operator turns it on. Purple is the one thing that messages you without being
-asked in the moment.
+operator turns it on. Purple is what messages you without being asked in the
+moment: scheduled questions and position alerts.
 
 ### Commands
 
@@ -141,11 +147,12 @@ asked in the moment.
 | `/resolve` | Close something I said was asked of you |
 | `/notifications` | Turn DMs about obligations on or off |
 | `/schedule create`, `list`, `delete` | Questions asked on a rhythm |
+| `/alert list`, `delete` | Your position alerts, and stopping one. An alert is created by asking in words and pressing Confirm |
 
 Every command except `/index` and `/unindex` works in the server **and in a
 direct message with the bot**; those two act on a channel, so they live in the
-server only. `/notifications` and `/schedule` appear only where those features
-are switched on — a command Discord will not show you is worse than one that is
+server only. `/notifications`, `/schedule` and `/alert` are described only where
+those features are switched on — a command Discord will not show you is worse than one that is
 missing from this table.
 
 ### What it can remember about you
@@ -397,7 +404,7 @@ lists the common ones. The settings worth knowing:
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
-| `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Position alerts (range and health factor). Off by default; no way to create one yet |
+| `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Position alerts (range and health factor), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 

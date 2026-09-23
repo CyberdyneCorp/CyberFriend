@@ -27,9 +27,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.discord import alerts as discord_alerts
 from chatmemory.adapters.discord import bot as discord_bot
 from chatmemory.adapters.store.postgres import PostgresStore
-from chatmemory.app import ask, catchup, localise
+from chatmemory.app import alert_requests, ask, catchup, localise
 from chatmemory.app.asks import obligations
 from chatmemory.app.ingest import EmbeddingWorker
 from chatmemory.app.language import Language, detect
@@ -71,6 +72,8 @@ _COMMAND_MENTION = re.compile(r"(?:^|[\s`(*])/([a-z][a-z0-9_-]{1,31})\b")
 # them is covered without editing a test.
 _FIXED_REPLY_MODULES: tuple[ModuleType, ...] = (
     discord_bot,
+    discord_alerts,
+    alert_requests,
     ask,
     catchup,
     obligations,
@@ -200,15 +203,27 @@ class Conversation:
     async def mention_only(self) -> Turn:
         return await self.say("")
 
-    async def slash(self, name: str, **options: object) -> Turn:
+    async def slash(self, name: str, *, locale: str = "en-US", **options: object) -> Turn:
         """Run a slash command here. Raises `CommandNotOffered` where Discord
-        would not list it."""
+        would not list it. `locale` is the person's Discord client language."""
         wire = self._bot.discord
-        interaction = wire.interaction(self.who, name, options, channel=self.channel)
+        interaction = wire.interaction(
+            self.who, name, options, channel=self.channel, locale=locale
+        )
 
         async def run() -> None:
             with wire.webhooks_installed():
                 await wire.client.tree._call(interaction)
+
+        return await self._bot.turn(run)
+
+    async def press(self, sent: Sent, label: str) -> Turn:
+        """This person presses the button `label` on a message the bot sent."""
+        wire = self._bot.discord
+
+        async def run() -> None:
+            with wire.webhooks_installed():
+                await wire.press(self.who, sent, label)
 
         return await self._bot.turn(run)
 

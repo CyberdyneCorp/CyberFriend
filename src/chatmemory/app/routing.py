@@ -420,6 +420,8 @@ _CONVERSATION_VERBS = frozenset({
     "disse", "disseram", "falou", "falaram", "mencionou", "mencionaram",
     "comentou", "comentaram", "discutiu", "discutiram", "decidiu", "decidiram",
 })
+CONVERSATION_VERBS = _CONVERSATION_VERBS
+"""Public for the alert route, which is vetoed by the same words."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,7 +570,7 @@ def defi_question(text: str, previous: Sequence[str] = ()) -> DefiQuestion | Non
     # Carried only on a protocol or pool word: "what position did the team
     # take?" after a balance question is about the team, not the wallet.
     specific = words & (_LIQUIDITY_TERMS | _LENDING_TERMS) or {"health", "factor"} <= words
-    carried = _recent_chain_address(previous) if specific else None
+    carried = recent_chain_address(previous) if specific else None
     if carried is None:
         return None
     return DefiQuestion(kind=kind, address=carried, carried=True)
@@ -591,7 +593,7 @@ _FOLLOW_UP_TURNS = 3
 has moved on for longer than this is not following up on that wallet."""
 
 
-def _recent_chain_address(previous: Sequence[str]) -> str | None:
+def recent_chain_address(previous: Sequence[str]) -> str | None:
     """The address of the latest chain question among the last few turns."""
     for earlier in reversed(previous[-_FOLLOW_UP_TURNS:]):
         found = defi_question(earlier) or wallet_question(earlier)

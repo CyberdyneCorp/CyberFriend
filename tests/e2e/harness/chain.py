@@ -7,6 +7,10 @@ calls the watcher makes -- `ownerOf`, `positions`, `slot0`, the v4 pool and
 position info, `getPositionLiquidity`, `getSlot0`, and Aave's pool and
 `getUserAccountData` -- from state a scenario can change between sweeps.
 
+It also answers what creating a range alert reads once, through the positions
+reader: an owner's v3 `balanceOf` and `tokenOfOwnerByIndex`, the factory's
+`getPool`, the simulated `collect`, and the tokens' `symbol` and `decimals`.
+
 Calls it does not model revert, as a contract would: a scenario that reaches
 one has changed what it reads, and the watcher reports it as a failed read.
 """
@@ -62,6 +66,11 @@ class AaveAccount:
 
 AAVE_POOL = "0xa238dd80c259a72e81d7e4664a9801593f98d1c5"
 
+TOKENS = {
+    "0x4200000000000000000000000000000000000006": ("WETH", 18),
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": ("USDC", 6),
+}
+
 
 @dataclass
 class FakeChain:
@@ -73,6 +82,8 @@ class FakeChain:
     ticks: dict[str, int] = field(default_factory=dict)
     """Current tick by v3 pool address or v4 pool id."""
     aave: dict[str, AaveAccount] = field(default_factory=dict)
+    tokens: dict[str, tuple[str, int]] = field(default_factory=lambda: dict(TOKENS))
+    """Symbol and decimals by token address."""
     failing: bool = False
     """Answer every request with HTTP 500."""
     requests: int = 0
@@ -108,6 +119,23 @@ class FakeChain:
             return _encode(int(AAVE_POOL, 16))
         if target == AAVE_POOL and selector == abi.AAVE_ACCOUNT_DATA:
             return self._account(abi.as_address(args[0]))
+        if selector == abi.BALANCE_OF and target == d.v3_position_manager:
+            return _encode(len(self._owned_v3(abi.as_address(args[0]))))
+        if selector == abi.BALANCE_OF and target == d.v4_position_manager:
+            owner = abi.as_address(args[0])
+            return _encode(sum(p.owner.lower() == owner for p in self.v4.values()))
+        if target == d.v3_position_manager and selector == abi.TOKEN_OF_OWNER_BY_INDEX:
+            owned = self._owned_v3(abi.as_address(args[0]))
+            return _encode(owned[args[1]]) if args[1] < len(owned) else None
+        if target == d.v3_position_manager and selector == abi.V3_COLLECT:
+            return _encode(0, 0)
+        if target == d.v3_factory and selector == abi.V3_GET_POOL:
+            return self._pool(abi.as_address(args[0]), abi.as_address(args[1]), args[2])
+        if target in self.tokens and selector in (abi.SYMBOL, abi.DECIMALS):
+            symbol, decimals = self.tokens[target]
+            if selector == abi.DECIMALS:
+                return _encode(decimals)
+            return symbol.encode().ljust(WORD, b"\0")
         if target == d.v3_position_manager:
             return self._v3(selector, args[0])
         if target == d.v4_position_manager:
@@ -116,6 +144,15 @@ class FakeChain:
             return self._slot0("0x" + data[10:74])
         if selector == abi.V3_SLOT0:
             return self._slot0(target)
+        return None
+
+    def _owned_v3(self, owner: str) -> list[int]:
+        return sorted(t for t, p in self.v3.items() if p.owner.lower() == owner.lower())
+
+    def _pool(self, token0: str, token1: str, fee: int) -> bytes | None:
+        for p in self.v3.values():
+            if (p.token0.lower(), p.token1.lower(), p.fee) == (token0, token1, fee):
+                return _encode(int(p.pool, 16))
         return None
 
     def _slot0(self, pool: str) -> bytes | None:

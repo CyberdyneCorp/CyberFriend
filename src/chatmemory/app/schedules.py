@@ -167,7 +167,10 @@ class ScheduledTaskRunner:
             return False
 
         scoped = outcome.scoped
-        if scoped is None or scoped.answer.abstained or not scoped.answer.text.strip():
+        # An alert proposal is a prompt with buttons for somebody present; as a
+        # text in a direct message nobody could confirm it, so it is not sent.
+        proposal = outcome.alert is not None
+        if proposal or scoped is None or scoped.answer.abstained or not scoped.answer.text.strip():
             # Silence by design. Recorded so the owner can tell a task that
             # ran and found nothing from one that has not run.
             await self._store.record_run(task.id, TaskOutcome.NOTHING, now)
