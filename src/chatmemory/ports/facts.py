@@ -43,6 +43,7 @@ class FactKind(StrEnum):
     PHONE = "phone"
     ETH_WALLET = "eth_wallet"
     BTC_WALLET = "btc_wallet"
+    FULL_NAME = "full_name"
 
 
 class FactRejection(StrEnum):
@@ -67,6 +68,7 @@ class InvalidFact(ValueError):
 # prompt. 64 characters holds any real name someone wants to be called and
 # leaves no room for a paragraph of instructions.
 MAX_PREFERRED_NAME_CHARS = 64
+MAX_FULL_NAME_CHARS = 128
 # RFC 5321's path limit, and the local-part limit inside it.
 MAX_EMAIL_CHARS = 254
 MAX_EMAIL_LOCAL_CHARS = 64
@@ -112,15 +114,20 @@ def _only(value: str, punctuation: frozenset[str], *, digits: bool) -> bool:
     return True
 
 
-def _normalise_name(value: str) -> str:
+def _normalise_name(value: str, kind: FactKind = FactKind.PREFERRED_NAME) -> str:
     name = _collapse(value)
+    limit = MAX_FULL_NAME_CHARS if kind is FactKind.FULL_NAME else MAX_PREFERRED_NAME_CHARS
     if not name:
-        raise InvalidFact(FactKind.PREFERRED_NAME, FactRejection.EMPTY)
-    if len(name) > MAX_PREFERRED_NAME_CHARS:
-        raise InvalidFact(FactKind.PREFERRED_NAME, FactRejection.TOO_LONG)
+        raise InvalidFact(kind, FactRejection.EMPTY)
+    if len(name) > limit:
+        raise InvalidFact(kind, FactRejection.TOO_LONG)
     if not _only(name, _NAME_PUNCTUATION, digits=True):
-        raise InvalidFact(FactKind.PREFERRED_NAME, FactRejection.DISALLOWED_CHARACTERS)
+        raise InvalidFact(kind, FactRejection.DISALLOWED_CHARACTERS)
     return name
+
+
+def _normalise_full_name(value: str) -> str:
+    return _normalise_name(value, FactKind.FULL_NAME)
 
 
 def _normalise_email(value: str) -> str:
@@ -220,6 +227,7 @@ _NORMALISERS = {
     FactKind.PHONE: _normalise_phone,
     FactKind.ETH_WALLET: _normalise_eth_wallet,
     FactKind.BTC_WALLET: _normalise_btc_wallet,
+    FactKind.FULL_NAME: _normalise_full_name,
 }
 
 

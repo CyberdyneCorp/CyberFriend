@@ -101,6 +101,7 @@ Tell it yourself, in your own message. It never learns these from a channel.
 
 | | |
 |---|---|
+| Full name | `my name is Leonardo Araujo` |
 | Preferred name | `call me Leo` |
 | Email | `my email is leo@example.com` |
 | Phone | `my phone is +55 11 99999 1234` |
@@ -108,11 +109,19 @@ Tell it yourself, in your own message. It never learns these from a channel.
 | Ethereum wallet | `my wallet is 0x…` |
 | Bitcoin wallet | `my btc wallet is bc1…` |
 
-`what do you know about me?` shows them; `forget my email` deletes one.
+You can give several at once — *"meu nome é Leonardo Araujo, pode me chamar de
+Leo, meu email é …, meu telefone é …"* — and the reply lists what was saved and
+what was not (where you live, for example, is not kept). "My name is" with one
+word is the name you're called by; with more, it is your full name.
+
+`what do you know about me?` (or `o que você sabe sobre mim?`) shows them;
+`forget my email` deletes one.
 
 **Your email, phone and wallets are only ever shown to you, in a direct
 message.** A wallet is public on its chain — what is private is that it is
 *yours*, and naming it in a channel makes that link for everyone present.
+A channel message giving your own email or phone is never archived, even when
+it says other things too.
 
 Once a wallet is saved, `what's my wallet balance?` uses it instead of asking
 for an address. The question has to name a wallet: "what's my balance" alone

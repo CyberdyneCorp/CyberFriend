@@ -944,6 +944,8 @@ def indexing_request(text: str) -> bool:
 
 class FactAction(StrEnum):
     SET = "set"
+    # Several facts in one message: an introduction.
+    SET_MANY = "set_many"
     SHOW = "show"
     FORGET = "forget"
     # Something to remember that is not one of the three facts.
@@ -966,6 +968,10 @@ class FactIntent:
     action: FactAction
     kind: FactKind | None = None
     value: str | None = None
+    #: SET_MANY only: each fact stated, in the order it was stated.
+    sets: tuple[tuple[FactKind, str], ...] = ()
+    #: SET_MANY only: what was stated but is not a fact kept ("where you live").
+    not_kept: tuple[str, ...] = ()
 
 
 _POLITE = (
@@ -1005,11 +1011,17 @@ _SET_PATTERNS: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
     for kind, body in (
         (
             FactKind.PREFERRED_NAME,
-            r"(?:(?:you\s+can\s+|just\s+)?call\s+me|my\s+(?:preferred\s+)?name\s+is|"
+            r"(?:(?:you\s+can\s+|just\s+)?call\s+me|my\s+preferred\s+name\s+is|"
             r"i\s+(?:prefer|like|want)\s+to\s+be\s+called|"
             r"(?:set|change|update)\s+my\s+(?:preferred\s+)?name\s+to|"
             r"(?:me\s+chame|me\s+chama|me\s+chamem|pode\s+me\s+chamar)\s+de|"
-            r"meu\s+nome\s+(?:preferido\s+)?[ée]|prefiro\s+ser\s+chamad[oa]\s+de)"
+            r"meu\s+nome\s+preferido\s+[ée]|prefiro\s+ser\s+chamad[oa]\s+de)"
+            r"\s+(?P<value>.+?)",
+        ),
+        (
+            FactKind.FULL_NAME,
+            r"(?:my\s+full\s+name\s+is|(?:set|change|update)\s+my\s+full\s+name\s+to|"
+            r"meu\s+nome\s+completo\s+[ée])"
             r"\s+(?P<value>.+?)",
         ),
         (
@@ -1064,6 +1076,7 @@ _SET_PATTERNS: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
 # words are what keep "call me when the deploy is done" out of the name field:
 # a miss here is answered as an ordinary question, which is recoverable.
 _MAX_NAME_WORDS = 4
+_MAX_FULL_NAME_WORDS = 8
 _MAX_LANGUAGE_WORDS = 3
 _NOT_A_NAME_START = frozenset({
     "when", "if", "after", "before", "back", "later", "tomorrow", "today",
@@ -1095,7 +1108,7 @@ _SHOW_PATTERN = re.compile(
     rf"what(?:'s|\s+is)\s+my\s+(?:{_EMAIL_WORD}|preferred\s+name|preferred\s+language)|"
     r"what\s+(?:do\s+you\s+call\s+me|name\s+do\s+you\s+call\s+me|"
     r"language\s+do\s+you\s+(?:reply|answer)(?:\s+to\s+me)?\s+in)|"
-    r"o\s+que\s+(?:voc[eê]|vc)\s+sabe\s+sobre\s+mim|"
+    r"(?:o\s*que|oq)\s+(?:voc[eê]|vc)\s+sabe\s+sobre\s+mim|"
     r"qual\s+(?:[ée]\s+)?(?:o\s+)?meu\s+(?:e-?mail|nome\s+preferido|idioma(?:\s+preferido)?)"
     r")" + _TRAIL,
     re.IGNORECASE,
@@ -1178,6 +1191,8 @@ def _plausible(kind: FactKind, value: str) -> bool:
         return False
     if kind is FactKind.PREFERRED_NAME:
         return len(words) <= _MAX_NAME_WORDS and words[0].lower() not in _NOT_A_NAME_START
+    if kind is FactKind.FULL_NAME:
+        return len(words) <= _MAX_FULL_NAME_WORDS and words[0].lower() not in _NOT_A_NAME_START
     if kind is FactKind.PREFERRED_LANGUAGE:
         return len(words) <= _MAX_LANGUAGE_WORDS
     return True
@@ -1197,7 +1212,20 @@ def _forget_intent(text: str) -> FactIntent | None:
     return FactIntent(FactAction.FORGET)
 
 
+_MY_NAME_IS = re.compile(
+    _LEAD + r"(?:my\s+name\s+is|meu\s+nome\s+[ée])\s+(?P<value>.+?)" + _TRAIL, re.IGNORECASE
+)
+""""My name is X": a full name when X is several words, the name to call them
+by when it is one -- which is what it always meant before full names existed."""
+
+
 def _set_intent(text: str) -> FactIntent | None:
+    named = _MY_NAME_IS.match(text)
+    if named is not None:
+        value = _clean_value(named.group("value"))
+        kind = FactKind.FULL_NAME if len(value.split()) > 1 else FactKind.PREFERRED_NAME
+        if _plausible(kind, value):
+            return FactIntent(FactAction.SET, kind, value)
     for kind, pattern in _SET_PATTERNS:
         match = pattern.match(text)
         if match is None:
@@ -1211,8 +1239,15 @@ def _set_intent(text: str) -> FactIntent | None:
 _USER_MENTION = re.compile(r"<@[!&]?\d+>[,:;]?")
 
 
-def states_own_email(text: str) -> bool:
-    """Whether a channel message is someone giving their own email address.
+_CONTACT_KINDS = frozenset({FactKind.EMAIL, FactKind.PHONE})
+
+
+def states_own_contact(text: str) -> bool:
+    """Whether a channel message is someone giving their own email or phone.
+
+    Alone or within an introduction: "my name is ..., my phone is ..." was once
+    archived whole, because only a message that was *entirely* an email
+    statement was recognised.
 
     For ingest, not for asks: such a message must never enter the corpus. The
     assistant stores the address and promises to show it only in its owner's
@@ -1225,11 +1260,65 @@ def states_own_email(text: str) -> bool:
     the message to be addressed to the assistant for the same reason. A
     malformed address still counts: an almost-email is still personal data.
     """
-    intent = fact_intent(_USER_MENTION.sub(" ", text))
-    return (
-        intent is not None
-        and intent.action is FactAction.SET
-        and intent.kind is FactKind.EMAIL
+    cleaned = _collapse_text(_USER_MENTION.sub(" ", text))
+    intent = fact_intent(cleaned)
+    if intent is not None and intent.action is FactAction.SET:
+        return intent.kind in _CONTACT_KINDS
+    if intent is not None and intent.action is FactAction.SET_MANY:
+        return any(kind in _CONTACT_KINDS for kind, _ in intent.sets)
+    # Any clause, whatever the rest of the message is: "call me when it's
+    # done, my email is ..." is not an introduction, and still gives an email.
+    return any(
+        (found := _set_intent(clause)) is not None and found.kind in _CONTACT_KINDS
+        for clause in _clauses(cleaned)
+    )
+
+
+_CLAUSE_START = re.compile(
+    r"\b(?:my|meu|minha|call\s+me|(?:you\s+can\s+)?call\s+me|pode\s+me\s+chamar|"
+    r"me\s+cham[ae]|(?:eu\s+)?moro|i\s+live|sou\s+de|i'?m\s+from|i\s+am\s+from)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_TAIL = re.compile(r"[\s,;.!]*(?:\b(?:e|and)\b)?[\s,;.!]*$", re.IGNORECASE)
+_LIVES = re.compile(
+    r"^(?:(?:eu\s+)?moro|i\s+live|sou\s+de|i'?m\s+from|i\s+am\s+from)\b", re.IGNORECASE
+)
+WHERE_YOU_LIVE = "where you live"
+
+
+def _clauses(text: str) -> list[str]:
+    """The message cut where each fact starts, connectors trimmed.
+
+    Whatever precedes the first fact ("Oi", "Hello there") is dropped.
+    """
+    starts = [m.start() for m in _CLAUSE_START.finditer(text)]
+    if not starts:
+        return []
+    # "call me" inside "you can call me" starts once, not twice.
+    starts = [s for i, s in enumerate(starts) if i == 0 or s - starts[i - 1] > 8]
+    bounds = zip(starts, [*starts[1:], len(text)], strict=True)
+    return [_CLAUSE_TAIL.sub("", text[a:b]).strip() for a, b in bounds]
+
+
+def _introduction(text: str) -> FactIntent | None:
+    """Several facts stated in one message, or None.
+
+    Two or more parts must be recognised, so a single fact keeps its own
+    path. Every part stated is accounted for in the reply: saved, or named as
+    not kept.
+    """
+    sets: list[tuple[FactKind, str]] = []
+    not_kept: list[str] = []
+    for clause in _clauses(text):
+        found = _set_intent(clause)
+        if found is not None and found.kind is not None and found.value is not None:
+            sets.append((found.kind, found.value))
+        elif _LIVES.match(clause):
+            not_kept.append(WHERE_YOU_LIVE)
+    if not sets or len(sets) + len(not_kept) < 2:
+        return None
+    return FactIntent(
+        FactAction.SET_MANY, sets=tuple(sets), not_kept=tuple(dict.fromkeys(not_kept))
     )
 
 
@@ -1257,7 +1346,7 @@ def fact_intent(text: str) -> FactIntent | None:
         for p in _OTHERS_FACTS_PATTERNS
     ):
         return FactIntent(FactAction.OTHERS_FACTS)
-    intent = _forget_intent(collapsed) or _set_intent(collapsed)
+    intent = _forget_intent(collapsed) or _introduction(collapsed) or _set_intent(collapsed)
     if intent is not None:
         return intent
     if _SHOW_PATTERN.match(collapsed):
