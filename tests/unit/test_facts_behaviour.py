@@ -579,9 +579,9 @@ def _function_calls(path: Path, function: str) -> set[str]:
 
 
 def test_the_bot_process_builds_facts_and_hands_them_down() -> None:
-    """main -> build_personal_facts -> build_bot -> build_ask_service -> AskService."""
+    """assemble -> build_personal_facts -> build_bot -> build_ask_service -> AskService."""
     bot = SRC / "entrypoints" / "bot.py"
-    assert "build_personal_facts" in _function_calls(bot, "main")
+    assert "build_personal_facts" in _function_calls(bot, "assemble")
     assert _calls_with_keyword(bot, "build_bot", "facts")
     assert _calls_with_keyword(bot, "build_ask_service", "facts")
     assert _calls_with_keyword(bot, "build_answer_stack", "personal_facts")

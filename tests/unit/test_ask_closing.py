@@ -570,7 +570,7 @@ def test_the_bot_process_gives_the_ask_service_somewhere_to_write_a_correction()
     source = (SRC / "entrypoints" / "bot.py").read_text()
     for wiring in ("CorrectionService(", "attach_corrections("):
         assert wiring in source, f"the bot process never {wiring}"
-    assert _calls(_function(SRC / "entrypoints" / "bot.py", "main"), "CorrectionService")
+    assert _calls(_function(SRC / "entrypoints" / "bot.py", "assemble"), "CorrectionService")
 
 
 def test_the_bot_registers_the_resolve_command() -> None:
