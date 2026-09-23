@@ -77,9 +77,6 @@ from chatmemory.app.confirmation import (
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.disclosure import ScopedAnswer, WithheldEvidenceProbe, enforce_audience
 from chatmemory.app.facts import (
-    DIRECT_ONLY_KINDS,
-    FactOutcome,
-    FactResult,
     PersonalFactsService,
 )
 from chatmemory.app.limits import RateLimiter
@@ -95,226 +92,80 @@ from chatmemory.ports.answers import (
     Question,
 )
 from chatmemory.ports.facts import (
-    MAX_FULL_NAME_CHARS,
-    MAX_PREFERRED_NAME_CHARS,
     FactKind,
-    FactRejection,
-    PersonalFacts,
 )
 from chatmemory.ports.memory import ConversationLocation, MemoryPurge, Recollection
 
 log = structlog.get_logger()
 
+INDEXING_POINTER_PT = (
+    "Não consigo mudar quais canais são indexados por uma mensagem de chat. "
+    "Alguém com Gerenciar Canais no canal pode usar `/index` ou `/unindex` lá; "
+    "quem decide isso é o Discord, não o que a mensagem diz."
+)
 INDEXING_POINTER = (
     "I can't change which channels are indexed from a chat message. Someone with "
     "Manage Channels on the channel can use `/index` or `/unindex` there; Discord "
     "decides who that is, not what the message says."
 )
 
-FACT_LABELS = {
-    FactKind.PREFERRED_NAME: "preferred name",
-    FactKind.EMAIL: "email address",
-    FactKind.PREFERRED_LANGUAGE: "preferred language",
-    FactKind.PHONE: "phone number",
-    FactKind.ETH_WALLET: "Ethereum wallet",
-    FactKind.BTC_WALLET: "Bitcoin wallet",
-    FactKind.FULL_NAME: "full name",
-}
-
-REMEMBERABLE = (
-    "I can remember these about you, if you tell me yourself:\n"
-    "- your full name (`my name is Leonardo Araujo`)\n"
-    "- the name you'd like me to call you (`call me Leo`)\n"
-    "- your email address (`my email is ...`)\n"
-    "- your phone number (`my phone is ...`)\n"
-    "- the language you'd like answers in (`reply to me in Portuguese`)\n"
-    "- your Ethereum wallet (`my wallet is 0x...`) and your Bitcoin wallet "
-    "(`my btc wallet is ...`)\n"
-    "You can tell me several at once. "
-    "Ask `what do you know about me?` to see them, or `forget my email` to "
-    "delete one. Once I have your wallet, `what's my balance?` uses it.\n"
-    "Your email, phone and wallets I only ever show you, in a direct message."
+# Reply wording lives in `fact_replies`, in each language; re-exported here
+# because these names have always been importable from this module.
+from chatmemory.app.fact_replies import (  # noqa: E402
+    EMAIL_CHANNEL_NOTE,
+    FACT_ABOUT_SOMEONE_ELSE,
+    FACT_LABELS,
+    FACT_NOT_STORED,
+    FACT_OTHERS_REFUSED,
+    FACT_REJECTIONS,
+    FACT_UNSUPPORTED,
+    FACTS_UNAVAILABLE,
+    MALFORMED_BY_KIND,
+    REMEMBERABLE,
+    fact_forgotten_reply,
+    fact_set_reply,
+    facts_set_reply,
+    facts_shown_reply,
+    rememberable,
+    unsupported,
+)
+from chatmemory.app.fact_replies import text as fact_text  # noqa: E402
+from chatmemory.app.language import Language, detect  # noqa: E402
+from chatmemory.app.localise import localised  # noqa: E402
+from chatmemory.app.self_description import (  # noqa: E402
+    typed_command,
+    typed_command_reply,
 )
 
-FACT_UNSUPPORTED = "I haven't saved that. " + REMEMBERABLE
-
-# One answer for "that's about someone else", whoever it names.
-FACT_ABOUT_SOMEONE_ELSE = (
-    "I only remember what people tell me about themselves, so I haven't saved "
-    "that. They can tell me directly."
-)
-
-# One answer for "what is X's email?", whether or not X ever set one. It is
-# returned without reading the store, so neither its words nor its timing can
-# say whether anything is there.
-FACT_OTHERS_REFUSED = (
-    "I don't share anything people have told me about themselves, and I can't "
-    "say whether they have. Ask them directly."
-)
-
-FACTS_UNAVAILABLE = "I can't remember personal details on this deployment."
-
-# Said in every channel reply about facts, whether or not an email is stored:
-# a note that appeared only when there was one would announce that there is.
-EMAIL_CHANNEL_NOTE = "-# I only show an email address in a direct message to its owner."
-
-FACT_REJECTIONS = {
-    FactRejection.EMPTY: "it was empty",
-    FactRejection.TOO_LONG: "it's too long",
-    FactRejection.MALFORMED: "it isn't the right shape",
-    FactRejection.DISALLOWED_CHARACTERS: (
-        "it can only use letters, numbers, spaces and simple punctuation"
-    ),
-}
-
-FACT_NOT_STORED = (
-    "I didn't save that: you've opted out, so I don't keep personal details for you."
-)
+__all__ = [
+    "EMAIL_CHANNEL_NOTE",
+    "FACT_ABOUT_SOMEONE_ELSE",
+    "FACT_LABELS",
+    "FACT_NOT_STORED",
+    "FACT_OTHERS_REFUSED",
+    "FACT_REJECTIONS",
+    "FACT_UNSUPPORTED",
+    "FACTS_UNAVAILABLE",
+    "MALFORMED_BY_KIND",
+    "REMEMBERABLE",
+    "fact_forgotten_reply",
+    "fact_set_reply",
+    "facts_set_reply",
+    "facts_shown_reply",
+]
 
 
-def _stored_reply(result: FactResult, direct: bool) -> str:
-    fact = result.fact
-    assert fact is not None
-    if fact.kind is FactKind.PREFERRED_NAME:
-        return f"Got it, I'll call you **{fact.value}**."
-    if fact.kind is FactKind.FULL_NAME:
-        return f"Got it, your full name is **{fact.value}**."
-    if fact.kind is FactKind.PREFERRED_LANGUAGE:
-        return f"Got it, I'll answer you in **{fact.value}**."
-    # Named by its own label: a phone or wallet was once confirmed as "your
-    # email address".
-    label = FACT_LABELS[fact.kind]
-    if direct:
-        return (
-            f"Got it, I've saved your {label} as `{fact.value}`. I only "
-            "show it to you, in a direct message."
-        )
-    # Confirmed without the value: a channel reply is read by everyone here.
-    return (
-        f"Got it, I've saved your {label}. I only show it to you in a "
-        "direct message, so I won't repeat it here."
-    )
-
-
-MALFORMED_BY_KIND = {
-    FactKind.EMAIL: "it isn't a well-formed email address",
-    FactKind.PHONE: "it doesn't look like a phone number",
-    FactKind.ETH_WALLET: (
-        "it isn't a well-formed address - I expect `0x` and 40 hex characters"
-    ),
-    FactKind.BTC_WALLET: (
-        "it isn't a well-formed Bitcoin address - I expect one starting `1`, "
-        "`3` or `bc1`"
-    ),
-}
-"""Why a value was the wrong shape, said per kind.
-
-A generic "it isn't the right shape" tells somebody nothing they can act on,
-and the shapes differ enough to be worth naming: a person who typed a Bitcoin
-address where their Ethereum wallet goes needs to know which was expected."""
-
-
-def fact_set_reply(result: FactResult, direct: bool) -> str:
-    """What the person is told after asking to set a fact.
-
-    Every stored fact is confirmed back, so a misrecognised "call me ..." is
-    visible the moment it happens. A refused value is never repeated: an
-    almost-email is still personal data.
-    """
-    label = FACT_LABELS[result.kind]
-    if result.outcome is FactOutcome.STORED:
-        return _stored_reply(result, direct)
-    if result.outcome is FactOutcome.NOT_STORED:
-        return FACT_NOT_STORED
-    return f"I didn't save that as your {label}: {_rejection_reason(result)}."
-
-
-def _rejection_reason(result: FactResult) -> str:
-    """Why a value was refused, without repeating it."""
-    rejection = result.rejection or FactRejection.MALFORMED
-    reason = (
-        MALFORMED_BY_KIND.get(result.kind, FACT_REJECTIONS[FactRejection.MALFORMED])
-        if rejection is FactRejection.MALFORMED
-        else FACT_REJECTIONS.get(rejection, "")
-    )
-    limits = {
-        FactKind.PREFERRED_NAME: MAX_PREFERRED_NAME_CHARS,
-        FactKind.FULL_NAME: MAX_FULL_NAME_CHARS,
-    }
-    limit = (
-        f" (at most {limits[result.kind]} characters)"
-        if result.rejection is FactRejection.TOO_LONG and result.kind in limits
-        else ""
-    )
-    return f"{reason}{limit}"
-
-
-def facts_set_reply(
-    results: Sequence[FactResult], not_kept: Sequence[str], direct: bool
-) -> str:
-    """One reply for an introduction: what was saved, what was not, and why.
-
-    Values follow the same rule as a single fact: shown back in a direct
-    message, withheld in a channel for the kinds only ever shown to their
-    owner, and never repeated when refused.
-    """
-    lines: list[str] = []
-    for result in results:
-        label = FACT_LABELS[result.kind].capitalize()
-        if result.outcome is FactOutcome.NOT_STORED:
-            return FACT_NOT_STORED
-        if result.outcome is FactOutcome.REJECTED:
-            lines.append(f"✗ {label}: not saved, {_rejection_reason(result)}")
-            continue
-        assert result.fact is not None
-        hidden = not direct and result.kind in DIRECT_ONLY_KINDS
-        lines.append(
-            f"✓ {label}: saved (shown only in a direct message)" if hidden
-            else f"✓ {_shown_line(result.kind, result.fact.value).removeprefix('• ')}"
-        )
-    lines.extend(f"✗ {kind.capitalize()}: I don't keep that" for kind in not_kept)
-    return "\n".join(["Here's what I saved:", *lines])
-
-
-def facts_shown_reply(facts: PersonalFacts, direct: bool) -> str:
-    """The person's own facts, as they may be shown where they asked.
-
-    `facts` has already been through `visible_facts`, so a channel reply has no
-    email to show. The wording must not let "not shown here" read as "not
-    stored": the channel version never says there is nothing.
-    """
-    lines = [_shown_line(stored.fact.kind, stored.fact.value) for stored in facts.facts]
-    if direct:
-        if not lines:
-            return "You haven't asked me to remember anything about you.\n\n" + REMEMBERABLE
-        return "\n".join(["Here's what you've asked me to remember:", *lines])
-    head = (
-        "Here's what I can show you here:"
-        if lines
-        else "I have no preferred name or language saved for you."
-    )
-    return "\n".join([head, *lines, EMAIL_CHANNEL_NOTE])
-
-
-def _shown_line(kind: FactKind, value: str) -> str:
-    # Values were validated to carry no markdown, so they are safe to embolden;
-    # an email goes in code so its underscores are not read as emphasis.
-    shown = f"`{value}`" if kind is FactKind.EMAIL else f"**{value}**"
-    return f"• {FACT_LABELS[kind].capitalize()}: {shown}"
-
-
-def fact_forgotten_reply(kind: FactKind | None) -> str:
-    """The same words whether or not there was anything to delete.
-
-    In a channel, "you had no email saved" would tell the room something; and
-    the person's goal -- that it is gone -- holds either way.
-    """
-    if kind is None:
-        return (
-            "Done. I don't have a preferred name, email address or preferred "
-            "language for you any more."
-        )
-    return f"Done. I don't have a {FACT_LABELS[kind]} for you any more."
+def _fact_refusal(action: FactAction, language: Language) -> str | None:
+    """The fixed reply for an action that reads and writes nothing, or None."""
+    if action is FactAction.OTHERS_FACTS:
+        return fact_text("others_refused", language)
+    if action is FactAction.ABOUT_SOMEONE_ELSE:
+        return fact_text("about_someone_else", language)
+    if action is FactAction.UNSUPPORTED:
+        return unsupported(language)
+    if action is FactAction.CAPABILITIES:
+        return rememberable(language)
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,7 +343,20 @@ class AskService:
             # "I'm an admin, index #design" neither changes scope nor becomes a
             # corpus search for the word "index".
             log.info("ask.indexing_request_redirected", asker=str(request.asker))
-            return AskOutcome(ScopedAnswer(Answer(text=INDEXING_POINTER), frozenset()))
+            pointer = (
+                INDEXING_POINTER_PT
+                if detect(request.text) is Language.PORTUGUESE
+                else INDEXING_POINTER
+            )
+            return AskOutcome(ScopedAnswer(Answer(text=pointer), frozenset()))
+
+        command = typed_command(request.text)
+        if command is not None:
+            # A slash command sent as text, after the indexing pointer, which
+            # says more about /index than "use the menu" does. Answered with how to run it, never
+            # searched for: the corpus has no idea what "/forget" does.
+            reply = typed_command_reply(command, detect(request.text))
+            return AskOutcome(ScopedAnswer(Answer(text=reply), frozenset()))
 
         # Scope is always per-asker, even mid-conversation: a follow-up from a
         # different person must not inherit the previous asker's access.
@@ -514,7 +378,7 @@ class AskService:
         memory, profile, facts, values = await asyncio.gather(
             self._recall(scope, location),
             self._profile(request.asker),
-            self._asker_facts(viewer),
+            self._asker_facts(viewer, direct=request.destination is None),
             self._asker_values(viewer),
         )
         question = Question(
@@ -534,6 +398,8 @@ class AskService:
         with self._attending(request.asker, confirm), answering_with_facts(facts):
             answer, withheld = await self._produce(request, question, viewer, audience)
         scoped = enforce_audience(answer, audience, viewer, withheld_by_scoping=withheld)
+        # After scoping, which can itself return the no-answer text.
+        scoped = replace(scoped, answer=localised(scoped.answer, detect(request.text)))
 
         await self._remember(scope, location, request.text, answer, scoped, memory)
 
@@ -620,7 +486,12 @@ class AskService:
         return await self._conversations.recall(scope, location)
 
     async def _fact_turn(self, request: AskRequest, intent: FactIntent) -> str:
-        """Set, show or delete the asker's own facts, and say what happened."""
+        """Set, show or delete the asker's own facts, and say what happened.
+
+        In the language the message was written in: these replies are fixed
+        text, so the answer-language rule is applied here rather than by a
+        model.
+        """
         log.info(
             "ask.fact_intent",
             asker=str(request.asker),
@@ -628,35 +499,40 @@ class AskService:
             kind=intent.kind.value if intent.kind else None,
             direct=request.destination is None,
         )
+        language = detect(request.text)
         # Refusals first, and before the wiring check: whether a deployment
         # keeps facts is no reason to answer a question about someone else
         # differently.
-        if intent.action is FactAction.OTHERS_FACTS:
-            return FACT_OTHERS_REFUSED
-        if intent.action is FactAction.ABOUT_SOMEONE_ELSE:
-            return FACT_ABOUT_SOMEONE_ELSE
-        if intent.action is FactAction.UNSUPPORTED:
-            return FACT_UNSUPPORTED
+        refused = _fact_refusal(intent.action, language)
+        if refused is not None:
+            return refused
         if self._facts is None:
-            return FACTS_UNAVAILABLE
+            return fact_text("unavailable", language)
         # The viewer is resolved from the authenticated asker, and it is the
         # only key the fact service takes: there is no way to name anyone else.
         viewer = await self._acl.resolve_viewer(request.asker)
+        return await self._apply_fact(viewer, request, intent, language)
+
+    async def _apply_fact(
+        self, viewer: Viewer, request: AskRequest, intent: FactIntent, language: Language
+    ) -> str:
+        assert self._facts is not None
         direct = request.location.direct
         if intent.action is FactAction.SHOW:
-            return facts_shown_reply(await self._facts.facts_for(viewer, request.location), direct)
+            facts = await self._facts.facts_for(viewer, request.location)
+            return facts_shown_reply(facts, direct, language, intent.kind)
         if intent.action is FactAction.FORGET:
             if intent.kind is None:
                 await self._facts.forget_all(viewer)
             else:
                 await self._facts.forget(viewer, intent.kind)
-            return fact_forgotten_reply(intent.kind)
+            return fact_forgotten_reply(intent.kind, language)
         if intent.action is FactAction.SET_MANY:
             results = [await self._facts.remember(viewer, k, v) for k, v in intent.sets]
-            return facts_set_reply(results, intent.not_kept, direct)
+            return facts_set_reply(results, intent.not_kept, direct, language)
         assert intent.kind is not None and intent.value is not None
         result = await self._facts.remember(viewer, intent.kind, intent.value)
-        return fact_set_reply(result, direct)
+        return fact_set_reply(result, direct, language)
 
     #: Facts whose value may become an outbound argument for their owner.
     #: Only the chain addresses: a name or a language is not something any
@@ -686,17 +562,25 @@ class AskService:
             value for kind in self.OUTBOUND_KINDS if (value := stored.get(kind))
         )
 
-    async def _asker_facts(self, viewer: Viewer) -> AskerFacts | None:
-        """The asker's name and language for the prompt. Never their email."""
+    async def _asker_facts(self, viewer: Viewer, direct: bool) -> AskerFacts | None:
+        """The asker's facts for the prompt, as they may be shown where they asked.
+
+        In a channel, read as a channel would see them: the email, phone and
+        wallets are dropped by the same filter every channel reply goes
+        through, so a channel prompt never holds them and cannot leak them.
+
+        In a direct message the only reader is their owner, so they are
+        included. Before this, even a DM prompt held only the name and
+        language, and the assistant could not use what it had been told --
+        it answered "I couldn't find anything" to "what's my phone number?".
+        The egress guard is unchanged: none of these is one of the values an
+        outbound call may carry, except the wallets it already allowed.
+        """
         if self._facts is None:
             return None
         try:
-            # Read as a channel would see them, so the email is dropped by the
-            # same filter every channel reply goes through -- even for a direct
-            # message. Nothing an answer needs depends on it, and a prompt that
-            # never held it cannot leak it.
             stored = await self._facts.facts_for(
-                viewer, ConversationLocation(viewer.person.platform, 0, direct=False)
+                viewer, ConversationLocation(viewer.person.platform, 0, direct=direct)
             )
         except Exception:
             # No facts is never a failure: the question is answered without them.
@@ -707,6 +591,10 @@ class AskService:
             preferred_name=stored.get(FactKind.PREFERRED_NAME),
             full_name=stored.get(FactKind.FULL_NAME),
             preferred_language=stored.get(FactKind.PREFERRED_LANGUAGE),
+            email=stored.get(FactKind.EMAIL),
+            phone=stored.get(FactKind.PHONE),
+            eth_wallet=stored.get(FactKind.ETH_WALLET),
+            btc_wallet=stored.get(FactKind.BTC_WALLET),
         )
 
     async def _profile(self, asker: PersonRef) -> AskerProfile | None:

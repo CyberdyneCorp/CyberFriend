@@ -143,7 +143,7 @@ about the question's "should I".
 
 WALLET_ADDRESS_MISSING = (
     "Which wallet? Give me the address (it starts with `0x`) and I'll check "
-    "Ethereum and Base.\n"
+    "Ethereum, Base and Arbitrum.\n"
     "I can only look up an address you type here - not one I found in a "
     "channel."
 )

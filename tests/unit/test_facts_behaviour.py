@@ -154,7 +154,7 @@ async def reply(service: AskService, request: AskRequest) -> str:
         ("reply to me in Portuguese", FactAction.SET, FactKind.PREFERRED_LANGUAGE, "Portuguese"),
         ("my preferred language is pt-BR", FactAction.SET, FactKind.PREFERRED_LANGUAGE, "pt-BR"),
         ("what do you know about me?", FactAction.SHOW, None, None),
-        ("what's my email?", FactAction.SHOW, None, None),
+        ("what's my email?", FactAction.SHOW, FactKind.EMAIL, None),
         ("o que você sabe sobre mim?", FactAction.SHOW, None, None),
         ("forget my email", FactAction.FORGET, FactKind.EMAIL, None),
         ("delete my preferred name", FactAction.FORGET, FactKind.PREFERRED_NAME, None),
@@ -469,14 +469,18 @@ def _asker_block(user: str) -> dict[str, object]:
     return parsed
 
 
-@pytest.mark.parametrize("request_for", [in_channel, in_dm])
-async def test_name_and_language_reach_the_prompt_fenced_and_the_email_never_does(
-    request_for: Any,
+@pytest.mark.parametrize(("request_for", "contact_shown"), [(in_channel, False), (in_dm, True)])
+async def test_facts_reach_the_prompt_fenced_and_contact_details_only_in_a_dm(
+    request_for: Any, contact_shown: bool
 ) -> None:
+    """Name and language everywhere; email and phone only where the one reader
+    is their owner. Before, a DM prompt held no contact details either, and
+    "what's my phone number?"-style questions could not be answered."""
     service, store, answers = build()
     await store.set_fact(LEO, PersonalFact(FactKind.PREFERRED_NAME, "Leo"))
     await store.set_fact(LEO, PersonalFact(FactKind.PREFERRED_LANGUAGE, "Portuguese"))
     await store.set_fact(LEO, PersonalFact(FactKind.EMAIL, EMAIL))
+    await store.set_fact(LEO, PersonalFact(FactKind.PHONE, "+55 21 98070 3795"))
 
     await reply(service, request_for("what was decided about the deploy?"))
 
@@ -486,7 +490,9 @@ async def test_name_and_language_reach_the_prompt_fenced_and_the_email_never_doe
     block = _asker_block(user)
     assert block["preferred_name"] == "Leo"
     assert block["preferred_language"] == "Portuguese"
-    assert EMAIL not in user and EMAIL not in system
+    assert (EMAIL in user) is contact_shown
+    assert ("+55 21 98070 3795" in user) is contact_shown
+    assert EMAIL not in system
     # Out of band for one answer only: nothing lingers for the next asker.
     assert current_facts() is None
 
