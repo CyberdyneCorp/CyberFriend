@@ -27,9 +27,8 @@ value, in-range status, minimum and maximum price with the current price, and
 uncollected fees.
 
 #### Scenario: Closed positions
-- WHEN a position NFT has zero liquidity and nothing uncollected
-- THEN it SHALL NOT be listed
-- AND the number of closed positions SHALL be stated
+- WHEN a position NFT has zero liquidity
+- THEN it SHALL NOT be listed or counted, even with fees left uncollected
 
 #### Scenario: Out of range
 - WHEN the pool's current tick is outside the position's range

@@ -228,3 +228,36 @@ async def test_the_production_follow_up_never_reaches_the_corpus() -> None:
     # Spelled out for the proposal and rooted in the question it is held to.
     assert ADDRESS.lower() in surface.invocations[0].question.lower()
     assert "WETH/USDC" in outcome.answer.text
+
+
+async def test_a_positions_turn_is_remembered_so_the_follow_up_can_use_it() -> None:
+    """The follow-up fix above was tested with memory built by hand; in
+    production the positions turn was never stored ("unverifiable_provenance"),
+    so the follow-up still went to the corpus. This goes through the real
+    memory: remember the answer, recall it, and carry its address."""
+    from chatmemory.app.memory import ConversationMemory
+    from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
+    from chatmemory.ports.answers import Answer, Citation
+    from chatmemory.ports.memory import ConversationLocation, Recollection
+    from tests.unit.test_conversation_memory import FakeMemoryStore
+
+    store = FakeMemoryStore()
+    memory = ConversationMemory(store)
+    me = Viewer(person=PersonRef("discord", 7), visible_channels=frozenset())
+    dm = ConversationLocation("discord", 7, direct=True)
+    source = ChannelRef(DEFI_POSITIONS_PROVIDER, 0)
+    answer = Answer(
+        REPORT,
+        citations=(Citation(source, -1, "chain", REPORT[:40], "", DEFI_POSITIONS_PROVIDER),),
+        consulted_channels=frozenset({source}),
+    )
+
+    stored = await memory.remember(
+        me, dm, ASKED_FIRST, answer, consulted=answer.consulted_channels,
+        informed_by=Recollection(),
+    )
+    recalled = await memory.recall(me, dm)
+    found = defi_question(FOLLOW_UP, tuple(t.question for t in recalled.turns))
+
+    assert stored, "the positions turn was not remembered"
+    assert found is not None and found.address == ADDRESS.lower()

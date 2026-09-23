@@ -199,3 +199,21 @@ def test_recall_requires_a_viewer() -> None:
     for method in (ConversationMemory.recall, RecordingStore.recall):
         parameter = inspect.signature(method).parameters["viewer"]
         assert parameter.default is inspect.Parameter.empty
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["chain_balances", "defi_positions", "market_crypto", "market_fx", "market_index"],
+)
+def test_a_turn_resting_on_public_chain_or_market_data_is_remembered(source: str) -> None:
+    """Regression. Every wallet, positions and price answer was dropped as
+    "unverifiable_provenance", so a follow-up had no earlier question to take
+    its address from."""
+    answer = Answer("figures", citations=(cite(ChannelRef(source, 0), source),))
+    assert answer_provenance(HERE, answer, (ChannelRef(source, 0),), NO_MEMORY) == frozenset()
+
+
+def test_an_allowlisted_mcp_server_is_still_not_remembered() -> None:
+    """Public data is known to have no access rule; an MCP server is not."""
+    answer = Answer("docs", citations=(cite(ChannelRef("context7", 0), "context7"),))
+    assert answer_provenance(HERE, answer, (ChannelRef("context7", 0),), NO_MEMORY) is None

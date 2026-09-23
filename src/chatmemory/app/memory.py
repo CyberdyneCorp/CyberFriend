@@ -38,6 +38,13 @@ from collections.abc import Iterable
 
 import structlog
 
+from chatmemory.app.egress import (
+    CHAIN_BALANCES_PROVIDER,
+    DEFI_POSITIONS_PROVIDER,
+    MARKET_CRYPTO_PROVIDER,
+    MARKET_FX_PROVIDER,
+    MARKET_INDEX_PROVIDER,
+)
 from chatmemory.app.reasoning.evidence import CORPUS_SOURCE_SYSTEMS, SOURCE_WEB
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.answers import Answer
@@ -53,6 +60,23 @@ log = structlog.get_logger()
 
 DEFAULT_RECENT_TURNS = 6
 """How many permitted turns a recollection carries verbatim."""
+
+
+PUBLIC_SOURCE_SYSTEMS = frozenset({
+    SOURCE_WEB,
+    CHAIN_BALANCES_PROVIDER,
+    DEFI_POSITIONS_PROVIDER,
+    MARKET_CRYPTO_PROVIDER,
+    MARKET_FX_PROVIDER,
+    MARKET_INDEX_PROVIDER,
+})
+"""Sources with no access rule of their own: public chain state and prices,
+like the web. A turn resting on them may be remembered.
+
+Before this, only the web was, so every wallet, positions and price answer was
+dropped from memory as "unverifiable_provenance" -- and a follow-up such as
+"show me the v4 position" had no earlier question to take its address from.
+Anything else external (an allowlisted MCP server) still is not."""
 
 
 def answer_provenance(
@@ -75,14 +99,14 @@ def answer_provenance(
     for citation in answer.citations:
         if citation.source_system in CORPUS_SOURCE_SYSTEMS:
             channels.add(citation.channel)
-        elif citation.source_system != SOURCE_WEB:
+        elif citation.source_system not in PUBLIC_SOURCE_SYSTEMS:
             return None
     for channel in consulted:
         if channel.platform == location.platform:
             channels.add(channel)
-        elif channel.platform != SOURCE_WEB:
+        elif channel.platform not in PUBLIC_SOURCE_SYSTEMS:
             # External evidence is filed under `ChannelRef(source_system, 0)`;
-            # only the web is known to carry no access rule of its own.
+            # only public sources are known to carry no access rule of their own.
             return None
     return frozenset(channels)
 

@@ -26,7 +26,7 @@ DEFAULT_CHUNK = 50
 another; 50 was accepted by both, and a busy wallet is still a few requests."""
 
 
-RATE_LIMIT_RETRIES = (0.5, 1.0, 2.0)
+RATE_LIMIT_RETRIES = (0.5, 1.0, 2.0, 4.0)
 """Back-off, in seconds, after each "Too Many Requests". Reading three chains
 at once bursts past Infura's per-second limit even on a key that handles the
 volume; waiting a moment is enough, and failing the chain is not."""

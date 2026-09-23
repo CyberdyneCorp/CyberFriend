@@ -172,9 +172,12 @@ def build_chain_tools(
                     [f"https://{d.chain.infura_host}.infura.io" for d in DEPLOYMENTS]
                     + [d.blockscout for d in DEPLOYMENTS]
                 ),
-                # The combined tool reads liquidity, then lending, each bounded
-                # per chain.
-                timeout_seconds=2 * settings.positions_timeout_seconds + TIMEOUT_HEADROOM,
+                # Chains are read one after another, each bounded, and the
+                # combined tool reads liquidity then lending: the server waits
+                # for the worst case rather than cutting a slow chain short.
+                timeout_seconds=(
+                    2 * len(DEPLOYMENTS) * settings.positions_timeout_seconds + TIMEOUT_HEADROOM
+                ),
             ),
         ),
         allowlist=(

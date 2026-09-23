@@ -88,24 +88,17 @@ class UniswapReader:
 
     async def liquidity(self, owner: str) -> ChainLiquidity:
         notes: list[str] = []
-        v3, v3_closed = await self._v3(owner, notes)
-        v4, v4_closed = await self._v4(owner, notes)
-        raw = v3 + v4
+        raw = await self._v3(owner, notes) + await self._v4(owner, notes)
         positions = await self._present(raw) if raw else ()
-        return ChainLiquidity(
-            chain=self._d.chain,
-            positions=positions,
-            closed=v3_closed + v4_closed,
-            notes=tuple(notes),
-        )
+        return ChainLiquidity(chain=self._d.chain, positions=positions, notes=tuple(notes))
 
     # --- v3 --------------------------------------------------------------
 
-    async def _v3(self, owner: str, notes: list[str]) -> tuple[list[RawPosition], int]:
+    async def _v3(self, owner: str, notes: list[str]) -> list[RawPosition]:
         manager = self._d.v3_position_manager
         count = await self._count(manager, owner, "Uniswap v3", notes)
         if not count:
-            return [], 0
+            return []
         indexes = await self._node.multicall([
             Call(manager, abi.call(abi.TOKEN_OF_OWNER_BY_INDEX, abi.address(owner), abi.uint(i)))
             for i in range(count)
@@ -115,7 +108,6 @@ class UniswapReader:
             [Call(manager, abi.call(abi.V3_POSITIONS, abi.uint(t))) for t in ids]
         )
         positions: list[RawPosition] = []
-        closed = 0
         for token_id, raw in zip(ids, details, strict=True):
             if not raw:
                 continue
@@ -132,12 +124,13 @@ class UniswapReader:
                 owed0=w[10],
                 owed1=w[11],
             )
-            if position.liquidity or position.owed0 or position.owed1:
+            # Open positions only. A wallet that has LP'd for a while holds
+            # dozens of withdrawn NFTs, and listing or counting them buried
+            # the ones that are earning.
+            if position.liquidity:
                 positions.append(position)
-            else:
-                closed += 1
         positions = await self._v3_pool_state(positions)
-        return await self._v3_fees(owner, positions), closed
+        return await self._v3_fees(owner, positions)
 
     async def _v3_pool_state(self, positions: list[RawPosition]) -> list[RawPosition]:
         if not positions:
@@ -167,14 +160,10 @@ class UniswapReader:
         """Uncollected fees, by simulating `collect` as the owner.
 
         One `eth_call` each: the manager only lets the owner collect, and a
-        multicall's sender is the multicall contract. For a closed position
-        `tokensOwed` is already exact and nothing is simulated.
+        multicall's sender is the multicall contract.
         """
         out: list[RawPosition] = []
         for p in positions:
-            if not p.liquidity:
-                out.append(p)
-                continue
             data = abi.call(
                 abi.V3_COLLECT,
                 abi.uint(p.token_id),
@@ -193,11 +182,11 @@ class UniswapReader:
 
     # --- v4 --------------------------------------------------------------
 
-    async def _v4(self, owner: str, notes: list[str]) -> tuple[list[RawPosition], int]:
+    async def _v4(self, owner: str, notes: list[str]) -> list[RawPosition]:
         manager = self._d.v4_position_manager
         count = await self._count(manager, owner, "Uniswap v4", notes)
         if not count:
-            return [], 0
+            return []
         ids = await self._owned(manager, owner, await self._v4_ids(owner) or [])
         if len(ids) < count:
             # The explorer is behind, down, or both: look for recent mints and
@@ -257,27 +246,26 @@ class UniswapReader:
             return None
         return ids[:MAX_POSITIONS]
 
-    async def _v4_positions(self, ids: list[int]) -> tuple[list[RawPosition], int]:
+    async def _v4_positions(self, ids: list[int]) -> list[RawPosition]:
+        """Open positions only: an ID with no liquidity is dropped."""
         if not ids:
-            return [], 0
+            return []
         manager, view = self._d.v4_position_manager, self._d.v4_state_view
         results = await self._node.multicall(
             [Call(manager, abi.call(abi.V4_POOL_AND_POSITION, abi.uint(t))) for t in ids]
             + [Call(manager, abi.call(abi.V4_POSITION_LIQUIDITY, abi.uint(t))) for t in ids]
         )
         live: list[tuple[int, list[int], int, bytes]] = []
-        closed = 0
         for i, token_id in enumerate(ids):
             info, liquidity_raw = results[i], results[len(ids) + i]
             liquidity = abi.words(liquidity_raw)[0] if liquidity_raw else 0
             if not info or not liquidity:
-                closed += 1
                 continue
             w = abi.words(info)
             pool_id = abi.keccak256(b"".join(v.to_bytes(32, "big") for v in w[:5]))
             live.append((token_id, w, liquidity, pool_id))
         if not live:
-            return [], closed
+            return []
         calls: list[Call] = []
         for token_id, w, _, pool_id in live:
             lower, upper = abi.signed(w[5] >> 8, 24), abi.signed(w[5] >> 32, 24)
@@ -295,7 +283,7 @@ class UniswapReader:
             _v4_position(token_id, w, liquidity, state[3 * i : 3 * i + 3])
             for i, (token_id, w, liquidity, _) in enumerate(live)
         ]
-        return positions, closed
+        return positions
 
     # --- shared ----------------------------------------------------------
 
@@ -316,7 +304,7 @@ class UniswapReader:
             prices = {}
         return tuple(
             _position(p, tokens[p.token0], tokens[p.token1], prices)
-            for p in sorted(raw, key=lambda p: (p.liquidity == 0, p.protocol, p.token_id))
+            for p in sorted(raw, key=lambda p: (p.protocol, p.token_id))
         )
 
 
