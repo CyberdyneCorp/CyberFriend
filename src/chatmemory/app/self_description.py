@@ -24,6 +24,7 @@ from typing import Any
 
 from chatmemory.app.egress import (
     CHAIN_BALANCES_PROVIDER,
+    DEFI_POSITIONS_PROVIDER,
     MARKET_CRYPTO_PROVIDER,
     MARKET_FX_PROVIDER,
     MARKET_INDEX_PROVIDER,
@@ -60,8 +61,18 @@ claim the web at all."""
 
 LOOKUP_DESCRIPTIONS = {
     CHAIN_BALANCES_PROVIDER: {
-        Language.ENGLISH: "wallet balances on Ethereum and Base",
-        Language.PORTUGUESE: "saldos de carteiras na Ethereum e na Base",
+        Language.ENGLISH: "wallet balances on Ethereum, Base and Arbitrum",
+        Language.PORTUGUESE: "saldos de carteiras na Ethereum, Base e Arbitrum",
+    },
+    DEFI_POSITIONS_PROVIDER: {
+        Language.ENGLISH: (
+            "Uniswap v3/v4 liquidity positions and Aave supplies and borrows "
+            "for a wallet on Ethereum, Base and Arbitrum"
+        ),
+        Language.PORTUGUESE: (
+            "posições de liquidez na Uniswap v3/v4 e depósitos e empréstimos "
+            "no Aave de uma carteira na Ethereum, Base e Arbitrum"
+        ),
     },
     "context7": {
         Language.ENGLISH: "library documentation (Context7)",

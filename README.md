@@ -24,7 +24,8 @@ internet said.
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
 | **Web and MCP** | Wikipedia, Google via SerpApi, and any MCP server an operator allowlists |
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
-| **Wallet balances** | What a `0x` address holds on Ethereum and Base, with USD values. An address you typed, or the one you saved |
+| **Wallet balances** | What a `0x` address holds on Ethereum, Base and Arbitrum, with USD values. An address you typed, or the one you saved |
+| **DeFi positions** | Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
@@ -51,7 +52,8 @@ graph LR
     P --> OUT["Outside the server"]
     OUT --> X1["Wikipedia &middot; Google"]
     OUT --> X2["BTC &middot; ETH &middot; S&P 500 &middot; currencies"]
-    OUT --> X3["wallet balances on Ethereum and Base"]
+    OUT --> X3["wallet balances on Ethereum &middot; Base &middot; Arbitrum"]
+    OUT --> X5["my LP positions &middot; my Aave health factor"]
     OUT --> X4["any MCP server an operator allowlists"]
 
     P --> YOU["About you"]
@@ -195,7 +197,7 @@ flowchart TD
     Q["Question"] --> ROUTE{"What kind of<br/>question is it?"}
 
     ROUTE -->|"what can you do"| SELF["Answered from<br/>configuration"]
-    ROUTE -->|"a price, a wallet"| LIVE["Chain and market tools"]
+    ROUTE -->|"a price, a wallet,<br/>pools or loans"| LIVE["Chain and market tools"]
     ROUTE -->|"anything else"| ACL["Resolve what this<br/>person may read"]
 
     ACL --> RET["Retrieval,<br/>scoped in SQL"]
@@ -323,7 +325,8 @@ lists the common ones. The settings worth knowing:
 | `CHAT_MODEL_CAPABILITIES` | What the endpoint supports; narrowing is deliberate |
 | `WEB_TOOLS_ENABLED`, `SERPAPI_KEY` | Wikipedia and Google. Off by default |
 | `MARKET_TOOLS_ENABLED` | BTC, ETH, S&P 500, currency conversion. Off by default |
-| `WALLET_TOOLS_ENABLED`, `INFURA_KEY` | Wallet balances on Ethereum and Base. Off by default |
+| `WALLET_TOOLS_ENABLED`, `INFURA_KEY` | Wallet balances and DeFi positions on Ethereum, Base and Arbitrum. Off by default |
+| `POSITIONS_TIMEOUT_SECONDS` | Per-chain bound for liquidity and Aave lookups (default 25) |
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |

@@ -9,7 +9,7 @@ listed it. That limit is stated in the answer rather than hidden: a token
 nobody listed reads as absent, and an answer that quietly omitted it would be
 wrong in the direction people care about.
 
-Chosen for what wallets on these two chains actually hold: the dollar
+Chosen for what wallets on these chains actually hold: the dollar
 stablecoins, and wrapped ether because a balance held as WETH is invisible to
 `eth_getBalance` and is the one omission somebody would notice immediately.
 """
@@ -54,7 +54,16 @@ BASE = Chain(
     explorer="https://basescan.org/address/",
 )
 
-CHAINS: tuple[Chain, ...] = (ETHEREUM, BASE)
+ARBITRUM = Chain(
+    key="arbitrum",
+    name="Arbitrum",
+    infura_host="arbitrum-mainnet",
+    native_symbol="ETH",
+    price_symbol="ETH",
+    explorer="https://arbiscan.io/address/",
+)
+
+CHAINS: tuple[Chain, ...] = (ETHEREUM, BASE, ARBITRUM)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +89,12 @@ TOKENS: dict[str, tuple[Token, ...]] = {
         Token("USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", 6, dollar_pegged=True),
         Token("DAI", "0x50c5725949a6f0c72e6c4a641f24049a917db0cb", 18, dollar_pegged=True),
         Token("WETH", "0x4200000000000000000000000000000000000006", 18),
+    ),
+    ARBITRUM.key: (
+        Token("USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", 6, dollar_pegged=True),
+        Token("USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", 6, dollar_pegged=True),
+        Token("DAI", "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", 18, dollar_pegged=True),
+        Token("WETH", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", 18),
     ),
 }
 

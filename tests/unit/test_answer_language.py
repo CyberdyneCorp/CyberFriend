@@ -28,6 +28,7 @@ ALL_TOOLS = (
     "wikipedia:search",
     "serpapi:search",
     "chain_balances:wallet_balances",
+    "defi_positions:liquidity_positions",
     "context7:query-docs",
     "market_crypto:crypto_price",
     "market_fx:convert",
@@ -129,7 +130,9 @@ def test_capabilities_are_named_by_what_they_do_not_by_their_server() -> None:
     server and not a thing anybody can ask for."""
     described = describe_capabilities(ALL_TOOLS)
     assert "chain_balances" not in described
-    assert "wallet balances on Ethereum and Base" in described
+    assert "wallet balances on Ethereum, Base and Arbitrum" in described
+    assert "defi_positions" not in described
+    assert "Uniswap v3/v4 liquidity positions and Aave" in described
     assert "serpapi" not in described
     assert "the web (Wikipedia, Google)" in described
 

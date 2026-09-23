@@ -293,6 +293,7 @@ class ReasoningLoop:
         servers: Collection[str] | None = None,
         *,
         verbatim: bool = False,
+        tools: Collection[str] | None = None,
     ) -> RunOutcome:
         """Answer from outside sources only; the corpus is not searched.
 
@@ -303,7 +304,9 @@ class ReasoningLoop:
         cited -- the only evidence this run can hold is what a tool returned.
 
         `servers` narrows the offer to those servers' tools, and the call is
-        held to that narrowed offer (see `_invoke`). `verbatim` answers with
+        held to that narrowed offer (see `_invoke`). `tools` narrows further,
+        to server-qualified tool names, when the route already knows which
+        tool the question is for. `verbatim` answers with
         the result's own figure lines instead of a model's paraphrase of them:
         a market figure is exact and dated by the adapter, and a synthesizer
         can only round it, drop its time, or add advice nobody asked for.
@@ -315,7 +318,7 @@ class ReasoningLoop:
         """
         spend = self._driver.new_ledger()
         evidence = EvidenceLedger()
-        offered, offer_decision = self._offer_tools(question, servers)
+        offered, offer_decision = self._offer_tools(question, servers, tools)
         call_decisions = await self._call_tool(question, offered, spend, evidence)
         decisions = [
             *(() if offer_decision is None else (offer_decision,)),
@@ -356,7 +359,10 @@ class ReasoningLoop:
         )
 
     def _offer_tools(
-        self, question: Question, servers: Collection[str] | None = None
+        self,
+        question: Question,
+        servers: Collection[str] | None = None,
+        tools: Collection[str] | None = None,
     ) -> tuple[Sequence[ExternalTool], Decision | None]:
         """Ask the tool surface what this question may see, and record it.
 
@@ -378,6 +384,8 @@ class ReasoningLoop:
             # Narrowing only. The surface's own routing still decided what may
             # be offered at all; this removes tools, and never adds one.
             offered = tuple(t for t in offered if t.server in servers)
+        if tools is not None:
+            offered = tuple(t for t in offered if t.qualified_name in tools)
         names = tuple(sorted(t.qualified_name for t in offered))
         log.info("reasoning.federation.offered", count=len(names), tools=list(names))
         return offered, Decision(

@@ -301,12 +301,15 @@ def test_no_key_registers_nothing() -> None:
     assert build_chain_tools().servers == ()
 
 
-def test_a_key_registers_one_read_only_tool() -> None:
+def test_a_key_registers_only_read_only_tools() -> None:
     tools = build_chain_tools(ChainToolsConfig(infura_key="k"))
-    assert tools.server_names == (WalletProvider.server,)
-    entry = tools.allowlist[0]
-    assert entry.effect.mutates is False
-    assert entry.mutation_enabled is False
+    assert tools.server_names == (WalletProvider.server, "defi_positions")
+    assert {e.tool for e in tools.allowlist} == {
+        "wallet_balances", "liquidity_positions", "lending_positions", "defi_positions",
+    }
+    for entry in tools.allowlist:
+        assert entry.effect.mutates is False
+        assert entry.mutation_enabled is False
 
 
 # --- the route that makes the tool reachable ----------------------------

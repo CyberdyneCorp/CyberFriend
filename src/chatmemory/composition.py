@@ -745,7 +745,7 @@ def web_tools_config(settings: Settings) -> WebToolsConfig:
 def chain_tools_config(settings: Settings) -> ChainToolsConfig:
     """Operator settings, translated for the wallet adapter.
 
-    One Infura key covers both chains: the endpoint differs only in its host
+    One Infura key covers every chain: the endpoint differs only in its host
     segment, so a second variable would be a second place for the same secret
     to be set wrong.
     """
@@ -755,6 +755,7 @@ def chain_tools_config(settings: Settings) -> ChainToolsConfig:
         ),
         max_calls_per_run=settings.wallet_max_calls_per_run,
         timeout_seconds=settings.wallet_timeout_seconds,
+        positions_timeout_seconds=settings.positions_timeout_seconds,
     )
 
 

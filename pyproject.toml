@@ -24,6 +24,9 @@ dependencies = [
     "python-docx>=1.1",
     "defusedxml>=0.7",
     "charset-normalizer>=3.3",
+    # Keccak-256 for Uniswap v4 pool IDs (add-defi-positions). Hashing only:
+    # nothing in this project signs.
+    "pycryptodome>=3.20",
 ]
 
 [project.optional-dependencies]
