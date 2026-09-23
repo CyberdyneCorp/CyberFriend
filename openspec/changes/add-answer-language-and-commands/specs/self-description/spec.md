@@ -31,6 +31,11 @@ The reply SHALL name each command the assistant offers and what it does.
 - WHEN a command's feature is switched off for this deployment
 - THEN that command SHALL NOT be listed
 
+#### Scenario: Asked in a direct message
+- WHEN someone asks what the assistant can do in a direct message
+- THEN a command registered only on the server, which Discord does not list
+  in a direct message, SHALL NOT be listed
+
 ### Requirement: Capabilities are named in human terms
 
 The reply SHALL describe what a capability does rather than naming the server

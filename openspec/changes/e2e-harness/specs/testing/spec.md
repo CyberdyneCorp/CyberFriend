@@ -95,3 +95,45 @@ clock the edges hold. Production edges SHALL hold the UTC wall clock.
 - WHEN the answer service or catch-up is built on a fixed clock
 - THEN the planner's and synthesiser's prompts SHALL state that moment, and a
   catch-up period SHALL be measured from it
+
+### Requirement: End-to-end scenarios drive the assembled process through the wire
+
+End-to-end tests SHALL build the bot process with the assembly function over
+fake edges and a real migrated database, and SHALL drive it only through a
+fake Discord wire: gateway-shaped messages and slash-command interactions in,
+and the REST and interaction-webhook calls Discord would receive out. The bot
+client's own command registration SHALL run and its sync payloads SHALL be
+recorded. Scenario assertions SHALL be limited to what is observable at the
+edges -- what Discord received, whether the corpus was searched, which hosts
+were reached, which model stages ran, and memory and fact rows read by SQL.
+
+#### Scenario: A scenario reaches an unscripted host
+- WHEN a scenario makes an HTTP request to a host no fixture answers for, or
+  any HTTP client not built over the edges' transport opens a connection
+- THEN the scenario SHALL fail naming the host
+- AND it SHALL fail even when the provider that made the request catches the
+  error and answers as if the host were unreachable
+
+#### Scenario: No database is available
+- WHEN the end-to-end database is unreachable and the run requires one
+- THEN the suite SHALL fail rather than skip
+
+#### Scenario: The bot names a command that is not offered there
+- WHEN a reply tells a person to run a slash command that Discord would not
+  list where the reply was sent
+- THEN the scenario SHALL fail naming the command
+
+#### Scenario: A slash command invoked where it is not offered
+- WHEN a scenario invokes a slash command in a DM or a guild where the synced
+  registration does not offer it
+- THEN the invocation SHALL be refused before the command runs
+
+#### Scenario: A known-open defect is fixed
+- WHEN a scenario marked as a known-open defect starts passing
+- THEN the suite SHALL fail until the marker is removed
+
+#### Scenario: A known-open defect scenario breaks some other way
+- WHEN a scenario marked as a known-open defect fails for a reason other than
+  the defect it names -- the reply is no longer the one it names, or a
+  harness check fails
+- THEN the scenario SHALL fail rather than count as the expected failure

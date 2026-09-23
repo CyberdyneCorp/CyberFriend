@@ -113,7 +113,8 @@ which asserts the trigger bodies still say what the code assumes.
 3. `mypy`
 4. `pytest tests/unit` — before the database is touched, so a broken service
    container cannot hide a failing unit suite
-5. `alembic upgrade head`, then the full `pytest tests`
+5. `alembic upgrade head`, then `pytest tests` without `tests/e2e`
+6. `pytest tests/e2e` with `E2E_REQUIRE_DB=1`, printing the ten slowest tests
 
 A pgvector Postgres runs as a service container, because the integration tests
 are where the permission predicate is proved against a real planner and a real
@@ -122,6 +123,44 @@ reachable. A CI job without one is green and proves nothing.
 
 No OpenAI key is supplied. The tests that would spend money skip themselves, and
 a pull request from a fork must not be able to bill you.
+
+## End-to-end tests
+
+`tests/e2e` drives the bot process `main` runs -- built by the same
+`assemble(settings, edges)` -- with fakes only at its edges: the Discord wire
+(real discord.py objects fed gateway-shaped payloads, with REST and webhook
+calls recorded), a scripted chat model and hashed embeddings, and one
+`httpx.MockTransport` for every outbound provider. The database is real:
+`TEST_DATABASE_URL` (the compose pgvector, after `just migrate`), or a
+throwaway testcontainers pgvector when that is unreachable. Any other HTTP
+connection, or a request to a host no fixture answers for, fails the turn that
+made it -- also when the provider that made it caught the error and answered
+"could not be reached". The corpus is seeded through the production store and
+embedding worker, so its windows carry message ids as ingest leaves them.
+
+Scenarios assert only what an outsider could see: what Discord received,
+whether the corpus was searched, which hosts were reached, which model stages
+ran, and the memory and fact rows, read by SQL. Every `/name` the bot says is
+checked against the commands Discord offers where it said it.
+
+- `E2E_REQUIRE_DB=1` turns "no database" from a skip into a failure. CI sets it.
+- The suite fails the run if it takes more than 60 seconds.
+- `E2E_UPDATE_SNAPSHOTS=1` rewrites `tests/e2e/snapshots/commands.json`, the
+  exact command payload the bot syncs; review the diff like code.
+- discord.py is pinned to `~=2.7.1` in the dev extras because the fake wire
+  uses a few of its private names; `tests/e2e/test_harness_canary.py` lists
+  them and fails first on an upgrade that moves one.
+- A known-open defect is a strict `xfail` whose reason names the constant.
+  Fixing it turns the xfail into a failure, so the marker comes off with the fix.
+  It expects `LanguageMismatch` only, and first checks the reply sent is that
+  constant, so a harness failure or a changed reply is not absorbed by it.
+- `mypy` checks `tests/e2e` as well as the package, so the harness's
+  `type: ignore`s against discord.py are verified, not assumed.
+
+A fix for a production bug adds a scenario here that replays the transcript
+that failed -- the message, and the reply that was wrong -- as well as a unit
+test of the predicate that caused it. A unit test of the predicate alone is how
+each of those bugs passed review.
 
 ## The SQL audit
 

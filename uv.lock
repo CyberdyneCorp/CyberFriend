@@ -644,6 +644,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "discord-py" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -658,6 +659,7 @@ requires-dist = [
     { name = "charset-normalizer", specifier = ">=3.3" },
     { name = "defusedxml", specifier = ">=0.7" },
     { name = "discord-py", specifier = ">=2.4" },
+    { name = "discord-py", marker = "extra == 'dev'", specifier = "~=2.7.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },

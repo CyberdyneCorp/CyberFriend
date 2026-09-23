@@ -31,6 +31,7 @@ from chatmemory.app.egress import (
 )
 from chatmemory.app.language import Language, detect
 from chatmemory.app.routing import self_description_question
+from chatmemory.domain.audience import DeliveryMode
 from chatmemory.ports.answers import Answer, AnswerService, Question
 
 MARKET_DESCRIPTIONS = {
@@ -99,6 +100,8 @@ class Command:
     name: str
     english: str
     portuguese: str
+    guild_only: bool = False
+    """Registered on the guild alone, so Discord does not list it in a DM."""
 
     def described(self, language: Language) -> str:
         text = self.portuguese if language is Language.PORTUGUESE else self.english
@@ -110,11 +113,13 @@ INDEX = Command(
     "index",
     "Archive a channel so people who can read it can search it",
     "Arquivar um canal para que quem pode lê-lo possa pesquisá-lo",
+    guild_only=True,
 )
 UNINDEX = Command(
     "unindex",
     "Stop archiving a channel and delete what was archived",
     "Parar de arquivar um canal e apagar o que foi arquivado",
+    guild_only=True,
 )
 NOTIFICATIONS = Command(
     "notifications",
@@ -321,11 +326,22 @@ class SelfDescriptionAnswerService:
                 describe_capabilities(
                     self._tools,
                     personal_facts=self._personal_facts,
-                    commands=self._commands,
+                    commands=self._offered_where(question),
                     language=language if language.known else Language.ENGLISH,
                 )
             )
         return await self._fallback.answer(question)
+
+    def _offered_where(self, question: Question) -> tuple[Command, ...]:
+        """The commands Discord lists where this answer is read.
+
+        A DM menu has no guild commands, and telling somebody to pick
+        `/index` from a menu that does not have it is the same mistake as
+        listing a command whose feature is off.
+        """
+        if question.audience.mode is DeliveryMode.DIRECT_MESSAGE:
+            return tuple(c for c in self._commands if not c.guild_only)
+        return self._commands
 
 
 _EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED)
