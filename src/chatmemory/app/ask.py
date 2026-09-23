@@ -76,7 +76,12 @@ from chatmemory.app.confirmation import (
 )
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.disclosure import ScopedAnswer, WithheldEvidenceProbe, enforce_audience
-from chatmemory.app.facts import FactOutcome, FactResult, PersonalFactsService
+from chatmemory.app.facts import (
+    DIRECT_ONLY_KINDS,
+    FactOutcome,
+    FactResult,
+    PersonalFactsService,
+)
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.domain.audience import Audience
@@ -90,6 +95,7 @@ from chatmemory.ports.answers import (
     Question,
 )
 from chatmemory.ports.facts import (
+    MAX_FULL_NAME_CHARS,
     MAX_PREFERRED_NAME_CHARS,
     FactKind,
     FactRejection,
@@ -112,16 +118,19 @@ FACT_LABELS = {
     FactKind.PHONE: "phone number",
     FactKind.ETH_WALLET: "Ethereum wallet",
     FactKind.BTC_WALLET: "Bitcoin wallet",
+    FactKind.FULL_NAME: "full name",
 }
 
 REMEMBERABLE = (
     "I can remember these about you, if you tell me yourself:\n"
+    "- your full name (`my name is Leonardo Araujo`)\n"
     "- the name you'd like me to call you (`call me Leo`)\n"
     "- your email address (`my email is ...`)\n"
     "- your phone number (`my phone is ...`)\n"
     "- the language you'd like answers in (`reply to me in Portuguese`)\n"
     "- your Ethereum wallet (`my wallet is 0x...`) and your Bitcoin wallet "
     "(`my btc wallet is ...`)\n"
+    "You can tell me several at once. "
     "Ask `what do you know about me?` to see them, or `forget my email` to "
     "delete one. Once I have your wallet, `what's my balance?` uses it.\n"
     "Your email, phone and wallets I only ever show you, in a direct message."
@@ -168,16 +177,21 @@ def _stored_reply(result: FactResult, direct: bool) -> str:
     assert fact is not None
     if fact.kind is FactKind.PREFERRED_NAME:
         return f"Got it, I'll call you **{fact.value}**."
+    if fact.kind is FactKind.FULL_NAME:
+        return f"Got it, your full name is **{fact.value}**."
     if fact.kind is FactKind.PREFERRED_LANGUAGE:
         return f"Got it, I'll answer you in **{fact.value}**."
+    # Named by its own label: a phone or wallet was once confirmed as "your
+    # email address".
+    label = FACT_LABELS[fact.kind]
     if direct:
         return (
-            f"Got it, I've saved your email address as `{fact.value}`. I only "
+            f"Got it, I've saved your {label} as `{fact.value}`. I only "
             "show it to you, in a direct message."
         )
     # Confirmed without the value: a channel reply is read by everyone here.
     return (
-        "Got it, I've saved your email address. I only show it to you in a "
+        f"Got it, I've saved your {label}. I only show it to you in a "
         "direct message, so I won't repeat it here."
     )
 
@@ -212,18 +226,54 @@ def fact_set_reply(result: FactResult, direct: bool) -> str:
         return _stored_reply(result, direct)
     if result.outcome is FactOutcome.NOT_STORED:
         return FACT_NOT_STORED
+    return f"I didn't save that as your {label}: {_rejection_reason(result)}."
+
+
+def _rejection_reason(result: FactResult) -> str:
+    """Why a value was refused, without repeating it."""
     rejection = result.rejection or FactRejection.MALFORMED
     reason = (
         MALFORMED_BY_KIND.get(result.kind, FACT_REJECTIONS[FactRejection.MALFORMED])
         if rejection is FactRejection.MALFORMED
         else FACT_REJECTIONS.get(rejection, "")
     )
+    limits = {
+        FactKind.PREFERRED_NAME: MAX_PREFERRED_NAME_CHARS,
+        FactKind.FULL_NAME: MAX_FULL_NAME_CHARS,
+    }
     limit = (
-        f" (at most {MAX_PREFERRED_NAME_CHARS} characters)"
-        if result.rejection is FactRejection.TOO_LONG and result.kind is FactKind.PREFERRED_NAME
+        f" (at most {limits[result.kind]} characters)"
+        if result.rejection is FactRejection.TOO_LONG and result.kind in limits
         else ""
     )
-    return f"I didn't save that as your {label}: {reason}{limit}."
+    return f"{reason}{limit}"
+
+
+def facts_set_reply(
+    results: Sequence[FactResult], not_kept: Sequence[str], direct: bool
+) -> str:
+    """One reply for an introduction: what was saved, what was not, and why.
+
+    Values follow the same rule as a single fact: shown back in a direct
+    message, withheld in a channel for the kinds only ever shown to their
+    owner, and never repeated when refused.
+    """
+    lines: list[str] = []
+    for result in results:
+        label = FACT_LABELS[result.kind].capitalize()
+        if result.outcome is FactOutcome.NOT_STORED:
+            return FACT_NOT_STORED
+        if result.outcome is FactOutcome.REJECTED:
+            lines.append(f"✗ {label}: not saved, {_rejection_reason(result)}")
+            continue
+        assert result.fact is not None
+        hidden = not direct and result.kind in DIRECT_ONLY_KINDS
+        lines.append(
+            f"✓ {label}: saved (shown only in a direct message)" if hidden
+            else f"✓ {_shown_line(result.kind, result.fact.value).removeprefix('• ')}"
+        )
+    lines.extend(f"✗ {kind.capitalize()}: I don't keep that" for kind in not_kept)
+    return "\n".join(["Here's what I saved:", *lines])
 
 
 def facts_shown_reply(facts: PersonalFacts, direct: bool) -> str:
@@ -601,6 +651,9 @@ class AskService:
             else:
                 await self._facts.forget(viewer, intent.kind)
             return fact_forgotten_reply(intent.kind)
+        if intent.action is FactAction.SET_MANY:
+            results = [await self._facts.remember(viewer, k, v) for k, v in intent.sets]
+            return facts_set_reply(results, intent.not_kept, direct)
         assert intent.kind is not None and intent.value is not None
         result = await self._facts.remember(viewer, intent.kind, intent.value)
         return fact_set_reply(result, direct)
@@ -652,6 +705,7 @@ class AskService:
         return AskerFacts(
             person=viewer.person,
             preferred_name=stored.get(FactKind.PREFERRED_NAME),
+            full_name=stored.get(FactKind.FULL_NAME),
             preferred_language=stored.get(FactKind.PREFERRED_LANGUAGE),
         )
 

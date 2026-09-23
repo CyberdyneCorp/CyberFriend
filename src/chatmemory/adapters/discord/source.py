@@ -29,7 +29,7 @@ from typing import Protocol, cast
 import discord
 import structlog
 
-from chatmemory.app.routing import states_own_email
+from chatmemory.app.routing import states_own_contact
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
 from chatmemory.ports.sources import SourceUnavailable
@@ -145,12 +145,12 @@ def _display_name(author: RawUser) -> str:
 
 
 def withholds_personal_fact(raw: RawMessage) -> bool:
-    """A message giving the author's own email, which is never indexed.
+    """A message giving the author's own email or phone, which is never indexed.
 
     Checked here, in the one conversion every path shares -- live messages,
     edits and history backfill -- so no path can store what another withholds.
     """
-    return states_own_email(raw.content)
+    return states_own_contact(raw.content)
 
 
 def to_message(raw: RawMessage) -> Message | None:

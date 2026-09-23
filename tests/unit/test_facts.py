@@ -87,7 +87,7 @@ def _conforms(store: FakeFactStore) -> FactStore:
     return store
 
 
-def _migration(name: str = "0018_contact_facts.py") -> ModuleType:
+def _migration(name: str = "0019_full_name.py") -> ModuleType:
     """The migration that currently defines which kinds the table accepts.
 
     Points at the latest one to widen the constraint, not at the first: 0014
@@ -113,6 +113,7 @@ def test_the_set_of_facts_is_closed() -> None:
         "phone",
         "eth_wallet",
         "btc_wallet",
+        "full_name",
     }
 
 
