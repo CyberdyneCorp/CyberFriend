@@ -25,27 +25,27 @@ pretending to have recorded one.
 
 Conversation memory is handed down the same way, and for the same reason: it
 is built over the answer stack's engine, and the ask service that recalls and
-remembers is built from guild state. `main` -> `build_bot` ->
+remembers is built from guild state. `assemble` -> `build_bot` ->
 `build_ask_service` -> `AskService(conversations=...)` is the whole chain, and
 `tests/unit/test_memory_integration.py` reads it from this file down.
 
-Personal facts follow the same route: `main` -> `build_personal_facts` over
+Personal facts follow the same route: `assemble` -> `build_personal_facts` over
 the answer stack's engine -> `build_bot(facts=...)` -> `build_ask_service` ->
 `AskService(facts=...)`, and `tests/unit/test_facts_behaviour.py` reads that
 chain from this file down.
 
-Catch-up summaries arrive the same way: `main` -> `build_catch_up` over the
+Catch-up summaries arrive the same way: `assemble` -> `build_catch_up` over the
 answer stack's `search` and `chat` -> `build_bot(catchup=...)` ->
 `build_ask_service` -> `AskService(catchup=...)`, and
 `tests/unit/test_catchup_wiring.py` reads that chain from this file down. A
 process that skips it answers "what did I miss in #x" by searching the corpus
 for those words -- the behaviour before the feature, never a wider one.
 
-Indexing scope is live here as it is in ingest. `main` builds a `LiveScope`
+Indexing scope is live here as it is in ingest. `assemble` builds a `LiveScope`
 over the answer stack's engine, refreshes it before identifying, hands it to
 `build_bot` -> `build_ask_service`, where both the ACL and the audience
-resolver ask it on every question, and runs its refresh loop beside the
-gateway. Handed the startup set instead, the bot kept answering from a channel
+resolver ask it on every question, and `main` runs its refresh loop beside
+the gateway. Handed the startup set instead, the bot kept answering from a channel
 an operator removed and never from one they added, while ingest -- which did
 read the store -- captured the new one. `test_scope_and_market_wiring` reads
 that chain from this file down.
@@ -53,7 +53,7 @@ that chain from this file down.
 Notifications are the one thing this process does that nobody asked for, and
 they are produced somewhere else. Ingest extracts obligations and writes queue
 rows; this process holds the only connection a person can be messaged through,
-so it drains them: `main` -> `build_bot(notifications=stack.engine)` ->
+so it drains them: `assemble` -> `build_bot(notifications=stack.engine)` ->
 `build_delivery`, which attaches `/notifications` to the client and builds a
 `NotificationDelivery` over a `DiscordAclResolver` on this client's live guild
 state, and then `main` runs `notification_loop` beside the gateway.
@@ -62,7 +62,7 @@ The permission re-check is the resolver: a recipient's readable channels are
 resolved at the moment of sending and bound into the query, so access revoked
 between extraction and delivery removes the obligation from the message.
 
-`/index` and `/unindex` act over that same `LiveScope`. `main` builds
+`/index` and `/unindex` act over that same `LiveScope`. `assemble` builds
 `IndexingStores` over the answer stack's engine -- the configuration editor
 the admin console writes through, the change record it reads, and the
 message and document stores' existing channel purges -- and hands them to
@@ -70,6 +70,13 @@ message and document stores' existing channel purges -- and hands them to
 permission resolver and a notifier over this client's live guild cache. A
 scope written there is re-read by this process at once and by ingest within
 its refresh period. `test_chat_indexing_wiring` reads that chain.
+
+`main` and `assemble` are split at the network. `assemble(settings, edges)`
+builds the whole object graph -- every chain above -- over an `Edges` value
+holding the models, the embedding endpoint and the database engine, and
+starts nothing. `main` hands it `Edges.production(settings)` and then connects
+the gateway and runs the loops. An end-to-end test hands it fakes instead, so
+the graph it drives is the one a deployment runs rather than a copy of it.
 """
 
 from __future__ import annotations
@@ -116,6 +123,8 @@ from chatmemory.app.notifications import NotificationDelivery
 from chatmemory.app.schedules import ScheduledTaskRunner
 from chatmemory.app.scope import LiveScope, ScopeProvider
 from chatmemory.composition import (
+    AnswerStack,
+    Edges,
     ask_policy,
     build_answer_stack,
     build_ask_service,
@@ -507,19 +516,43 @@ async def run_beside_scope(
         task.result()
 
 
-async def main() -> None:
-    log_setup.configure()
-    settings = get_settings()
-    state = HealthState()
-    spawn(state, settings.health_port)
+@dataclass(frozen=True, slots=True)
+class Process:
+    """The bot process's object graph, assembled and ready to connect.
 
-    stack = await build_answer_stack(settings, personal_facts=True)
+    Everything `main` runs, and nothing it has started: no gateway, no loops.
+    Production and the end-to-end harness both get one from `assemble`, so
+    the graph a test drives is the graph a deployment runs.
+    """
+
+    graph: BotGraph
+    stack: AnswerStack
+    scope: LiveScope
+    conversations: Conversations
+    facts: PersonalFactsService
+
+
+async def assemble(settings: Settings, edges: Edges) -> Process:
+    """Build the whole bot process over `edges`, stopping short of the network.
+
+    The two checks that can refuse the deployment run in here -- the model's
+    capabilities when `edges` was built, the embedding width inside
+    `build_answer_stack` -- so a process that `assemble` returns is one whose
+    model and corpus agree with its configuration.
+    """
+    stack = await build_answer_stack(settings, personal_facts=True, edges=edges)
     # Refreshed before the gateway identifies, so the first question is
     # answered from stored scope rather than the environment's. A failed read
     # here keeps the environment's scope, which is the scope in force at boot.
     scope = build_live_scope(settings, stack.engine, os.environ)
     await scope.refresh()
-    state.details["indexing_scope"] = scope.status()
+    # Over the same engine, so a turn is remembered through the pool the
+    # question was answered through. Omitting this is the failure the old
+    # in-memory store had: history recorded for a stage nobody wired.
+    conversations = build_conversations(settings, stack.engine, edges.summary_chat)
+    # Preferred name, email and language, over the same engine as memory.
+    # Omitted, the whole feature is built, tested and reachable from nothing.
+    facts = build_personal_facts(stack.engine)
     # `search` is what lets the withheld-evidence notice fire at all: it
     # probes the gap between what the asker may read and what the audience
     # may. Without it the notice is unreachable in the running process.
@@ -533,18 +566,13 @@ async def main() -> None:
         # through. Without this an ask can be extracted and never dismissed:
         # the correction path was built, tested and reachable from nothing.
         corrections=CorrectionService(PostgresAskStore(stack.engine), ask_policy(settings)),
-        # Over the same engine, so a turn is remembered through the pool the
-        # question was answered through. Omitting this is the failure the old
-        # in-memory store had: history recorded for a stage nobody wired.
-        conversations=build_conversations(settings, stack.engine),
+        conversations=conversations,
         scope=scope,
         # `/index` and `/unindex`, writing through the same stored setting
         # this process and ingest refresh from. Without it both commands
         # answer that indexing is unavailable here.
         indexing=build_indexing_stores(stack.engine, scope),
-        # Preferred name, email and language, over the same engine as memory.
-        # Omitted, the whole feature is built, tested and reachable from nothing.
-        facts=build_personal_facts(stack.engine),
+        facts=facts,
         # "What did I miss in #x", over the same search backend and chat
         # handle the answer stack holds. Omitted, catch-up is built, tested
         # and reachable from nothing -- which is this project's failure mode.
@@ -555,6 +583,20 @@ async def main() -> None:
         # that anything was asked of them.
         notifications=stack.engine,
     )
+    return Process(
+        graph=graph, stack=stack, scope=scope, conversations=conversations, facts=facts
+    )
+
+
+async def main() -> None:
+    log_setup.configure()
+    settings = get_settings()
+    state = HealthState()
+    spawn(state, settings.health_port)
+
+    process = await assemble(settings, Edges.production(settings))
+    graph, scope = process.graph, process.scope
+    state.details["indexing_scope"] = scope.status()
     client = graph.client
 
     original_on_ready = client.on_ready

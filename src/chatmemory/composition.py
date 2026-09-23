@@ -56,10 +56,11 @@ running process and this module only builds objects.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
+import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -156,6 +157,7 @@ from chatmemory.app.reasoning.ports import (
     ChatModel,
     ExternalTool,
     RetrievalTool,
+    ToolCapableChat,
     ToolCompletion,
     ToolDefinition,
     ToolSurface,
@@ -1075,7 +1077,7 @@ def build_catch_up(
 
 
 def build_tool_proposer(
-    settings: Settings, chat: OpenAICompatibleChat
+    settings: Settings, chat: ToolCapableChat
 ) -> ModelToolProposer | None:
     """The stage that asks the model whether a federated tool should be called.
 
@@ -1267,10 +1269,55 @@ def build_ask_pipeline(settings: Settings, engine: AsyncEngine) -> AskPipeline:
     )
 
 
+def utc_now() -> datetime:
+    """The wall clock every process reads unless it was handed another."""
+    return datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class Edges:
+    """Everything the object graph reaches the outside world through.
+
+    Production builds these from `Settings` in `Edges.production`; an
+    end-to-end test hands fakes here and nowhere else, so everything between
+    the edges is the graph production runs, built by the same functions.
+
+    `http_transport` and `clock` are carried for that harness. Nothing reads
+    them yet: production passes the defaults, which are what every adapter
+    already uses.
+    """
+
+    chat: ToolCapableChat
+    summary_chat: ChatModel
+    embeddings: EmbeddingClient
+    engine: AsyncEngine
+    http_transport: httpx.AsyncBaseTransport | None = None
+    clock: Callable[[], datetime] = utc_now
+
+    @classmethod
+    def production(cls, settings: Settings) -> Edges:
+        """The edges a deployment runs over, built exactly as before the seam.
+
+        The chat handle first: its capability check is declarative and free,
+        so a deployment that cannot serve fails before a pool is opened or an
+        embedding call is spent.
+        """
+        chat = build_chat_model(settings)
+        engine = create_async_engine(
+            settings.database_url.get_secret_value(), pool_pre_ping=True
+        )
+        return cls(
+            chat=chat,
+            summary_chat=build_summary_model(settings),
+            embeddings=build_embeddings(settings),
+            engine=engine,
+        )
+
+
 async def build_answer_stack(
-    settings: Settings, *, personal_facts: bool = False
+    settings: Settings, *, personal_facts: bool = False, edges: Edges
 ) -> AnswerStack:
-    """Assemble everything between the corpus and an answer.
+    """Assemble everything between the corpus and an answer, over `edges`.
 
     `personal_facts` says whether the process answering through this stack
     keeps them, so "what can you do?" only offers to remember a name where
@@ -1279,11 +1326,13 @@ async def build_answer_stack(
     Ordering is the point. The two checks that can refuse the deployment run
     before the graph is returned, so a process that reaches its gateway
     connection is one whose model and corpus agree with its configuration.
+    The first -- the chat model's capabilities -- runs when the edges are
+    built; the embedding width is checked here, against whatever `edges`
+    holds, fakes included.
     """
-    chat = build_chat_model(settings)
-
-    engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
-    embeddings = build_embeddings(settings)
+    chat = edges.chat
+    engine = edges.engine
+    embeddings = edges.embeddings
     await verify_embedding_width(
         embeddings, settings.embedding_model, settings.embedding_dimensions
     )

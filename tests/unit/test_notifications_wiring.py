@@ -122,11 +122,11 @@ def create_engine_stub() -> object:
 # --- the bot half: rows are drained -------------------------------------
 
 
-def test_bot_main_hands_build_bot_an_engine_for_notifications() -> None:
-    main = _function(BOT, "main")
-    passed = _calls(main, "build_bot", "notifications")
+def test_bot_assemble_hands_build_bot_an_engine_for_notifications() -> None:
+    assemble = _function(BOT, "assemble")
+    passed = _calls(assemble, "build_bot", "notifications")
     assert passed, (
-        "bot main must pass notifications= to build_bot, or the queue is "
+        "bot assemble must pass notifications= to build_bot, or the queue is "
         "filled by ingest and drained by nobody"
     )
 

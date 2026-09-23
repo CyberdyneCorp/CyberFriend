@@ -117,12 +117,12 @@ def _names_in(node: ast.AST) -> set[str]:
 # --- live scope: the bot ------------------------------------------------------
 
 
-def test_bot_main_builds_refreshes_and_passes_a_live_scope() -> None:
-    main = _function(BOT, "main")
-    assert _calls(main, "build_live_scope"), "bot main never builds a LiveScope"
-    assert _calls(main, "refresh"), "bot main must refresh scope before identifying"
-    passed = _calls(main, "build_bot", "scope")
-    assert passed, "bot main must hand build_bot scope=, or resolvers read the environment"
+def test_bot_assemble_builds_refreshes_and_passes_a_live_scope() -> None:
+    assemble = _function(BOT, "assemble")
+    assert _calls(assemble, "build_live_scope"), "bot assemble never builds a LiveScope"
+    assert _calls(assemble, "refresh"), "bot assemble must refresh scope before identifying"
+    passed = _calls(assemble, "build_bot", "scope")
+    assert passed, "bot assemble must hand build_bot scope=, or resolvers read the environment"
 
 
 def test_bot_main_runs_the_refresh_loop_beside_the_gateway() -> None:
@@ -148,14 +148,18 @@ def test_both_bot_resolvers_are_built_over_the_one_scope() -> None:
         assert all("indexed" in _names_in(c) for c in calls)
 
 
-@pytest.mark.parametrize("path", [BOT, MCP], ids=lambda p: p.name)
-def test_no_serving_main_reads_the_startup_scope(path: Path) -> None:
+@pytest.mark.parametrize(
+    ("path", "function"),
+    [(BOT, "main"), (BOT, "assemble"), (MCP, "main")],
+    ids=lambda p: p.name if isinstance(p, Path) else p,
+)
+def test_no_serving_main_reads_the_startup_scope(path: Path, function: str) -> None:
     """The attribute that was the bug. Only a no-database fallback may read it."""
     reads = [
-        n for n in ast.walk(_function(path, "main"))
+        n for n in ast.walk(_function(path, function))
         if isinstance(n, ast.Attribute) and n.attr == "indexed_channel_ids"
     ]
-    assert not reads, f"{path.name} reads settings.indexed_channel_ids"
+    assert not reads, f"{path.name}:{function} reads settings.indexed_channel_ids"
 
 
 async def test_a_channel_added_after_the_bot_is_built_is_readable() -> None:
@@ -288,7 +292,7 @@ def test_build_federation_merges_market_tools() -> None:
     assert chained, "market sessions are never opened: the factory is not chained"
     # And the running bot reaches build_federation, from main down.
     assert _calls(_function(COMPOSITION, "build_answer_stack"), "build_federation")
-    assert _calls(_function(BOT, "main"), "build_answer_stack")
+    assert _calls(_function(BOT, "assemble"), "build_answer_stack")
 
 
 def test_market_data_is_off_unless_enabled() -> None:

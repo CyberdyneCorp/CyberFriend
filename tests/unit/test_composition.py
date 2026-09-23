@@ -31,7 +31,7 @@ from chatmemory.app.reasoning.retrieval import CorpusRetrieval, discord_urls
 from chatmemory.app.reasoning.service import ReasoningAnswerService
 from chatmemory.composition import (
     ANSWERING_STAGES,
-    build_answer_stack,
+    Edges,
     build_answers,
     build_ask_service,
     build_chat_model,
@@ -221,7 +221,7 @@ async def test_the_stack_refuses_the_model_before_it_reaches_the_network() -> No
     free, so a deployment that cannot serve must never get as far as opening
     a pool or spending a call on the embedding probe."""
     with pytest.raises(MissingCapabilityError):
-        await build_answer_stack(settings(chat_model="some-self-hosted-build"))
+        Edges.production(settings(chat_model="some-self-hosted-build"))
 
 
 async def test_an_embedding_model_of_the_wrong_width_refuses_to_start() -> None:

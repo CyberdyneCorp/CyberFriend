@@ -93,13 +93,13 @@ def _calls_with_keyword(path: Path, func: str, keyword: str) -> bool:
 
 
 def test_the_bot_process_builds_the_summariser_and_hands_it_down() -> None:
-    """main -> build_catch_up -> build_bot -> build_ask_service -> AskService."""
+    """assemble -> build_catch_up -> build_bot -> build_ask_service -> AskService."""
     bot = SRC / "entrypoints" / "bot.py"
-    assert "build_catch_up" in _function_calls(bot, "main"), (
-        "main() must build the catch-up summariser"
+    assert "build_catch_up" in _function_calls(bot, "assemble"), (
+        "assemble() must build the catch-up summariser"
     )
     assert _calls_with_keyword(bot, "build_bot", "catchup"), (
-        "main() must give build_bot the summariser"
+        "assemble() must give build_bot the summariser"
     )
     assert _calls_with_keyword(bot, "build_ask_service", "catchup"), (
         "build_bot must pass it on to the ask service"

@@ -330,11 +330,11 @@ def _function_calls(path: Path, function: str) -> set[str]:
 
 
 def test_the_bot_process_builds_memory_and_hands_it_down() -> None:
-    """main -> build_bot -> build_ask_service -> AskService, every link."""
+    """assemble -> build_bot -> build_ask_service -> AskService, every link."""
     bot = SRC / "entrypoints" / "bot.py"
-    assert "build_conversations" in _function_calls(bot, "main")
+    assert "build_conversations" in _function_calls(bot, "assemble")
     assert _calls_with_keyword(bot, "build_bot", "conversations"), (
-        "main() must give build_bot the conversation memory"
+        "assemble() must give build_bot the conversation memory"
     )
     assert _calls_with_keyword(bot, "build_ask_service", "conversations"), (
         "build_bot must pass memory on to the ask service"

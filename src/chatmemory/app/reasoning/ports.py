@@ -295,3 +295,14 @@ class ChatModel(Protocol):
         answer, and "no tool was offered" is not an error.
         """
         ...
+
+
+class ToolCapableChat(ChatModel, Protocol):
+    """The answering handle, which can also be re-declared for tool calling.
+
+    `tool_caller` is where a deployment whose model cannot call tools finds
+    out at startup, naming the capability, rather than on the first question
+    that routes a tool. It raises `MissingCapabilityError` in that case.
+    """
+
+    def tool_caller(self) -> ChatModel: ...

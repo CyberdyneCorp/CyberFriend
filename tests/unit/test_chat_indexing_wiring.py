@@ -62,10 +62,10 @@ def _calls(scope: ast.AST, func: str, keyword: str | None = None) -> list[ast.Ca
     ]
 
 
-def test_bot_main_builds_indexing_stores_and_hands_them_to_build_bot() -> None:
-    main = _function(BOT, "main")
-    passed = _calls(main, "build_bot", "indexing")
-    assert passed, "bot main must pass indexing= to build_bot, or /index is unavailable"
+def test_bot_assemble_builds_indexing_stores_and_hands_them_to_build_bot() -> None:
+    assemble = _function(BOT, "assemble")
+    passed = _calls(assemble, "build_bot", "indexing")
+    assert passed, "bot assemble must pass indexing= to build_bot, or /index is unavailable"
     indexing = next(k.value for k in passed[0].keywords if k.arg == "indexing")
     assert _calls(indexing, "build_indexing_stores"), "indexing= must be the real stores"
     # The same LiveScope the process refreshes and resolves against.
