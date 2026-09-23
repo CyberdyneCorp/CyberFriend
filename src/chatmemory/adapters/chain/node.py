@@ -1,4 +1,4 @@
-"""`eth_call`, and many `eth_call`s folded into one. Nothing else.
+"""`eth_call`, many `eth_call`s folded into one, and `eth_getLogs`. All reads.
 
 The positions readers need hundreds of reads for a busy wallet. Sent as a
 JSON-RPC batch, Infura's rate limiter rejected them; sent as one `eth_call` to
@@ -72,7 +72,29 @@ class Node:
             # Only to *simulate* as the owner (v3 `collect`); an `eth_call`
             # changes no state whoever it claims to be from.
             params["from"] = sender
-        body = {"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [params, "latest"]}
+        result = await self._rpc("eth_call", [params, "latest"])
+        return abi.to_bytes(str(result))
+
+    async def block_number(self) -> int:
+        return int(str(await self._rpc("eth_blockNumber", [])), 16)
+
+    async def logs(
+        self, address: str, topics: list[str | None], from_block: int, to_block: int
+    ) -> list[dict[str, object]]:
+        """`eth_getLogs` over a block range. Infura refuses ranges over 10,000."""
+        query = {
+            "address": address,
+            "topics": topics,
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+        }
+        result = await self._rpc("eth_getLogs", [query])
+        if not isinstance(result, list):
+            return []
+        return [entry for entry in result if isinstance(entry, dict)]
+
+    async def _rpc(self, method: str, params: list[object]) -> object:
+        body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         response = await self._client.post(self._endpoint, json=body)
         for delay in self._backoff:
             if not _rate_limited(response):
@@ -84,8 +106,8 @@ class Node:
         payload = response.json()
         if not isinstance(payload, dict) or "result" not in payload:
             error = payload.get("error") if isinstance(payload, dict) else payload
-            raise NodeError(self.redact(f"eth_call failed: {str(error)[:200]}"))
-        return abi.to_bytes(str(payload["result"]))
+            raise NodeError(self.redact(f"{method} failed: {str(error)[:200]}"))
+        return payload["result"]
 
     async def multicall(self, calls: list[Call]) -> list[bytes | None]:
         """Each call's return data in order, None where it reverted.

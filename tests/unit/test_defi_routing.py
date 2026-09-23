@@ -18,7 +18,7 @@ from chatmemory.app.reasoning.service import EXTERNAL_ROUTE, WALLET_ADDRESS_MISS
 from chatmemory.app.routing import PositionKind, defi_question, wallet_question
 from tests.unit.test_external_routing import WEB
 from tests.unit.test_loop_invocation import ScriptedSurface
-from tests.unit.test_market_routing import decision_outcomes
+from tests.unit.test_market_routing import decision_outcomes, remembering
 from tests.unit.test_reasoning_fixed import FakeRetrieval, question
 from tests.unit.test_wallet_routing import (
     SOMEBODY_ELSES_PROJECT,
@@ -173,3 +173,58 @@ async def test_without_any_wallet_an_address_is_asked_for() -> None:
     assert retrieval.calls == []
     assert surface.invocations == []
     assert outcome.answer.text == WALLET_ADDRESS_MISSING
+
+
+# --- follow-ups ----------------------------------------------------------------
+#
+# Regression, from production. After "Que posicoes no Uniswap temos nesse
+# endereco : 0xB26B…", the follow-up "Show me details of the Uniswap v4 open
+# position" named no address and no "my", went to the corpus, and was answered
+# from a colleague's message linking a *different* position.
+
+ASKED_FIRST = f"Que posicoes no Uniswap temos nesse endereco : {ADDRESS}"
+FOLLOW_UP = "Show me details of the Uniswap v4 open position"
+
+
+def test_a_follow_up_carries_the_address_from_the_previous_question() -> None:
+    found = defi_question(FOLLOW_UP, (ASKED_FIRST,))
+    assert found is not None
+    assert found.address == ADDRESS.lower()
+    assert found.carried
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Not about the wallet, whatever was asked before.
+        "what position did the team take on the roadmap?",
+        "what did people say about the uniswap pool?",
+    ],
+)
+def test_a_follow_up_needs_a_protocol_word_and_no_conversation_verb(text: str) -> None:
+    assert defi_question(text, (ASKED_FIRST,)) is None
+
+
+def test_without_an_earlier_address_a_follow_up_is_not_a_positions_question() -> None:
+    assert defi_question(FOLLOW_UP) is None
+    assert defi_question(FOLLOW_UP, ("what did we decide about the deploy?",)) is None
+
+
+def test_a_follow_up_only_reaches_back_a_few_turns() -> None:
+    moved_on = (ASKED_FIRST, "q1", "q2", "q3")
+    assert defi_question(FOLLOW_UP, moved_on) is None
+
+
+async def test_the_production_follow_up_never_reaches_the_corpus() -> None:
+    surface = _surface(LIQUIDITY)
+    retrieval = FakeRetrieval([[SOMEBODY_ELSES_PROJECT]])
+
+    outcome = await service(surface, retrieval, ParaphrasingSynthesizer()).answer_run(
+        remembering(FOLLOW_UP, ASKED_FIRST)
+    )
+
+    assert retrieval.calls == [], "the corpus answered a follow-up about a wallet"
+    assert [names for _, names in surface.proposed] == [(LIQUIDITY.qualified_name,)]
+    # Spelled out for the proposal and rooted in the question it is held to.
+    assert ADDRESS.lower() in surface.invocations[0].question.lower()
+    assert "WETH/USDC" in outcome.answer.text

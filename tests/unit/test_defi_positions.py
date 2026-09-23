@@ -85,6 +85,11 @@ def test_every_selector_matches_its_signature() -> None:
         assert abi.selector(signature) == value, name
 
 
+def test_the_transfer_topic_is_the_erc721_event() -> None:
+    expected = "0x" + abi.keccak256(b"Transfer(address,address,uint256)").hex()
+    assert expected == abi.TRANSFER_TOPIC
+
+
 def test_aggregate3_encodes_one_call_as_the_abi_specifies() -> None:
     encoded = abi.aggregate3([(WETH, "0x313ce567")])
     body = encoded.removeprefix(abi.AGGREGATE3)
@@ -340,7 +345,8 @@ def test_amounts_read_well_at_any_size() -> None:
     assert amount(Decimal("15220.9112")) == "15,220.91"
     assert amount(Decimal("1.60090000")) == "1.6009"
     assert amount(Decimal("0.000573728")) == "0.000573728"
-    assert amount(Decimal("0.00000001")) == "1.000e-8"
+    assert amount(Decimal("0.00008805")) == "0.00008805"
+    assert amount(Decimal("0.00000001")) == "0.00000001"
 
 
 # --- reading, against a fake chain -------------------------------------------
@@ -356,9 +362,32 @@ def _word(*values: int | str) -> bytes:
 class FakeNode:
     """Answers `eth_call` by (target, selector), and multicalls call by call."""
 
-    def __init__(self, answer: Callable[[str, str], bytes | None]) -> None:
+    def __init__(
+        self,
+        answer: Callable[[str, str], bytes | None],
+        transfers_in: dict[int, list[int]] | None = None,
+        head: int = 100_000,
+    ) -> None:
         self._answer = answer
-        self.calls: list[tuple[str, str]] = []
+        #: block -> token IDs transferred to the owner in that block
+        self._transfers = transfers_in or {}
+        self._head = head
+        self.log_ranges: list[tuple[int, int]] = []
+
+    async def block_number(self) -> int:
+        return self._head
+
+    async def logs(
+        self, address: str, topics: list[str | None], low: int, high: int
+    ) -> list[dict[str, object]]:
+        assert high - low < 10_000, "Infura refuses wider ranges"
+        self.log_ranges.append((low, high))
+        return [
+            {"topics": [abi.TRANSFER_TOPIC, "0x0", topics[2], hex(token)]}
+            for block, tokens in self._transfers.items()
+            if low <= block <= high
+            for token in tokens
+        ]
 
     def redact(self, text: str) -> str:
         return text
@@ -446,12 +475,26 @@ async def test_a_v4_position_the_chain_does_not_confirm_is_dropped() -> None:
     assert position.usd0 == 2000  # native ETH priced as WETH by the oracle
 
 
-async def test_an_explorer_outage_is_reported_not_shown_as_no_positions() -> None:
-    node = FakeNode(_v4_chain(BASE_DEPLOYMENT))
+async def test_a_position_the_explorer_has_not_indexed_is_found_in_recent_blocks() -> None:
+    """Regression, from production: a v4 position minted twenty minutes before
+    the question was missing from Blockscout on Arbitrum, and the answer said
+    "1 Uniswap v4 position(s) could not be listed"."""
+    node = FakeNode(_v4_chain(BASE_DEPLOYMENT), transfers_in={85_000: [1]})
+    result = await _reader(node, _explorer([])).liquidity(OWNER)
+
+    assert [p.token_id for p in result.positions] == [1]
+    assert result.notes == ()
+    # Newest first, in windows Infura accepts, stopping once found.
+    assert node.log_ranges == [(90_001, 100_000), (80_001, 90_000)]
+
+
+async def test_a_recent_transfer_the_chain_does_not_confirm_is_dropped() -> None:
+    """A position transferred in and out again is in the logs, not the wallet."""
+    node = FakeNode(_v4_chain(BASE_DEPLOYMENT), transfers_in={99_000: [2]})
     result = await _reader(node, _explorer(None)).liquidity(OWNER)
 
     assert result.positions == ()
-    assert result.notes == ("1 Uniswap v4 position(s) exist but could not be listed",)
+    assert result.notes == ("1 Uniswap v4 position(s) could not be listed",)
     assert "could not be listed" in render_liquidity(OWNER, [result])
 
 

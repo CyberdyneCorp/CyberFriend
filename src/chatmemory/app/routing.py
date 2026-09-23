@@ -515,6 +515,8 @@ class DefiQuestion:
 
     kind: PositionKind
     address: str | None
+    #: The address came from the asker's own earlier question, not this one.
+    carried: bool = False
 
 
 _LIQUIDITY_TERMS = frozenset({
@@ -538,34 +540,64 @@ _GENERIC_POSITION_TERMS = frozenset({
 _FIRST_PERSON = frozenset({"my", "mine", "meu", "meus", "minha", "minhas"})
 
 
-def defi_question(text: str) -> DefiQuestion | None:
+def defi_question(text: str, previous: Sequence[str] = ()) -> DefiQuestion | None:
     """The positions lookup being asked for, or None for everything else.
 
     Checked before `wallet_question`: "what's in my pools on 0x..." names an
-    address too, and it is positions that were asked about, not balances.
+    address too, and it is positions that were asked about.
+
+    `previous` is the asker's own earlier questions in this conversation,
+    oldest first. A follow-up that names no address and no "my" -- "show me
+    the details of the v4 position" -- is about the address asked about just
+    before; without this it went to the corpus and was answered from a
+    colleague's message about a different position.
     """
     words = set(re.findall(r"[\w.]+", text.lower()))
-    liquidity = bool(words & _LIQUIDITY_TERMS)
-    lending = bool(words & _LENDING_TERMS) or {"health", "factor"} <= words
-    generic = bool(words & _GENERIC_POSITION_TERMS)
-    if not (liquidity or lending or generic):
-        return None
-    if words & _CONVERSATION_VERBS:
+    kind = _position_kind(words)
+    if kind is None or words & _CONVERSATION_VERBS:
         return None
     addresses = find_addresses(text)
+    if addresses:
+        return DefiQuestion(kind=kind, address=addresses[0])
     # "I" alone is too common to mean "mine"; with a protocol named it does.
     about_me = bool(words & _FIRST_PERSON) or bool(
         words & {"i", "eu"} and words & {"aave", "uniswap"}
     )
-    if not addresses and not about_me:
+    if about_me:
+        return DefiQuestion(kind=kind, address=None)
+    # Carried only on a protocol or pool word: "what position did the team
+    # take?" after a balance question is about the team, not the wallet.
+    specific = words & (_LIQUIDITY_TERMS | _LENDING_TERMS) or {"health", "factor"} <= words
+    carried = _recent_chain_address(previous) if specific else None
+    if carried is None:
         return None
+    return DefiQuestion(kind=kind, address=carried, carried=True)
+
+
+def _position_kind(words: set[str]) -> PositionKind | None:
+    liquidity = bool(words & _LIQUIDITY_TERMS)
+    lending = bool(words & _LENDING_TERMS) or {"health", "factor"} <= words
     if liquidity and not lending:
-        kind = PositionKind.LIQUIDITY
-    elif lending and not liquidity:
-        kind = PositionKind.LENDING
-    else:
-        kind = PositionKind.BOTH
-    return DefiQuestion(kind=kind, address=addresses[0] if addresses else None)
+        return PositionKind.LIQUIDITY
+    if lending and not liquidity:
+        return PositionKind.LENDING
+    if liquidity or lending or words & _GENERIC_POSITION_TERMS:
+        return PositionKind.BOTH
+    return None
+
+
+_FOLLOW_UP_TURNS = 3
+"""How far back a follow-up may reach for its address. A conversation that
+has moved on for longer than this is not following up on that wallet."""
+
+
+def _recent_chain_address(previous: Sequence[str]) -> str | None:
+    """The address of the latest chain question among the last few turns."""
+    for earlier in reversed(previous[-_FOLLOW_UP_TURNS:]):
+        found = defi_question(earlier) or wallet_question(earlier)
+        if found is not None and found.address is not None:
+            return found.address
+    return None
 
 
 def obligation_question(text: str) -> ObligationQuestion | None:

@@ -13,6 +13,13 @@ three chains. Each ID is then checked with `ownerOf` on-chain; an ID the chain
 does not confirm is dropped. `balanceOf` is read on-chain too, so an explorer
 outage is reported as "N v4 positions could not be listed", not as none.
 
+The explorer lags. A position minted twenty minutes before the question was
+missing from Blockscout on Arbitrum. So when the chain's `balanceOf` exceeds
+what the explorer confirmed, recent blocks are searched with `eth_getLogs` for
+`Transfer` events to the owner, newest first, in 10,000-block windows (up to
+24), stopping as soon as the count is met. Every ID found there is confirmed
+with `ownerOf` like the explorer's.
+
 **Aave v3.** The pool addresses provider is the one hard-coded address per
 chain; pool, data provider and oracle are resolved from it. Reserves come from
 `getReservesList`, per-user amounts from the data provider's
@@ -54,6 +61,11 @@ range) and lending terms (aave, borrow, supply, debt, collateral, health
 factor), in English and Portuguese. It requires an address in the question or
 a first-person reference ("my pools"), so "what did we decide about the pool"
 stays a corpus question; conversation verbs keep it there too.
+
+A follow-up that names a protocol or pool term but no address and no "my" is
+about the address in one of the asker's last three questions: those are the
+asker's own words, as typed, so this is the same authority as an address in
+the question itself. A generic word alone ("position") does not carry it.
 
 The route offers exactly one tool: `liquidity_positions`, `lending_positions`,
 or `defi_positions` when both kinds are asked about. The model's only job is to
