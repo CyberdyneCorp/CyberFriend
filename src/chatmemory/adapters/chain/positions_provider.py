@@ -153,9 +153,7 @@ class PositionsProvider:
         """The rendered answer. Assumes the address is already cleared."""
         if self._client is not None:
             return await self._report(tool, address, self._client)
-        async with httpx.AsyncClient(
-            timeout=self._timeout, transport=self._transport
-        ) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             return await self._report(tool, address, client)
 
     async def _report(self, tool: str, address: str, client: httpx.AsyncClient) -> str:

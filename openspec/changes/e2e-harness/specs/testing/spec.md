@@ -53,15 +53,27 @@ accepts, so a feature cannot be built and reached by nothing.
 ### Requirement: Outbound HTTP goes through the edges' transport
 
 Every HTTP client opened by the federation's local providers (web, market and
-wallet), the document fetchers and the trace exporter SHALL be opened with the
-transport the edges hold. An edges value with no transport SHALL leave every
-such client on httpx's own network transport, which is the behaviour before
-the transport was threaded.
+wallet) and the trace exporter SHALL be opened with the transport the edges
+hold. An edges value with no transport SHALL leave every such client on
+httpx's own network transport, which is the behaviour before the transport
+was threaded. Adapters that no process built over the edges constructs yet
+(the document fetchers and the trace deleter) SHALL still accept a transport,
+so they can join the seam without opening a client of their own.
 
 #### Scenario: A mock transport receives a wallet lookup
 - WHEN the edges hold a mock HTTP transport and a person's wallet lookup is
   invoked through the federation
-- THEN the balance request SHALL reach the mock transport and not the network
+- THEN the balance request and the USD price lookup SHALL reach the mock
+  transport and not the network
+
+#### Scenario: A mock transport receives every local provider's call
+- WHEN a mock HTTP transport is handed to the federation and a web or market
+  tool is invoked through it
+- THEN that provider's request SHALL reach the mock transport
+
+#### Scenario: A mock transport receives the trace export
+- WHEN a mock HTTP transport is handed to the tracer and a run is traced
+- THEN the export SHALL reach the mock transport
 
 #### Scenario: A client opened without the transport
 - WHEN an adapter under chain, market, web, documents or tracing opens an
@@ -78,3 +90,8 @@ clock the edges hold. Production edges SHALL hold the UTC wall clock.
 - WHEN the edges hold a clock fixed at a moment and a person asks what the
   date is
 - THEN the answer SHALL state that moment
+
+#### Scenario: A fixed clock is the time the prompts state
+- WHEN the answer service or catch-up is built on a fixed clock
+- THEN the planner's and synthesiser's prompts SHALL state that moment, and a
+  catch-up period SHALL be measured from it

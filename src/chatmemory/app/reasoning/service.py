@@ -37,6 +37,7 @@ from datetime import datetime
 
 import structlog
 
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.egress import (
     CHAIN_BALANCES_PROVIDER,
     DEFI_POSITIONS_PROVIDER,
@@ -70,13 +71,7 @@ from chatmemory.app.reasoning.ports import (
     Synthesizer,
     ToolSurface,
 )
-from chatmemory.app.reasoning.stages import (
-    Clock,
-    ModelCritic,
-    ModelPlanner,
-    ModelSynthesizer,
-    wall_clock,
-)
+from chatmemory.app.reasoning.stages import ModelCritic, ModelPlanner, ModelSynthesizer
 from chatmemory.app.routing import (
     DefiQuestion,
     MarketQuestion,
@@ -178,7 +173,7 @@ class ReasoningAnswerService:
         recorder: RunRecorder | None = None,
         classifier: Callable[[str], RoutingDecision] = classify,
         tracer: RunTracer | None = None,
-        clock: Clock = wall_clock,
+        clock: Clock = utc_now,
     ) -> None:
         self._fixed = fixed
         self._loop = loop
@@ -413,7 +408,7 @@ def current_time_answer(language: Language, now: datetime | None = None) -> str:
     UTC and labelled, like every other time this assistant states. A person
     reading a bare time reads it as their own, and this one is not.
     """
-    moment = now or wall_clock()
+    moment = now or utc_now()
     stamp = moment.strftime("%A %d %B %Y, %H:%M")
     if language is Language.PORTUGUESE:
         return f"Agora são **{stamp} UTC**."
@@ -534,7 +529,7 @@ def build_answer_service(
     recorder: RunRecorder | None = None,
     tools: ToolSurface | None = None,
     tracer: RunTracer | None = None,
-    clock: Clock = wall_clock,
+    clock: Clock = utc_now,
 ) -> ReasoningAnswerService:
     """Wire the default composition.
 

@@ -86,7 +86,6 @@ import os
 import time
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, cast
 
 import structlog
@@ -115,6 +114,7 @@ from chatmemory.app.asks.obligations import discord_message_url
 from chatmemory.app.authorization import ConfirmationLedger
 from chatmemory.app.catchup import CatchUpService
 from chatmemory.app.channel_listing import ChannelListingService
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.configuration import ConfigurationEditor
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
@@ -137,7 +137,6 @@ from chatmemory.composition import (
     build_personal_facts,
     build_schedules,
     build_task_runner,
-    utc_now,
 )
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
@@ -421,7 +420,7 @@ async def scheduled_task_loop(
     state: HealthState,
     interval: float = 300.0,
     ready: asyncio.Event | None = None,
-    clock: Callable[[], datetime] = utc_now,
+    clock: Clock = utc_now,
 ) -> None:
     """Run the questions people asked to have asked on their behalf.
 
@@ -456,7 +455,7 @@ async def notification_loop(
     state: HealthState,
     interval: float = NOTIFICATION_DRAIN_INTERVAL_SECONDS,
     ready: asyncio.Event | None = None,
-    clock: Callable[[], datetime] = utc_now,
+    clock: Clock = utc_now,
 ) -> None:
     """Send what ingest queued, to the people it was addressed to.
 

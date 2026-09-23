@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from chatmemory.adapters.llm.chat import OpenAICompatibleChat
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
+from chatmemory.app.clock import utc_now
 from chatmemory.app.reasoning.errors import ConfigurationError
 from chatmemory.app.reasoning.ports import (
     ChatModel,
@@ -29,7 +30,7 @@ from chatmemory.app.reasoning.ports import (
     ToolCompletion,
     ToolDefinition,
 )
-from chatmemory.composition import Edges, build_answer_stack, utc_now
+from chatmemory.composition import Edges, build_answer_stack
 from chatmemory.config import Settings
 from chatmemory.entrypoints.bot import Process, assemble, build_bot
 from tests.unit.test_composition import FakeEmbeddings

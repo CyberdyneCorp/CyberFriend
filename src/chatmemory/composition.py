@@ -56,9 +56,9 @@ running process and this module only builds objects.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import httpx
 import structlog
@@ -128,6 +128,7 @@ from chatmemory.app.authorization import (
 )
 from chatmemory.app.catchup import CatchUpService
 from chatmemory.app.channel_listing import ChannelListingService
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.confirmation import ConfirmationDesk, with_confirmation
 from chatmemory.app.conversation import (
     Conversations,
@@ -996,17 +997,12 @@ def build_channel_listing(
     return ChannelListingService(scope, DiscordAclResolver(guild, scope))
 
 
-def utc_now() -> datetime:
-    """The wall clock every process reads unless it was handed another."""
-    return datetime.now(UTC)
-
-
 def build_answers(
     retrieval: RetrievalTool,
     chat: ChatModel,
     tools: ToolSurface | FederatedSurface | None = None,
     tracer: RunTracer | None = None,
-    clock: Callable[[], datetime] = utc_now,
+    clock: Clock = utc_now,
 ) -> ReasoningAnswerService:
     """The real answer service: both paths, over one retrieval tool.
 
@@ -1093,7 +1089,7 @@ def build_catch_up(
     settings: Settings,
     search: SearchBackend,
     chat: ChatModel,
-    clock: Callable[[], datetime] = utc_now,
+    clock: Clock = utc_now,
 ) -> CatchUpService:
     """The catch-up summariser, over the same two things an answer is made of.
 
@@ -1328,7 +1324,7 @@ class Edges:
     embeddings: EmbeddingClient
     engine: AsyncEngine
     http_transport: httpx.AsyncBaseTransport | None = None
-    clock: Callable[[], datetime] = utc_now
+    clock: Clock = utc_now
 
     @classmethod
     def production(cls, settings: Settings) -> Edges:

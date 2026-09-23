@@ -76,9 +76,7 @@ class CoinGeckoPrices:
         if self._client is not None:
             await self._refresh_with(self._client)
             return
-        async with httpx.AsyncClient(
-            timeout=self._timeout, transport=self._transport
-        ) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             await self._refresh_with(client)
 
     async def _refresh_with(self, client: httpx.AsyncClient) -> None:

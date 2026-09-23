@@ -20,23 +20,15 @@ from private asks would publish exactly that.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import UTC, datetime
-
 import structlog
 
 from chatmemory.app.asks.obligations import ObligationService
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.reasoning.scope import retrieval_viewer
 from chatmemory.app.routing import ObligationIntent, obligation_question
 from chatmemory.ports.answers import Answer, AnswerService, Question
 
 log = structlog.get_logger()
-
-Clock = Callable[[], datetime]
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 class ObligationAnswerService:
@@ -50,7 +42,7 @@ class ObligationAnswerService:
         self,
         obligations: ObligationService,
         fallback: AnswerService,
-        clock: Clock = _now,
+        clock: Clock = utc_now,
     ) -> None:
         self._obligations = obligations
         self._fallback = fallback

@@ -35,9 +35,10 @@ from __future__ import annotations
 import json
 import re
 import secrets
-from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.reasoning.evidence import Evidence
 from chatmemory.app.reasoning.ports import (
     NO_CONTEXT,
@@ -214,14 +215,6 @@ def prompt_context(question: Question) -> PromptContext:
     )
 
 
-Clock = Callable[[], datetime]
-
-
-def wall_clock() -> datetime:
-    """The time every stage states unless it was handed another clock."""
-    return datetime.now(UTC)
-
-
 def clock_notice(now: datetime | None = None) -> str:
     """What time it is, for a prompt that would otherwise be guessing.
 
@@ -233,7 +226,7 @@ def clock_notice(now: datetime | None = None) -> str:
     UTC and labelled, because a time without a zone is worse than no time: it
     reads as local to whoever is looking.
     """
-    moment = now or wall_clock()
+    moment = now or utc_now()
     return (
         f"The current date and time is {moment.strftime('%A %d %B %Y, %H:%M')} UTC. "
         "Use it to interpret words like today, yesterday, this week and recent, "
@@ -429,7 +422,7 @@ class ModelCritic:
 
 
 class ModelPlanner:
-    def __init__(self, model: ChatModel, clock: Clock = wall_clock) -> None:
+    def __init__(self, model: ChatModel, clock: Clock = utc_now) -> None:
         self._model = model
         self._clock = clock
 
@@ -458,7 +451,7 @@ class ModelPlanner:
 
 
 class ModelSynthesizer:
-    def __init__(self, model: ChatModel, clock: Clock = wall_clock) -> None:
+    def __init__(self, model: ChatModel, clock: Clock = utc_now) -> None:
         self._model = model
         self._clock = clock
 

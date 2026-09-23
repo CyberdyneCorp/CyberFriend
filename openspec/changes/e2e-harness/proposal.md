@@ -34,9 +34,13 @@ clock. Today those are constructed deep inside `build_answer_stack` and
   collaborator it accepts, and that nothing between the edges constructs a
   chat model, embedding client or engine of its own.
 - **`http_transport` is threaded** into every HTTP client the web, market and
-  wallet providers, the document fetchers and the Langfuse tracer open, via
-  a `transport` field on each tool config and a `transport` argument to
-  `build_federation` and `build_tracer`. None is httpx's own transport.
+  wallet providers and the Langfuse tracer open, via a `transport` field on
+  each tool config and a `transport` argument to `build_federation` and
+  `build_tracer`. None is httpx's own transport. The document fetchers and
+  the Langfuse trace deleter also accept a `transport`, but nothing built
+  over the edges constructs them yet: the document adapters are assembled by
+  no process, and the deleter belongs to the ingest process, which is not
+  built over `Edges`. They join the seam when their process does.
 - **`clock` is threaded** into the time route, the prompt's clock notice,
   catch-up, and the scheduled-task and notification loops. The default is
   the UTC wall clock.
