@@ -41,6 +41,17 @@ a bot, and the answer says the list was cut rather than pretending it is all."""
 
 EXPLORER_PAGES = 4
 
+LOG_WINDOW = 10_000
+"""Blocks per `eth_getLogs`: Infura's limit."""
+
+RECENT_LOG_WINDOWS = 24
+"""How far back to look for v4 positions the explorer has not indexed yet.
+
+The explorer lags: a position minted twenty minutes before the question was
+missing from Blockscout on Arbitrum. 24 windows is ~17 hours on Arbitrum,
+~5.5 days on Base, ~33 days on Ethereum -- and the scan stops as soon as it
+has found as many as the chain says exist."""
+
 
 @dataclass(frozen=True, slots=True)
 class RawPosition:
@@ -187,21 +198,44 @@ class UniswapReader:
         count = await self._count(manager, owner, "Uniswap v4", notes)
         if not count:
             return [], 0
-        candidates = await self._v4_ids(owner)
-        if candidates is None:
-            notes.append(f"{count} Uniswap v4 position(s) exist but could not be listed")
-            return [], 0
+        ids = await self._owned(manager, owner, await self._v4_ids(owner) or [])
+        if len(ids) < count:
+            # The explorer is behind, down, or both: look for recent mints and
+            # transfers in directly, and still confirm each on-chain.
+            recent = await self._recent_transfers_in(owner, set(ids), count - len(ids))
+            ids += await self._owned(manager, owner, recent)
+        if len(ids) < count:
+            notes.append(f"{count - len(ids)} Uniswap v4 position(s) could not be listed")
+        return await self._v4_positions(ids)
+
+    async def _owned(self, manager: str, owner: str, candidates: list[int]) -> list[int]:
+        """The candidates the chain says `owner` holds now. Nothing else counts."""
+        if not candidates:
+            return []
         owners = await self._node.multicall(
             [Call(manager, abi.call(abi.OWNER_OF, abi.uint(t))) for t in candidates]
         )
         me = owner.lower()
-        ids = [
+        return [
             t for t, r in zip(candidates, owners, strict=True)
             if r and abi.as_address(abi.words(r)[0]) == me
         ]
-        if len(ids) < count:
-            notes.append(f"{count - len(ids)} Uniswap v4 position(s) could not be listed")
-        return await self._v4_positions(ids)
+
+    async def _recent_transfers_in(self, owner: str, known: set[int], missing: int) -> list[int]:
+        """Token IDs transferred to `owner` in recent blocks, newest first."""
+        topics: list[str | None] = [abi.TRANSFER_TOPIC, None, "0x" + abi.address(owner)]
+        found: list[int] = []
+        high = await self._node.block_number()
+        for _ in range(RECENT_LOG_WINDOWS):
+            low = max(0, high - LOG_WINDOW + 1)
+            for entry in await self._node.logs(self._d.v4_position_manager, topics, low, high):
+                token = _token_id(entry)
+                if token is not None and token not in known and token not in found:
+                    found.append(token)
+            if len(found) >= missing or low == 0:
+                break
+            high = low - 1
+        return found
 
     async def _v4_ids(self, owner: str) -> list[int] | None:
         """Candidate token IDs from the explorer, or None if it failed."""
@@ -218,7 +252,7 @@ class UniswapReader:
                 if not following:
                     break
                 params = {"holder_address_hash": owner, **{k: str(v) for k, v in following.items()}}
-        except Exception as exc:  # noqa: BLE001 - reported as "could not be listed"
+        except Exception as exc:  # noqa: BLE001 - recent blocks are scanned instead
             log.warning("chain.v4_explorer_failed", chain=self._d.chain.key, error=str(exc)[:200])
             return None
         return ids[:MAX_POSITIONS]
@@ -284,6 +318,13 @@ class UniswapReader:
             _position(p, tokens[p.token0], tokens[p.token1], prices)
             for p in sorted(raw, key=lambda p: (p.liquidity == 0, p.protocol, p.token_id))
         )
+
+
+def _token_id(entry: dict[str, object]) -> int | None:
+    topics = entry.get("topics")
+    if not isinstance(topics, list) or len(topics) < 4:
+        return None
+    return int(str(topics[3]), 16)
 
 
 def _v4_position(

@@ -39,6 +39,9 @@ def amount(value: Decimal) -> str:
         return f"{value:,.4f}".rstrip("0").rstrip(".")
     if magnitude >= Decimal("0.0001"):
         return f"{value:.6g}"
+    if magnitude >= Decimal("1e-10"):
+        # Fixed point, not "8.805e-5": people read fees in ETH as decimals.
+        return f"{value:.12f}".rstrip("0")
     return f"{value:.3e}"
 
 

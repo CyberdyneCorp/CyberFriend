@@ -35,6 +35,11 @@ uncollected fees.
 - WHEN the pool's current tick is outside the position's range
 - THEN the position SHALL be marked out of range
 
+#### Scenario: A v4 position the explorer has not indexed yet
+- WHEN the chain reports more v4 positions than the explorer returns
+- THEN recent blocks SHALL be searched for transfers to the address
+- AND each position found SHALL still be confirmed on-chain before it is listed
+
 #### Scenario: A v4 position the chain does not confirm
 - WHEN the explorer returns a token ID the chain says the address does not own
 - THEN it SHALL NOT be listed
@@ -77,6 +82,12 @@ positions to these tools before retrieval.
 #### Scenario: Asked about their pools
 - WHEN someone asks about their liquidity pools or Aave loans
 - THEN retrieval SHALL NOT run
+
+#### Scenario: A follow-up that names no address
+- WHEN a question names a protocol or pool term but no address and no "my"
+- AND one of the asker's last three questions was about a named address
+- THEN that address SHALL be looked up
+- AND a question with only a generic word such as "position" SHALL NOT carry it
 
 #### Scenario: A conversation about pools
 - WHEN someone asks what was said or decided about a pool

@@ -23,6 +23,10 @@ SYMBOL = "0x95d89b41"  # symbol()
 OWNER_OF = "0x6352211e"  # ownerOf(uint256)
 TOKEN_OF_OWNER_BY_INDEX = "0x2f745c59"  # tokenOfOwnerByIndex(address,uint256)
 
+# ERC-721 event
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+"""keccak256("Transfer(address,address,uint256)")."""
+
 # Multicall3
 AGGREGATE3 = "0x82ad56cb"  # aggregate3((address,bool,bytes)[])
 

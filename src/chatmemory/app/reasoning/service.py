@@ -311,7 +311,8 @@ class ReasoningAnswerService:
             return _route(EXTERNAL_ROUTE, "time"), refusal(
                 current_time_answer(detect(text))
             )
-        defi = defi_question(text)
+        # Remembered questions are the asker's own words as typed.
+        defi = defi_question(text, tuple(turn.question for turn in question.memory.turns))
         if defi is not None:
             # Before the wallet route: "my pools on 0x..." names an address
             # too, and it is positions that were asked about.
@@ -372,7 +373,12 @@ class ReasoningAnswerService:
         a request for one.
         """
         asked = question
-        if defi.address is None:
+        if defi.carried:
+            # From the asker's own earlier question, as typed: spelled out so
+            # the tool proposal, which sees this question alone, can copy it.
+            asked = replace(question, text=f"{question.text} {defi.address}")
+            log.info("reasoning.external_route", route="defi_follow_up")
+        elif defi.address is None:
             saved = _saved_wallet(question)
             if saved is None:
                 log.info("reasoning.external_route", route="defi_no_address")
