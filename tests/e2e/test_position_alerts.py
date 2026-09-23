@@ -1,7 +1,8 @@
 """Position alerts, end to end: a stored alert, a moving chain, and the DMs.
 
-Creation is a later change, so the alert is written through the store API a
-command will use, over a saved wallet. Everything after that is the assembled
+The alert is written through the service creation uses, over a saved wallet,
+so each scenario starts from a known state; creating one by asking and
+confirming is `test_alert_requests`. Everything after that is the assembled
 process: the sweep `main` would start, the watcher reading the fake node
 through `Edges.http_transport`, and the direct message through the same
 messenger scheduled tasks use, arriving on the fake Discord wire. The clock is
@@ -57,7 +58,7 @@ SWEEP = timedelta(minutes=5)
 async def alerts_bot(
     clean: AsyncEngine, e2e_database_url: str, sealed_network: NetworkSeal
 ) -> AsyncIterator[E2EBot]:
-    """The production process with alerts switched on, as PR-A2's deployment will be."""
+    """The production process with alerts switched on, as a deployment runs it."""
     settings = e2e_settings(e2e_database_url).model_copy(update={"alerts_enabled": True})
     e2e = await start(settings, clean, sealed_network)
     try:

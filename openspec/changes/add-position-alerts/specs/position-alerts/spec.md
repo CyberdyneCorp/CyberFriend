@@ -23,6 +23,16 @@ that person saved as their own wallet or typed themselves when creating it.
   person's message
 - THEN no alert SHALL be created on it
 
+#### Scenario: An address the asker typed a moment ago
+- WHEN a request names no address and one of the asker's own last few
+  questions did
+- THEN that address SHALL be the one proposed, recorded as typed
+
+#### Scenario: No address at all
+- WHEN a request names no address and the asker has saved no wallet
+- THEN the reply SHALL ask for one
+- AND nothing SHALL be read from a chain
+
 ### Requirement: Alerts are bounded
 
 A person SHALL NOT hold more than ten active alerts, separately from their
@@ -36,6 +46,7 @@ store SHALL enforce both, not only the command.
 #### Scenario: A limit out of bounds
 - WHEN a person asks for a health-factor limit below 1.05 or above 5.0
 - THEN the alert SHALL NOT be created
+- AND the reply SHALL state the bounds, in the asker's language
 
 #### Scenario: The same watch twice
 - WHEN a person asks for an alert identical to an active one
@@ -147,11 +158,16 @@ lookups, and checks SHALL be no more frequent than once a minute.
 
 An alert's message SHALL be written in the language fixed when the alert was
 created, English or Portuguese, and SHALL say that checks are periodic and are
-not liquidation protection.
+not liquidation protection. Every message SHALL name the commands that list
+and stop alerts.
 
 #### Scenario: A Portuguese alert
 - WHEN an alert created in Portuguese fires
 - THEN the message SHALL be in Portuguese
+
+#### Scenario: The way out is in the message
+- WHEN an alert fires
+- THEN the message SHALL name `/alert list` and `/alert delete` with its number
 
 ### Requirement: Closed direct messages stop a person's alerts
 
@@ -186,3 +202,104 @@ SHALL delete the alerts on their saved wallet when that wallet is forgotten.
 - WHEN a person opts out or their data is removed
 - THEN all their alerts SHALL be deleted
 - AND no new alert SHALL be stored for them while opted out
+
+### Requirement: An alert is asked for in words and created only on the asker's confirmation
+
+The system SHALL recognise a request for a range or health-factor alert in
+English or Portuguese, with no model call, before retrieval and before the
+positions and wallet routes, under the route label `ALERT_CREATE`. It SHALL
+answer with exactly what would be watched and Confirm and Cancel controls, and
+SHALL NOT store an alert until the person who asked presses Confirm.
+
+#### Scenario: A request in Portuguese with a saved wallet
+- WHEN a person with a saved wallet writes "me avisa se o health factor cair
+  abaixo de 1,3"
+- THEN the reply SHALL be in Portuguese and list each chain with Aave debt,
+  the limit and the health factor now
+- AND the archive SHALL NOT be searched and no model SHALL be called
+- AND no alert SHALL exist until they press Confirm
+
+#### Scenario: Confirm
+- WHEN the person who asked presses Confirm
+- THEN one alert per listed target SHALL be created, skipping any already
+  watched and any past the cap
+- AND the reply SHALL say what was created, by number
+
+#### Scenario: Cancel, or nothing
+- WHEN the person presses Cancel, or presses nothing for five minutes
+- THEN no alert SHALL be created and the controls SHALL be removed
+
+#### Scenario: Somebody else presses
+- WHEN anybody but the person who asked presses Confirm or Cancel
+- THEN nothing SHALL be created or cancelled
+- AND they SHALL be told privately that it is not theirs to confirm
+
+#### Scenario: A question about alerts
+- WHEN a message asks what people said about alerts, asks for a reading
+  ("tell me if my health factor is ok"), or asks about alerting itself
+  ("does Uniswap notify me when my position goes out of range?", "como criar
+  um alerta quando a posição sair da faixa?")
+- THEN it SHALL NOT be treated as an alert request
+- AND a request put politely to the assistant ("can you alert me when my LP
+  goes out of range?") SHALL still be one
+
+#### Scenario: Asked by a scheduled question
+- WHEN a scheduled question is an alert request
+- THEN it SHALL be answered as any other question, since nobody is present to
+  confirm a proposal
+- AND no chain SHALL be read for a proposal and no "not available" reply SHALL
+  be sent on its behalf
+
+#### Scenario: Alerts not enabled
+- WHEN the deployment has not enabled alerts, or has no chain endpoint key,
+  and a person asks for one
+- THEN the reply SHALL say alerts are not available here, in their language
+- AND the archive SHALL NOT be searched
+
+### Requirement: The confirmation shows the baseline and what it leaves out
+
+The confirmation SHALL show, for each target, the reading taken when it was
+asked for; SHALL say when a target is already past its condition; and SHALL
+name what it leaves out: chains that could not be read, positions that could
+not be listed, targets already watched, targets past the cap, and positions
+opened later.
+
+#### Scenario: A range already out
+- WHEN a listed position is out of range when the request is made
+- THEN the confirmation SHALL say so, and that the next message comes when it
+  is back in range
+
+#### Scenario: A chain that could not be read
+- WHEN a chain cannot be read while proposing
+- THEN the confirmation SHALL name it rather than treat it as holding nothing
+
+#### Scenario: No debt, or no positions
+- WHEN the read finds no open position, or no Aave debt, to watch
+- THEN the reply SHALL say so and offer nothing to confirm
+
+### Requirement: The wallet is named only to its owner
+
+A confirmation or its result SHALL name the watched address only in a direct
+message with the person who asked. In a channel, including an ephemeral reply
+there, it SHALL describe the targets without the address.
+
+#### Scenario: Asked in a channel
+- WHEN a person mentions the assistant in a channel with an alert request
+- THEN the confirmation SHALL be posted there without the wallet address
+- AND only that person SHALL be able to press it
+
+### Requirement: A person lists and stops their alerts with commands
+
+`/alert list` and `/alert delete` SHALL be available in the server and in a
+direct message with the assistant, SHALL act on the invoking account's alerts
+only, and SHALL answer privately in the language of the person's client. The
+capability reply SHALL list them where alerts are enabled.
+
+#### Scenario: Listing
+- WHEN a person runs `/alert list`
+- THEN each of their alerts SHALL be shown with what it watches, its state and
+  since when, and whether it is being checked, failing or stopped
+
+#### Scenario: Deleting
+- WHEN a person runs `/alert delete` with the number of one of their alerts
+- THEN it SHALL stop being watched

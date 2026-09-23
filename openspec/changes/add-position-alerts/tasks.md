@@ -35,8 +35,14 @@
 
 ## 5. The surface (PR-A2)
 
-- [ ] 5.1 Natural-language creation with a confirm button; the address checked at creation
-- [ ] 5.2 Baseline read at creation, shown in the reply; one alert per open position
-- [ ] 5.3 `/alert list` and `/alert delete`, the same refusal for "not yours" and "no such alert"
-- [ ] 5.4 Messages name `/alert list` and `/alert delete`
-- [ ] 5.5 Deployment config turns `ALERTS_ENABLED` on; docs updated
+- [x] 5.1 Natural-language creation with a confirm button; the address checked at creation
+- [x] 5.2 Baseline read at creation, shown in the reply; one alert per open position
+- [x] 5.3 `/alert list` and `/alert delete`, the same refusal for "not yours" and "no such alert"
+- [x] 5.4 Messages name `/alert list` and `/alert delete`
+- [x] 5.5 Docs updated; the default stays off and the operator sets `ALERTS_ENABLED=true` at deploy
+- [x] 5.6 `ALERT_CREATE` recognised before retrieval and the positions routes; conversation verbs veto; a reading ("tell me if my HF is ok") is not a request
+- [x] 5.7 With alerts off or no Infura key, a request is told alerts are not available
+- [x] 5.8 The wallet shown only in a direct message; the prompt ephemeral for `/ask`
+- [x] 5.9 `/alert list|delete` global, in the capability reply where alerts are on, in the anti-drift test and the command snapshot
+- [x] 5.10 Test: recogniser both directions (EN/PT, typos, negatives); proposal rules over a scripted read; creation read over the scripted node; the prompt's expiry and the listing
+- [x] 5.11 End-to-end: a Portuguese request confirmed, stored and later messaged; Cancel and another person's press create nothing; `/ask`, `/alert list` and `/alert delete`; a limit out of bounds; alerts off

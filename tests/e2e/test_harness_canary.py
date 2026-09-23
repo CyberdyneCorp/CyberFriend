@@ -20,6 +20,7 @@ import pytest
 from discord import app_commands
 from discord.http import HTTPClient, Route
 from discord.state import ConnectionState
+from discord.ui.view import View, ViewStore
 from discord.webhook import async_ as webhook_async
 
 from chatmemory.adapters.chain.rpc import ChainReader
@@ -51,11 +52,15 @@ INTERNALS = [
     (webhook_async, "async_context"),
     (webhook_async.AsyncWebhookAdapter, "request"),
     (HTTPClient, "request"),
+    # `FakeDiscord.press`: the view stored for a message, and its dispatch.
+    (ConnectionState, "store_view"),
+    (View, "_scheduled_task"),
 ]
 
 # The REST routes `FakeHTTP.request` answers, and the methods that send them.
 ROUTES = [
     (HTTPClient.send_message, "'/channels/{channel_id}/messages'"),
+    (HTTPClient.edit_message, "'/channels/{channel_id}/messages/{message_id}'"),
     (HTTPClient.send_typing, "'/channels/{channel_id}/typing'"),
     (HTTPClient.start_private_message, "'/users/@me/channels'"),
     (HTTPClient.get_user, "'/users/{user_id}'"),
@@ -85,6 +90,13 @@ def test_the_webhook_adapter_is_chosen_per_context() -> None:
 def test_the_client_keeps_its_connection_state_in_connection() -> None:
     """`FakeDiscord.state`: every guild, member, message and interaction is built on it."""
     assert "self._connection" in inspect.getsource(discord.Client.__init__)
+
+
+def test_stored_views_are_kept_by_message_id_and_item_key() -> None:
+    """`FakeDiscord.press` finds a button's item in `_view_store._views`."""
+    assert "self._view_store: ViewStore" in inspect.getsource(ConnectionState.clear)
+    assert "self._views[message_id] = dispatch_info" in inspect.getsource(ViewStore.add_view)
+    assert "(item.type.value, item.custom_id)" in inspect.getsource(ViewStore.add_view)
 
 
 def test_the_command_tree_keeps_its_own_http_client() -> None:

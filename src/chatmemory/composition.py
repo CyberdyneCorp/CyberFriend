@@ -64,6 +64,7 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from chatmemory.adapters.chain.alert_targets import ChainTargets
 from chatmemory.adapters.chain.registration import ChainToolsConfig, build_chain_tools
 from chatmemory.adapters.chain.watch import ChainWatcher
 from chatmemory.adapters.discord.acl import (
@@ -110,7 +111,8 @@ from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseT
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
-from chatmemory.app.alerts import AlertRunner
+from chatmemory.app.alert_requests import AlertRequests
+from chatmemory.app.alerts import AlertRunner, AlertService
 from chatmemory.app.ask import AskService
 from chatmemory.app.asks.answering import ObligationAnswerService
 from chatmemory.app.asks.candidates import CandidateFilter
@@ -181,6 +183,7 @@ from chatmemory.app.schedules import (
 )
 from chatmemory.app.scope import LiveScope, ScopeProvider, StaticScope
 from chatmemory.app.self_description import (
+    ALERTS,
     ALWAYS_AVAILABLE,
     NOTIFICATIONS,
     SCHEDULED,
@@ -949,7 +952,41 @@ def available_commands(settings: Settings) -> tuple[Command, ...]:
         commands.append(NOTIFICATIONS)
     if settings.scheduled_tasks_enabled:
         commands.extend(SCHEDULED)
+    if alerts_available(settings):
+        commands.extend(ALERTS)
     return tuple(commands)
+
+
+def _infura_key(settings: Settings) -> str:
+    return settings.infura_key.get_secret_value().strip() if settings.infura_key else ""
+
+
+def alerts_available(settings: Settings) -> bool:
+    """Alerts are on, and there is a chain endpoint for them to read."""
+    return settings.alerts_enabled and bool(_infura_key(settings))
+
+
+def build_alert_requests(
+    settings: Settings,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock = utc_now,
+) -> AlertRequests | None:
+    """Creating alerts from a request, or None when the feature is off.
+
+    Built on the same condition as the sweep: an alert nothing would check
+    must not be creatable. None answers an alert request that alerts are not
+    available here. `transport` and `clock` are the process's edges, so the
+    creation read and the first check time are what a test fakes too.
+    """
+    if not alerts_available(settings):
+        return None
+    return AlertRequests(
+        AlertService(PostgresAlertStore(engine), sweep_seconds=settings.alert_sweep_seconds),
+        ChainTargets(_infura_key(settings), transport=transport),
+        sweep_seconds=settings.alert_sweep_seconds,
+        clock=clock,
+    )
 
 
 def build_schedules(settings: Settings, engine: AsyncEngine) -> ScheduleService | None:
@@ -1001,7 +1038,7 @@ def build_alert_runner(
     """
     if not settings.alerts_enabled:
         return None
-    key = settings.infura_key.get_secret_value().strip() if settings.infura_key else ""
+    key = _infura_key(settings)
     if not key:
         log.warning("composition.alerts_without_key", hint="ALERTS_ENABLED needs INFURA_KEY")
         return None
@@ -1543,6 +1580,7 @@ def build_ask_service(
     scope: ScopeProvider | None = None,
     facts: PersonalFactsService | None = None,
     catchup: CatchUpService | None = None,
+    alerts: AlertRequests | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -1588,4 +1626,7 @@ def build_ask_service(
         # federation has no mutating tool to confirm, so it gets no desk and
         # every prompt would be refused for want of one.
         desk=ConfirmationDesk(confirmations) if confirmations is not None else None,
+        # Alert requests turned into proposals to confirm. None answers them
+        # that alerts are not available here, never with a corpus search.
+        alerts=alerts,
     )

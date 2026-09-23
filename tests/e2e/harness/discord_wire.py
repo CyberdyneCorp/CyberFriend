@@ -11,10 +11,15 @@ against Discord.
 Two chokepoints are replaced:
 
 - `FakeHTTP`, a `discord.http.HTTPClient` whose `request` answers every REST
-  call the bot makes -- messages, typing, opening a DM, and the command sync,
-  whose payloads are kept verbatim.
-- `FakeWebhookAdapter`, for interaction responses and followups, which
-  discord.py sends through its webhook adapter rather than `HTTPClient`.
+  call the bot makes -- messages and their edits, typing, opening a DM, and
+  the command sync, whose payloads are kept verbatim.
+- `FakeWebhookAdapter`, for interaction responses, followups and their edits
+  and deletions, which discord.py sends through its webhook adapter rather
+  than `HTTPClient`.
+
+A button press is a component interaction handed to the view discord.py
+stored for the message the buttons were sent on (`FakeDiscord.press`), so
+`interaction_check` and the button's callback run for real.
 
 Every contact point with discord.py internals is in this module, and each is
 named by `tests/e2e/test_harness_canary.py`, so an upgrade that moves one
@@ -64,7 +69,7 @@ CONTEXT_BOT_DM = 1
 ALL_CONTEXTS = (0, 1, 2)
 GUILD_INSTALL = 0
 
-Via = Literal["reply", "send", "dm", "response", "followup"]
+Via = Literal["reply", "send", "dm", "response", "followup", "edit"]
 
 
 @dataclass(frozen=True)
@@ -73,13 +78,30 @@ class Sent:
 
     `reply` quotes the message it answers; `dm` is a plain send to a direct
     message channel; `send` is a plain send to a guild channel; `response`
-    and `followup` answer an interaction.
+    and `followup` answer an interaction; `edit` rewrites one already sent.
+    `buttons` maps each button's label to its custom id, and `disabled`
+    holds the labels of the ones that cannot be pressed.
     """
 
     via: Via
     channel_id: int
     content: str
     ephemeral: bool = False
+    message_id: int = 0
+    buttons: tuple[tuple[str, str], ...] = ()
+    disabled: frozenset[str] = frozenset()
+
+
+def _buttons(payload: Mapping[str, Any]) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
+    """(label, custom id) for every button in a message payload, and the disabled ones."""
+    found = [
+        item
+        for row in payload.get("components") or []
+        for item in row.get("components") or []
+        if item.get("type") == 2
+    ]
+    labels = tuple((str(b.get("label")), str(b.get("custom_id"))) for b in found)
+    return labels, frozenset(str(b.get("label")) for b in found if b.get("disabled"))
 
 
 class CommandNotOffered(AssertionError):
@@ -273,6 +295,8 @@ class FakeHTTP(HTTPClient):
         key = (route.method, route.path)
         if key == ("POST", "/channels/{channel_id}/messages"):
             return self._message(int(route.channel_id or 0), kwargs.get("json") or {})
+        if key == ("PATCH", "/channels/{channel_id}/messages/{message_id}"):
+            return self._edit(int(route.channel_id or 0), route, kwargs.get("json") or {})
         if key == ("POST", "/channels/{channel_id}/typing"):
             return None
         if key == ("POST", "/users/@me/channels"):
@@ -298,8 +322,20 @@ class FakeHTTP(HTTPClient):
             via = "dm"
         else:
             via = "send"
-        self.sent.append(Sent(via, channel_id, content))
-        return self._wire.bot_message(channel_id, content)
+        message = self._wire.bot_message(channel_id, content)
+        buttons, disabled = _buttons(payload)
+        self.sent.append(
+            Sent(via, channel_id, content, False, int(message["id"]), buttons, disabled)
+        )
+        return message
+
+    def _edit(self, channel_id: int, route: Route, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """A message the bot rewrote: an expired prompt, for one."""
+        message_id = int(route.url.rsplit("/", 1)[1])
+        content = str(payload.get("content") or "")
+        buttons, disabled = _buttons(payload)
+        self.sent.append(Sent("edit", channel_id, content, False, message_id, buttons, disabled))
+        return {**self._wire.bot_message(channel_id, content), "id": str(message_id)}
 
 
 def _registered(payload: Sequence[Mapping[str, Any]], guild_id: object = None) -> list[Any]:
@@ -341,14 +377,34 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
             if data.get("content"):
                 self._record("response", channel_id, data)
             return {"interaction": {"id": str(route.webhook_id), "type": 2}}
+        if route.method == "DELETE":
+            # `delete_original_response`: the deferred "thinking" message.
+            self.events.append(("delete", payload))
+            return None
+        if route.method == "PATCH":
+            self.events.append(("edit", payload))
+            self._record("edit", channel_id, payload)
+            return self._wire.bot_message(channel_id, str(payload.get("content") or ""))
         self.events.append(("followup", payload))
-        self._record("followup", channel_id, payload)
-        return self._wire.bot_message(channel_id, str(payload.get("content") or ""))
+        message = self._wire.bot_message(channel_id, str(payload.get("content") or ""))
+        self._record("followup", channel_id, payload, int(message["id"]))
+        return message
 
-    def _record(self, via: Via, channel_id: int, data: Mapping[str, Any]) -> None:
+    def _record(
+        self, via: Via, channel_id: int, data: Mapping[str, Any], message_id: int = 0
+    ) -> None:
         ephemeral = bool(int(data.get("flags") or 0) & EPHEMERAL)
+        buttons, disabled = _buttons(data)
         self._wire.http.sent.append(
-            Sent(via, channel_id, str(data.get("content") or ""), ephemeral)
+            Sent(
+                via,
+                channel_id,
+                str(data.get("content") or ""),
+                ephemeral,
+                message_id,
+                buttons,
+                disabled,
+            )
         )
 
 
@@ -490,6 +546,7 @@ class FakeDiscord:
         options: Mapping[str, object],
         *,
         channel: discord.TextChannel | None,
+        locale: str = "en-US",
     ) -> discord.Interaction[Any]:
         """A slash-command interaction, refused if Discord would not offer it there."""
         dm = channel is None
@@ -504,14 +561,44 @@ class FakeDiscord:
             "type": 1,
             "options": _options(definition, sub, options),
         }
-        payload = self._interaction_payload(member, data, channel)
+        payload = self._interaction_payload(member, data, channel, locale=locale)
         return discord.Interaction(data=payload, state=self.state)  # type: ignore[arg-type]
+
+    async def press(self, member: discord.Member, sent: Sent, label: str) -> None:
+        """`member` presses the button labelled `label` on the message `sent`.
+
+        Handed to the view discord.py stored for that message, as the gateway
+        would hand it, and awaited: `interaction_check` and the callback run
+        for real. A press on a message whose view has stopped reaches nothing,
+        as on Discord.
+        """
+        custom_id = dict(sent.buttons)[label]
+        channel = None if self.is_dm(sent.channel_id) else self.guild.get_channel(sent.channel_id)
+        data = {"custom_id": custom_id, "component_type": 2}
+        payload = self._interaction_payload(
+            member,
+            data,
+            channel,  # type: ignore[arg-type]
+            kind=3,
+        )
+        payload["message"] = {
+            **self.bot_message(sent.channel_id, sent.content),
+            "id": str(sent.message_id),
+        }
+        interaction = discord.Interaction(data=payload, state=self.state)  # type: ignore[arg-type]
+        item = self.state._view_store._views.get(sent.message_id, {}).get((2, custom_id))
+        if item is None or item.view is None:
+            return
+        await item.view._scheduled_task(item, interaction)
 
     def _interaction_payload(
         self,
         member: discord.Member,
         data: Mapping[str, Any],
         channel: discord.TextChannel | None,
+        *,
+        kind: int = 2,
+        locale: str = "en-US",
     ) -> dict[str, Any]:
         user = self._users[member.id]
         interaction_id = snowflake()
@@ -519,11 +606,11 @@ class FakeDiscord:
         payload: dict[str, Any] = {
             "id": str(interaction_id),
             "application_id": str(APP_ID),
-            "type": 2,
+            "type": kind,
             "token": token,
             "version": 1,
             "attachment_size_limit": 8_000_000,
-            "locale": "en-US",
+            "locale": locale,
             "entitlements": [],
             "authorizing_integration_owners": {"0": str(self.layout.guild_id)},
             "app_permissions": "0",

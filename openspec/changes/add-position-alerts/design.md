@@ -100,8 +100,8 @@ in this change take an address that is already cleared.
 Deterministic templates in English and Portuguese, the language fixed at
 creation and stored on the row. Prefixed with "🔔 **Alert**" / "🔔 **Alerta**"
 in the text itself, so the messenger is handed an empty heading. Numbers in the
-reader's notation (3,160.20 / 3.160,20). No command is named until `/alert`
-exists.
+reader's notation (3,160.20 / 3.160,20). The last line names `/alert list` and
+`/alert delete <id>`.
 
 ## Data model
 
@@ -124,3 +124,83 @@ Erasure, all in the database so no path can forget it:
 About three requests a sweep for a few alerts on two chains: 864 a day at the
 default five minutes. A full positions lookup is two to twenty-five requests
 per chain per wallet, and the sweep never runs one.
+
+## Creating an alert (PR-A2)
+
+### Recognising the request
+
+`alert_intent(text, previous_questions) -> AlertIntent | None` in
+`app/alert_intent.py`, lexical and model-free like the rest of routing. Its
+route label is `ALERT_CREATE`, the name the unified router will give it; until
+that router lands it is dispatched in `AskService.ask`, after facts, the
+indexing pointer and typed commands, and before either answer path -- so before
+retrieval and before the positions (`DEFI_*`) and wallet (`WALLET_BALANCE`)
+routes, which is the precedence the router will keep:
+`ALERT_CREATE > WALLET_ACTIVITY > PORTFOLIO > DEFI_* > WALLET_BALANCE`.
+
+- An alert verb ("alert/notify/warn/ping me when|if", "set up an alert",
+  "avise/me avisa quando|se", "quero um alerta") is a request whatever follows.
+  "Tell me / let me know / me diz" is one only with "when"/"quando", or with a
+  change named after "if"/"se" ("drops", "goes out", "cair", "sair"): "tell me
+  if my health factor is ok" is a reading, and goes to the positions route.
+- Range: a liquidity word (LP, pool, position, Uniswap, v3/v4) and leaving the
+  range ("out of range", "sair da faixa", "fora do range").
+- Health: "health factor", "HF", "fator de saúde". The limit is the number
+  after "below / under / to / abaixo de / para", else the only number, with
+  "1,3" read as 1.3; addresses, `#ids` and `v3/v4` are not numbers. A limit out
+  of bounds is carried as written so the reply can state the bounds; none at
+  all is answered by asking for one.
+- A chain named with a preposition ("on base", "na arbitrum") narrows the
+  read; `#4558452` names one position.
+- Conversation verbs ("said", "discussed", "disseram") veto, as for the wallet
+  routes: "what did people say about alerts" is a corpus question.
+
+### The address, checked once
+
+The address is the one in the message, or one the asker typed in one of their
+last three questions (`routing.recent_chain_address`, the positions
+follow-up's rule), stored as `typed`; else their saved `eth_wallet` from
+`asker_values`, stored as `saved`; else the reply asks for one. Retrieved text
+and other people's messages are never read. This is the clearance the sweep
+relies on.
+
+### The proposal
+
+`AlertRequests.propose` checks the limit and the cap before reading anything,
+then reads the chain once through `AlertTargets` (`ChainTargets`: the full
+`UniswapReader` for ranges, `getUserAccountData` per chain for health, chains
+one after another on their own rate limiter, a failing chain named in
+`unreachable`). `LiquidityPosition` now carries `pool_ref` (the v3 pool from
+`getPool`, or the v4 pool id), so the sweep never discovers anything. The
+baseline uses `watch.lp_observation`, the sweep's own function.
+
+The reply lists each target with its reading now; a target already past its
+condition says so and that the next message comes when it changes back. It
+names chains that could not be read and positions that could not be listed,
+leaves out watches that already exist, cuts to the room under the cap and says
+so, and says positions opened later are not covered. The wallet is named only
+in a direct message. Nothing is stored.
+
+### Confirming
+
+The surface shows the proposal with Confirm and Cancel
+(`adapters/discord/alerts.AlertConfirmView`), checked by the requester-only
+view the tool-approval prompt also uses (`adapters/discord/views`). A reply to
+the message in a DM or a channel; for `/ask`, whose public defer happened
+before the request was recognised, the "thinking" response is deleted and the
+prompt sent as an ephemeral followup. Confirm calls `AlertRequests.confirm`,
+which creates each alert through `AlertService` (the store enforces the cap and
+duplicates again) and replies with what was created, by id. Every outcome --
+Confirm, Cancel, five minutes of nothing -- disables the buttons. The ledger
+and desk behind tool approvals are not used: they exist to block a run until a
+grant arrives, and nothing waits on this prompt.
+
+The process's clock times the first check one sweep after creation, so the
+harness's settable clock drives creation and sweep alike.
+
+### Managing
+
+`/alert list|delete` is a global group like `/schedule`, keyed on the
+interaction's user, answered ephemerally in the client's language. There is no
+`/alert create`: the request and its confirmation are the one way in, because
+the confirmation is where the person sees what will be watched.

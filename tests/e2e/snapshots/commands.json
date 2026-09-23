@@ -203,6 +203,42 @@
         }
       ],
       "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Your position alerts (range and health factor)",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "alert",
+      "nsfw": false,
+      "options": [
+        {
+          "description": "Show your position alerts",
+          "name": "list",
+          "options": [],
+          "type": 1
+        },
+        {
+          "description": "Stop one of your position alerts",
+          "name": "delete",
+          "options": [
+            {
+              "description": "The number shown by `/alert list`",
+              "name": "alert",
+              "required": true,
+              "type": 4
+            }
+          ],
+          "type": 1
+        }
+      ],
+      "type": 1
     }
   ],
   "guild": [

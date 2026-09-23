@@ -69,6 +69,8 @@ class RawPosition:
     tick: int = 0
     owed0: int = 0
     owed1: int = 0
+    #: The v3 pool address or the v4 pool id, which is what an alert pins.
+    pool_ref: str = ""
 
 
 class UniswapReader:
@@ -152,8 +154,11 @@ class UniswapReader:
         }
         out: list[RawPosition] = []
         for p in positions:
-            sqrt_price, tick = state.get((p.token0, p.token1, p.fee), (0, 0))
-            out.append(replace(p, sqrt_price_x96=sqrt_price, tick=tick))
+            key = (p.token0, p.token1, p.fee)
+            sqrt_price, tick = state.get(key, (0, 0))
+            out.append(
+                replace(p, sqrt_price_x96=sqrt_price, tick=tick, pool_ref=pool_of.get(key, ""))
+            )
         return out
 
     async def _v3_fees(self, owner: str, positions: list[RawPosition]) -> list[RawPosition]:
@@ -280,8 +285,11 @@ class UniswapReader:
             ]
         state = await self._node.multicall(calls)
         positions = [
-            _v4_position(token_id, w, liquidity, state[3 * i : 3 * i + 3])
-            for i, (token_id, w, liquidity, _) in enumerate(live)
+            replace(
+                _v4_position(token_id, w, liquidity, state[3 * i : 3 * i + 3]),
+                pool_ref="0x" + pool_id.hex(),
+            )
+            for i, (token_id, w, liquidity, pool_id) in enumerate(live)
         ]
         return positions
 
@@ -386,4 +394,5 @@ def _position(
         usd0=usd0,
         usd1=usd1,
         pool_priced=pool_priced,
+        pool_ref=p.pool_ref,
     )

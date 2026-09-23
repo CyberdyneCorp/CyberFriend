@@ -1,9 +1,11 @@
 """Position alerts are built, reached and started -- and only when switched on.
 
-The feature ships dark: with the defaults nothing is built and nothing starts,
-so production behaves exactly as before. With the switch and an Infura key the
+With the defaults nothing is built and nothing starts: an alert request is
+answered that alerts are not available. With the switch and an Infura key the
 sweep is built over the process's transport and started beside the scheduled
-sweep, on the edges' clock, after the gateway identifies.
+sweep, on the edges' clock, after the gateway identifies; and creation -- the
+ask service's proposals and the client's Confirm and `/alert` -- is built on
+the same condition, over the same transport and clock.
 """
 
 from __future__ import annotations
@@ -18,8 +20,10 @@ import pytest
 from pydantic import ValidationError
 
 from chatmemory.adapters.discord.bot import SCHEDULED_PREFIX, DiscordTaskMessenger
+from chatmemory.app.alert_requests import AlertRequests
 from chatmemory.app.alerts import AlertRunner
-from chatmemory.composition import build_alert_runner
+from chatmemory.app.self_description import ALERTS
+from chatmemory.composition import available_commands, build_alert_requests, build_alert_runner
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints.bot import alert_loop
@@ -163,3 +167,39 @@ async def test_the_messenger_heads_a_message_only_when_given_a_heading(
 
     assert await messenger.deliver(PersonRef("discord", 1), 1, "hello") is DeliveryResult.SENT
     assert recipient.sent == [expected]
+
+
+# --- creating, and the commands -----------------------------------------------------
+
+
+def test_creation_is_built_on_the_same_condition_as_the_sweep() -> None:
+    """An alert nothing would check must not be creatable."""
+    engine: Any = object()
+    assert build_alert_requests(settings(infura_key="k"), engine) is None
+    assert build_alert_requests(settings(alerts_enabled=True), engine) is None
+    built = build_alert_requests(settings(alerts_enabled=True, infura_key="k"), engine)
+    assert isinstance(built, AlertRequests)
+
+
+def test_the_alert_commands_are_described_only_where_alerts_are_on() -> None:
+    assert not set(ALERTS) & set(available_commands(settings(infura_key="k")))
+    assert set(ALERTS) <= set(
+        available_commands(settings(alerts_enabled=True, infura_key="k"))
+    )
+
+
+def test_build_bot_hands_the_requests_to_the_ask_service_and_the_client() -> None:
+    build_bot = _function(BOT, "build_bot")
+    [built] = _calls(build_bot, "build_alert_requests")
+    assert [getattr(a, "id", None) for a in built.args[2:]] == ["alert_transport", "clock"]
+    [asks] = _calls(build_bot, "build_ask_service")
+    alerts = next(k.value for k in asks.keywords if k.arg == "alerts")
+    assert getattr(alerts, "id", None) == "alert_requests"
+    [attached] = _calls(build_bot, "attach_alerts")
+    assert getattr(attached.args[0], "id", None) == "alert_requests"
+
+
+def test_assemble_hands_build_bot_the_edges_clock() -> None:
+    [call] = _calls(_function(BOT, "assemble"), "build_bot")
+    clock = next(k.value for k in call.keywords if k.arg == "clock")
+    assert ast.unparse(clock) == "edges.clock"

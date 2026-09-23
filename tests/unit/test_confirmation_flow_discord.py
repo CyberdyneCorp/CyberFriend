@@ -387,6 +387,7 @@ class SimpleOutcome:
     rate_limited: bool = False
     retry_after_seconds: float = 0.0
     scoped: Any = None
+    alert: Any = None
 
     def __post_init__(self) -> None:
         from chatmemory.app.disclosure import ScopedAnswer

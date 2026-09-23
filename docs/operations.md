@@ -438,14 +438,49 @@ shut. Removing a person's data deletes their tasks with it.
 
 ## Position alerts
 
-Built and migrated, **not yet reachable**: there is no way to create an alert
-until the `/alert` commands and the natural-language confirmation land. With the
-switch on, the sweep runs over whatever rows exist.
+People ask for an alert in words, in English or Portuguese, and confirm it
+with a button. With the switch off, or without `INFURA_KEY`, such a request is
+answered that alerts are not available here — never searched for — and
+`/alert list` says the feature is off.
 
 | | |
 |---|---|
 | `ALERTS_ENABLED` | Off by default. Bot only. Also needs `INFURA_KEY` |
 | `ALERT_SWEEP_SECONDS` | How often every alert is checked (default 300, at least 60) |
+
+### Creating one
+
+"tell me when my LP goes out of range", "avise quando minha posição sair da
+faixa", "me avisa se o health factor do aave cair abaixo de 1,3", "alert me if
+my health factor drops below 1.25 on base". The request is recognised before
+retrieval and before the positions route (route label `ALERT_CREATE`), with no
+model call. The wallet is one the person typed — in this message or one of
+their last few questions — or their saved wallet; nothing read from a channel
+is ever a candidate. A question about alerting — "does Uniswap notify me
+when…", "which app can warn me when…", "como criar um alerta…" — is not a
+request and is answered as any question; "can you alert me when…" is.
+A scheduled task is never an alert request: nobody is there to press Confirm,
+so its question is answered as any other.
+
+The chain is then read once, with the positions reader, and the reply lists
+exactly what would be watched with the reading right now: each open Uniswap
+position with its range and whether it is in range, or each chain with Aave
+debt and its current health factor. It says which chains could not be read,
+which positions are already watched, and that positions opened later are not
+covered. A limit outside 1.05–5.0 is refused with the bounds. **Nothing is
+stored until the person presses Confirm**; Cancel, five minutes of silence, or
+a press by anybody else creates nothing (the other person is told privately
+the prompt is not theirs).
+
+Where the prompt appears follows where it was asked: a reply in a DM, a reply
+in the channel for a mention, ephemeral for `/ask`. The wallet address is shown
+only in a DM, as for saved wallets.
+
+`/alert list` shows each alert, its state and since when, the last check and
+the last message, and whether it is failing or stopped. `/alert delete <id>`
+stops one, and answers "not yours" and "no such alert" with the same sentence.
+Both are private and work in the server and in a DM. Every alert message ends
+with `/alert list` and `/alert delete <id>`.
 
 An alert watches one Uniswap v3 or v4 position that was open when it was made
 (in range, out of range, closed) or one chain's Aave health factor against a
@@ -476,6 +511,11 @@ addresses to Infura. The per-question guard has no question to root them in,
 so the address is checked once, when the alert is made — the person's saved
 wallet or an address they typed — and stored. That is declared in the
 `position-alerts` spec and is why the feature is off unless switched on.
+
+Creation reads more than a sweep does: a range request runs the full positions
+discovery (two to twenty-five requests per chain, several seconds on Arbitrum
+v4), a health request one `getUserAccountData` per chain. That happens once per
+request, before the Confirm button, and never on the sweep.
 
 ### When it stops
 

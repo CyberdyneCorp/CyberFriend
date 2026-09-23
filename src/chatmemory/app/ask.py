@@ -43,6 +43,16 @@ hold an email address, and memory is recalled into prompts for channel replies.
 Whose facts are touched is always `request.asker`; a request for anyone else's
 gets one fixed refusal that neither reads the store nor varies with it.
 
+And it is where "tell me when my LP goes out of range" becomes a proposal
+rather than a search. Recognised after the asker's facts and earlier turns are
+read -- the address may be their saved wallet, or one they typed a few questions
+back -- and before either answer path, so an alert request never reaches the
+corpus or the positions route. What comes back is the list of what would be
+watched, carried on `AskOutcome.alert` for the surface to show with a Confirm
+button; nothing is stored until that button is pressed. An alert turn is not
+remembered: it is a command, and its reply may name the wallet. A scheduled
+run (`metered=False`) is never an alert turn: nobody is there to confirm.
+
 And it is where "what did I miss in #x" becomes an answer. A catch-up is not
 a second way into the corpus: `_produce` below swaps which collaborator
 writes the answer, and everything around it -- the viewer, the audience, the
@@ -60,6 +70,13 @@ from dataclasses import dataclass, replace
 
 import structlog
 
+from chatmemory.app.alert_intent import ALERT_CREATE, AlertIntent, alert_intent
+from chatmemory.app.alert_requests import (
+    AlertProposal,
+    AlertRequests,
+    alert_language,
+    alerts_unavailable,
+)
 from chatmemory.app.asker import AskerFacts, answering_with_facts
 from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.asks.model import (
@@ -82,6 +99,7 @@ from chatmemory.app.facts import (
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.domain.audience import Audience
+from chatmemory.domain.chain import is_address
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.acl import AclResolver, AudienceResolver
 from chatmemory.ports.answers import (
@@ -242,6 +260,10 @@ class AskOutcome:
     scoped: ScopedAnswer | None
     rate_limited: bool = False
     retry_after_seconds: float = 0.0
+    #: Alerts to create if the asker confirms; `scoped` holds the same text.
+    #: The surface shows it with Confirm and Cancel, answerable by the asker
+    #: alone. None for every other reply.
+    alert: AlertProposal | None = None
 
     @property
     def answered(self) -> bool:
@@ -262,6 +284,7 @@ class AskService:
         profiles: AskerProfileResolver | None = None,
         facts: PersonalFactsService | None = None,
         catchup: CatchUpService | None = None,
+        alerts: AlertRequests | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
@@ -284,6 +307,10 @@ class AskService:
         # corpus for those words -- a worse answer, never a wider one, since
         # that search is scoped by the same viewer this would have been.
         self._catchup = catchup
+        # Optional, and absent unless alerts are switched on with an Infura
+        # key. An alert request is still recognised without it, and answered
+        # that alerts are not available here -- never searched for.
+        self._alerts = alerts
         # Optional because the notice is the only thing that needs it: a
         # deployment without one answers exactly as before, and simply never
         # tells anyone that asking privately would get them more.
@@ -389,6 +416,18 @@ class AskService:
             asker_profile=profile,
             asker_values=values,
         )
+        # Before either answer path, and with the asker's own earlier questions:
+        # an address typed there is theirs, as one typed here is. Only for
+        # somebody present: a proposal needs a Confirm press, and a scheduled
+        # run has nobody to press it, so its question is answered as before
+        # rather than reading every chain on each run to propose to no one.
+        alert = (
+            alert_intent(request.text, tuple(turn.question for turn in memory.turns))
+            if metered
+            else None
+        )
+        if alert is not None:
+            return await self._alert_turn(request, alert, facts, values)
         # The confirmation channel is opened around the whole of answer
         # production, and closed the moment it ends: a confirmation cannot be
         # collected for a run that is already over, and the next asker gets
@@ -456,6 +495,38 @@ class AskService:
             self._withheld_channels(viewer, audience, request.text),
         )
         return answer, withheld
+
+    async def _alert_turn(
+        self,
+        request: AskRequest,
+        intent: AlertIntent,
+        facts: AskerFacts | None,
+        values: frozenset[str],
+    ) -> AskOutcome:
+        """What would be watched, for the asker to confirm; nothing is stored.
+
+        The saved wallet comes from `values` -- the exact stored strings -- and
+        only an Ethereum address among them, as for the positions route.
+        """
+        language = alert_language(request.text, facts.preferred_language if facts else None)
+        direct = request.destination is None
+        log.info(
+            "ask.alert_request",
+            route=ALERT_CREATE,
+            asker=str(request.asker),
+            kind=str(intent.kind),
+            typed=intent.address is not None,
+            direct=direct,
+        )
+        if self._alerts is None:
+            reply = alerts_unavailable(language)
+            return AskOutcome(ScopedAnswer(Answer(text=reply), frozenset()))
+        saved = next((v for v in sorted(values) if is_address(v)), None)
+        proposed = await self._alerts.propose(
+            request.asker, intent, saved_wallet=saved, language=language, direct=direct
+        )
+        answer = Answer(text=proposed.text, consulted_channels=frozenset())
+        return AskOutcome(ScopedAnswer(answer, frozenset()), alert=proposed.proposal)
 
     async def forget(self, request: ForgetRequest) -> MemoryPurge | None:
         """Erase the requester's own conversation, here or everywhere.
