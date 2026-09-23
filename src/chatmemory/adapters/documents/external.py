@@ -253,18 +253,28 @@ def _notion_text(blocks: dict[str, object]) -> str:
     return "\n\n".join(lines)
 
 
-def drive_client(access_token: str, timeout: float = 15.0) -> httpx.AsyncClient:
+def drive_client(
+    access_token: str,
+    timeout: float = 15.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.AsyncClient:
     """A client carrying the Drive credential.
 
     The credential lives in the client rather than in the source, so a source
     cannot be constructed with more access than the caller chose to give it.
     """
     return httpx.AsyncClient(
-        headers={"Authorization": f"Bearer {access_token}"}, timeout=timeout
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=timeout,
+        transport=transport,
     )
 
 
-def notion_client(access_token: str, timeout: float = 15.0) -> httpx.AsyncClient:
+def notion_client(
+    access_token: str,
+    timeout: float = 15.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.AsyncClient:
     """A client carrying the Notion credential and the API version it expects."""
     return httpx.AsyncClient(
         headers={
@@ -272,6 +282,7 @@ def notion_client(access_token: str, timeout: float = 15.0) -> httpx.AsyncClient
             "Notion-Version": NOTION_VERSION,
         },
         timeout=timeout,
+        transport=transport,
     )
 
 

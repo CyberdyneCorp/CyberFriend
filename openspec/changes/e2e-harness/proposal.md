@@ -32,14 +32,17 @@ clock. Today those are constructed deep inside `build_answer_stack` and
   graph construction now read `assemble()`, and new tests assert that `main`
   assembles over `Edges.production`, that `assemble` hands `build_bot` every
   collaborator it accepts, and that nothing between the edges constructs a
-  chat model, embedding client or engine of its own. Federation and tracing
-  still open their own HTTP clients until `http_transport` is threaded.
+  chat model, embedding client or engine of its own.
+- **`http_transport` is threaded** into every HTTP client the web, market and
+  wallet providers, the document fetchers and the Langfuse tracer open, via
+  a `transport` field on each tool config and a `transport` argument to
+  `build_federation` and `build_tracer`. None is httpx's own transport.
+- **`clock` is threaded** into the time route, the prompt's clock notice,
+  catch-up, and the scheduled-task and notification loops. The default is
+  the UTC wall clock.
 
 Non-goals (later changes in this series):
 
-- **Threading `http_transport` and `clock` into adapters.** This change only
-  carries the fields; production leaves them at the defaults adapters already
-  use.
 - **The harness itself** -- fake Discord, fake model, fixtures.
 
 ## Capabilities

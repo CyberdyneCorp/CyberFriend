@@ -51,6 +51,7 @@ class LangfuseTracer:
         client: httpx.AsyncClient | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         environment: str = "production",
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._url = host.rstrip("/") + "/api/public/ingestion"
         self._auth = (public_key, secret_key)
@@ -58,6 +59,7 @@ class LangfuseTracer:
         self._client = client
         self._timeout = timeout
         self._environment = environment
+        self._transport = transport
 
     async def trace(self, run: RunTrace) -> None:
         trace_id = str(uuid.uuid4())
@@ -145,7 +147,9 @@ class LangfuseTracer:
             )
             response.raise_for_status()
             return
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=self._timeout, transport=self._transport
+        ) as client:
             response = await client.post(self._url, json=payload, auth=self._auth)
             response.raise_for_status()
 
@@ -160,11 +164,13 @@ class LangfuseTraceDeleter:
         secret_key: str,
         client: httpx.AsyncClient | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._url = host.rstrip("/") + "/api/public/traces"
         self._auth = (public_key, secret_key)
         self._client = client
         self._timeout = timeout
+        self._transport = transport
 
     async def delete_traces(self, trace_ids: Sequence[str]) -> bool:
         if not trace_ids:
@@ -177,7 +183,9 @@ class LangfuseTraceDeleter:
                     auth=self._auth, timeout=self._timeout,
                 )
             else:
-                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                async with httpx.AsyncClient(
+                    timeout=self._timeout, transport=self._transport
+                ) as client:
                     response = await client.request(
                         "DELETE", self._url, json=payload, auth=self._auth
                     )

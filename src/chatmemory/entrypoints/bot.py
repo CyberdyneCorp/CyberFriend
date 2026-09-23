@@ -86,7 +86,7 @@ import os
 import time
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, cast
 
 import structlog
@@ -137,6 +137,7 @@ from chatmemory.composition import (
     build_personal_facts,
     build_schedules,
     build_task_runner,
+    utc_now,
 )
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
@@ -420,6 +421,7 @@ async def scheduled_task_loop(
     state: HealthState,
     interval: float = 300.0,
     ready: asyncio.Event | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> None:
     """Run the questions people asked to have asked on their behalf.
 
@@ -437,7 +439,7 @@ async def scheduled_task_loop(
         await ready.wait()
     while True:
         try:
-            sent = await runner.run_due(datetime.now(UTC))
+            sent = await runner.run_due(clock())
             state.details["scheduled_tasks"] = {
                 "delivered": sent,
                 "last_run_at": time.time(),
@@ -454,6 +456,7 @@ async def notification_loop(
     state: HealthState,
     interval: float = NOTIFICATION_DRAIN_INTERVAL_SECONDS,
     ready: asyncio.Event | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> None:
     """Send what ingest queued, to the people it was addressed to.
 
@@ -473,7 +476,7 @@ async def notification_loop(
         await ready.wait()
     while True:
         try:
-            report = await delivery.deliver(datetime.now(UTC))
+            report = await delivery.deliver(clock())
             state.details["notifications"] = {
                 **report.as_dict(),
                 "last_run_at": time.time(),
@@ -530,6 +533,7 @@ class Process:
     scope: LiveScope
     conversations: Conversations
     facts: PersonalFactsService
+    edges: Edges
 
 
 async def assemble(settings: Settings, edges: Edges) -> Process:
@@ -576,7 +580,7 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # "What did I miss in #x", over the same search backend and chat
         # handle the answer stack holds. Omitted, catch-up is built, tested
         # and reachable from nothing -- which is this project's failure mode.
-        catchup=build_catch_up(settings, stack.search, stack.chat),
+        catchup=build_catch_up(settings, stack.search, stack.chat, edges.clock),
         # The other end of the queue the ingest process fills. Omitted, the
         # notification tables are written by one process and read by none:
         # `/notifications` says it is unavailable, and nobody is ever told
@@ -584,7 +588,12 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         notifications=stack.engine,
     )
     return Process(
-        graph=graph, stack=stack, scope=scope, conversations=conversations, facts=facts
+        graph=graph,
+        stack=stack,
+        scope=scope,
+        conversations=conversations,
+        facts=facts,
+        edges=edges,
     )
 
 
@@ -625,7 +634,11 @@ async def main() -> None:
     # this sends. Without this line the queue fills and nothing ever drains
     # it -- the eleventh time that failure would have shipped here.
     drains = (
-        [notification_loop(graph.notifications, state, ready=gateway_ready)]
+        [
+            notification_loop(
+                graph.notifications, state, ready=gateway_ready, clock=process.edges.clock
+            )
+        ]
         if graph.notifications is not None
         else []
     )
@@ -639,6 +652,7 @@ async def main() -> None:
                 state,
                 interval=settings.scheduled_sweep_seconds,
                 ready=gateway_ready,
+                clock=process.edges.clock,
             )
         )
     await run_beside_scope(

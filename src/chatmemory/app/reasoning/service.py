@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 
 import structlog
 
@@ -70,7 +70,13 @@ from chatmemory.app.reasoning.ports import (
     Synthesizer,
     ToolSurface,
 )
-from chatmemory.app.reasoning.stages import ModelCritic, ModelPlanner, ModelSynthesizer
+from chatmemory.app.reasoning.stages import (
+    Clock,
+    ModelCritic,
+    ModelPlanner,
+    ModelSynthesizer,
+    wall_clock,
+)
 from chatmemory.app.routing import (
     DefiQuestion,
     MarketQuestion,
@@ -172,12 +178,14 @@ class ReasoningAnswerService:
         recorder: RunRecorder | None = None,
         classifier: Callable[[str], RoutingDecision] = classify,
         tracer: RunTracer | None = None,
+        clock: Clock = wall_clock,
     ) -> None:
         self._fixed = fixed
         self._loop = loop
         self._recorder = recorder or LoggingRunRecorder()
         self._classify = classifier
         self._tracer = tracer or NoRunTracer()
+        self._clock = clock
 
     async def answer(self, question: Question) -> Answer:
         return (await self.answer_run(question)).answer
@@ -309,7 +317,7 @@ class ReasoningAnswerService:
             # only get it wrong.
             log.info("reasoning.external_route", route="time")
             return _route(EXTERNAL_ROUTE, "time"), refusal(
-                current_time_answer(detect(text))
+                current_time_answer(detect(text), self._clock())
             )
         # Remembered questions are the asker's own words as typed.
         defi = defi_question(text, tuple(turn.question for turn in question.memory.turns))
@@ -405,7 +413,7 @@ def current_time_answer(language: Language, now: datetime | None = None) -> str:
     UTC and labelled, like every other time this assistant states. A person
     reading a bare time reads it as their own, and this one is not.
     """
-    moment = now or datetime.now(UTC)
+    moment = now or wall_clock()
     stamp = moment.strftime("%A %d %B %Y, %H:%M")
     if language is Language.PORTUGUESE:
         return f"Agora são **{stamp} UTC**."
@@ -526,6 +534,7 @@ def build_answer_service(
     recorder: RunRecorder | None = None,
     tools: ToolSurface | None = None,
     tracer: RunTracer | None = None,
+    clock: Clock = wall_clock,
 ) -> ReasoningAnswerService:
     """Wire the default composition.
 
@@ -538,17 +547,20 @@ def build_answer_service(
     reconcile rather than a second sub-goal; leaving it out keeps the path
     that carries nearly all the traffic on one evidence kind. A deployment
     with no federation passes None and gets exactly today's behaviour.
+
+    `clock` is the one the time route answers from and the default planner
+    and synthesizer state in their prompts, so a fixed clock fixes all three.
     """
     critic = ModelCritic(model)
-    writer = synthesizer or ModelSynthesizer(model)
+    writer = synthesizer or ModelSynthesizer(model, clock)
     fixed = FixedPath(fixed_driver or CorrectiveDriver(retrieval, critic), writer)
     loop = ReasoningLoop(
         loop_driver or CorrectiveDriver(retrieval, critic, budget=LOOP_BUDGET),
-        planner or ModelPlanner(model),
+        planner or ModelPlanner(model, clock),
         writer,
         tools=tools,
     )
-    return ReasoningAnswerService(fixed, loop, recorder, tracer=tracer)
+    return ReasoningAnswerService(fixed, loop, recorder, tracer=tracer, clock=clock)
 
 
 LOOP_BUDGET = Budget(max_attempts=6, max_model_calls=16, max_tool_calls=24)

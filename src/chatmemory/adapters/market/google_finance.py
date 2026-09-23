@@ -79,6 +79,7 @@ class GoogleFinanceProvider(MarketProvider):
         limiter: RateLimiter | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("GoogleFinanceProvider requires an API key; omit the provider instead")
@@ -92,6 +93,7 @@ class GoogleFinanceProvider(MarketProvider):
             limiter=limiter,
             timeout_seconds=timeout_seconds,
             client=client,
+            transport=transport,
             secret_values=(api_key,),
         )
         self._api_key = api_key

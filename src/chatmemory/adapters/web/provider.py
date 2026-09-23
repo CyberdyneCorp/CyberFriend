@@ -140,6 +140,7 @@ class WebProvider:
         timeout_seconds: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
         secret_values: Sequence[str] = (),
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.server = server
         self.endpoint = endpoint
@@ -150,6 +151,7 @@ class WebProvider:
         self._max_result_chars = max_result_chars
         self._timeout = timeout_seconds
         self._client = client
+        self._transport = transport
         # An API key travels as a query parameter for some providers, and
         # httpx puts the full URL in the text of an HTTPStatusError. One
         # unhandled 401 would then write the key into the log, so anything
@@ -252,6 +254,7 @@ class WebProvider:
             # to a host the operator never allowed, and every endpoint here
             # is an API that has no reason to issue one.
             follow_redirects=False,
+            transport=self._transport,
         )
 
     # --- the guarded call ------------------------------------------------

@@ -72,11 +72,13 @@ class ChainReader:
         client: httpx.AsyncClient | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT,
         endpoint: str = "",
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.chain = chain
         self._endpoint = endpoint or f"https://{chain.infura_host}.infura.io/v3/{api_key}"
         self._client = client
         self._timeout = timeout_seconds
+        self._transport = transport
         # The key is in the URL, and httpx puts the full URL into the text of
         # an HTTPStatusError. One unhandled 401 would otherwise write it into
         # the log, so it is scrubbed from every message this class emits.
@@ -101,7 +103,9 @@ class ChainReader:
     async def _read(self, address: str, tokens: tuple[Token, ...]) -> ChainBalances:
         if self._client is not None:
             return await self._read_with(self._client, address, tokens)
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=self._timeout, transport=self._transport
+        ) as client:
             return await self._read_with(client, address, tokens)
 
     async def _read_with(

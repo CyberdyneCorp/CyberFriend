@@ -87,6 +87,9 @@ class WebToolsConfig:
     min_interval_seconds: float = DEFAULT_MIN_INTERVAL
     wikipedia_endpoint: str = WIKIPEDIA_ENDPOINT
     serpapi_endpoint: str = SERPAPI_ENDPOINT
+    transport: httpx.AsyncBaseTransport | None = None
+    """What every client this package opens sends through. None is httpx's
+    own network transport; a test hands a mock here and nothing leaves."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +182,7 @@ def build_web_tools(
         max_result_chars=settings.max_result_chars,
         timeout_seconds=settings.timeout_seconds,
         client=client,
+        transport=settings.transport,
     )
     providers[WIKIPEDIA_SERVER] = wikipedia
     servers.append(_server(WIKIPEDIA_SERVER, settings.wikipedia_endpoint, settings))
@@ -195,6 +199,7 @@ def build_web_tools(
             max_result_chars=settings.max_result_chars,
             timeout_seconds=settings.timeout_seconds,
             client=client,
+            transport=settings.transport,
         )
         providers[SERPAPI_SERVER] = serpapi
         servers.append(_server(SERPAPI_SERVER, settings.serpapi_endpoint, settings))

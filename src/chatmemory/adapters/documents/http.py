@@ -29,8 +29,13 @@ CHUNK = 64 * 1024
 class BoundedHttpFetcher:
     """A `ContentFetcher` that gives up rather than reading without limit."""
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._client = client
+        self._transport = transport
 
     async def fetch(self, url: str, max_bytes: int, timeout: float) -> bytes | None:
         """Bytes, or None. A failed attachment never fails its message."""
@@ -44,7 +49,10 @@ class BoundedHttpFetcher:
 
     def _new_client(self, timeout: float) -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            timeout=timeout, follow_redirects=True, max_redirects=MAX_REDIRECTS
+            timeout=timeout,
+            follow_redirects=True,
+            max_redirects=MAX_REDIRECTS,
+            transport=self._transport,
         )
 
     async def _stream(

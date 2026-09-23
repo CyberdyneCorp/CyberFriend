@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 
 from chatmemory.app.reasoning.evidence import Evidence
@@ -214,6 +214,14 @@ def prompt_context(question: Question) -> PromptContext:
     )
 
 
+Clock = Callable[[], datetime]
+
+
+def wall_clock() -> datetime:
+    """The time every stage states unless it was handed another clock."""
+    return datetime.now(UTC)
+
+
 def clock_notice(now: datetime | None = None) -> str:
     """What time it is, for a prompt that would otherwise be guessing.
 
@@ -225,7 +233,7 @@ def clock_notice(now: datetime | None = None) -> str:
     UTC and labelled, because a time without a zone is worse than no time: it
     reads as local to whoever is looking.
     """
-    moment = now or datetime.now(UTC)
+    moment = now or wall_clock()
     return (
         f"The current date and time is {moment.strftime('%A %d %B %Y, %H:%M')} UTC. "
         "Use it to interpret words like today, yesterday, this week and recent, "
@@ -421,8 +429,9 @@ class ModelCritic:
 
 
 class ModelPlanner:
-    def __init__(self, model: ChatModel) -> None:
+    def __init__(self, model: ChatModel, clock: Clock = wall_clock) -> None:
         self._model = model
+        self._clock = clock
 
     async def plan(
         self, question: str, max_steps: int, context: PromptContext = NO_CONTEXT
@@ -431,6 +440,7 @@ class ModelPlanner:
             PLANNER_SYSTEM,
             f"Question: {as_untrusted(question)}\nReturn at most {max_steps} lookups.",
             context,
+            self._clock(),
         )
         completion = await self._model.complete_json(
             system, user, PLANNER_SCHEMA, "question_plan"
@@ -448,8 +458,9 @@ class ModelPlanner:
 
 
 class ModelSynthesizer:
-    def __init__(self, model: ChatModel) -> None:
+    def __init__(self, model: ChatModel, clock: Clock = wall_clock) -> None:
         self._model = model
+        self._clock = clock
 
     async def synthesize(
         self,
@@ -461,6 +472,7 @@ class ModelSynthesizer:
             SYNTHESIS_SYSTEM,
             f"Question: {as_untrusted(question)}\n\n{fence(evidence)}",
             context,
+            self._clock(),
         )
         completion = await self._model.complete_json(
             system, user, SYNTHESIS_SCHEMA, "grounded_answer"

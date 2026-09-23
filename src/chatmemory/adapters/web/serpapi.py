@@ -80,6 +80,7 @@ class SerpApiProvider(WebProvider):
         max_result_chars: int = DEFAULT_MAX_RESULT_CHARS,
         timeout_seconds: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not api_key:
             # Constructing a keyless SerpApi provider is the mistake this
@@ -96,6 +97,7 @@ class SerpApiProvider(WebProvider):
             max_result_chars=max_result_chars,
             timeout_seconds=timeout_seconds,
             client=client,
+            transport=transport,
             secret_values=(api_key,),
         )
         self._api_key = api_key

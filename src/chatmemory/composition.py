@@ -728,7 +728,9 @@ def report_federation(
         )
 
 
-def web_tools_config(settings: Settings) -> WebToolsConfig:
+def web_tools_config(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> WebToolsConfig:
     """Operator settings, translated for the web adapter.
 
     The key is unwrapped here and nowhere else: `WebToolsConfig` holds a
@@ -741,10 +743,13 @@ def web_tools_config(settings: Settings) -> WebToolsConfig:
         ),
         max_calls_per_run=settings.web_max_calls_per_run,
         timeout_seconds=settings.web_timeout_seconds,
+        transport=transport,
     )
 
 
-def chain_tools_config(settings: Settings) -> ChainToolsConfig:
+def chain_tools_config(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> ChainToolsConfig:
     """Operator settings, translated for the wallet adapter.
 
     One Infura key covers every chain: the endpoint differs only in its host
@@ -758,10 +763,13 @@ def chain_tools_config(settings: Settings) -> ChainToolsConfig:
         max_calls_per_run=settings.wallet_max_calls_per_run,
         timeout_seconds=settings.wallet_timeout_seconds,
         positions_timeout_seconds=settings.positions_timeout_seconds,
+        transport=transport,
     )
 
 
-def market_tools_config(settings: Settings) -> MarketToolsConfig:
+def market_tools_config(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> MarketToolsConfig:
     """Operator settings, translated for the market adapter.
 
     The SerpApi key is the web tools' key: the S&P 500 comes from Google
@@ -774,6 +782,7 @@ def market_tools_config(settings: Settings) -> MarketToolsConfig:
         ),
         max_calls_per_run=settings.market_max_calls_per_run,
         timeout_seconds=settings.market_timeout_seconds,
+        transport=transport,
     )
 
 
@@ -782,8 +791,12 @@ async def build_federation(
     factory: SessionFactory | None = None,
     *,
     proposer: ModelToolProposer | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> FederatedTools | None:
     """Connect to the configured servers, or run without any.
+
+    `transport` is what the local web, market and wallet providers send
+    through -- the process's `Edges.http_transport`. None is httpx's own.
 
     Every failure degrades to None. That is a deliberate asymmetry with the
     model and embedding checks above, which refuse the deployment: those
@@ -808,7 +821,11 @@ async def build_federation(
     # second ungoverned path for tools is exactly what that machinery
     # exists to prevent. They register even when no MCP server is
     # configured, which is the ordinary case for this deployment.
-    web = build_web_tools(web_tools_config(settings)) if settings.web_tools_enabled else None
+    web = (
+        build_web_tools(web_tools_config(settings, transport))
+        if settings.web_tools_enabled
+        else None
+    )
     if web is not None and web.providers:
         config = web.merge_into(config or FederationConfig())
         factory = web.factory(factory)
@@ -826,7 +843,7 @@ async def build_federation(
     # held to membership in `app.egress.CLOSED_VOCABULARIES` by the invoker's
     # guard, not by anything this function chooses.
     if settings.market_tools_enabled:
-        market = build_market_tools(market_tools_config(settings))
+        market = build_market_tools(market_tools_config(settings, transport))
         config = market.merge_into(config or FederationConfig())
         factory = market.factory(factory)
         log.info(
@@ -840,7 +857,7 @@ async def build_federation(
     # set to be a member of, and rooting is what makes the lookup only ever
     # reach an address the asker typed themselves.
     if settings.wallet_tools_enabled:
-        chain = build_chain_tools(chain_tools_config(settings))
+        chain = build_chain_tools(chain_tools_config(settings, transport))
         if chain.servers:
             config = chain.merge_into(config or FederationConfig())
             factory = chain.factory(factory)
@@ -979,11 +996,17 @@ def build_channel_listing(
     return ChannelListingService(scope, DiscordAclResolver(guild, scope))
 
 
+def utc_now() -> datetime:
+    """The wall clock every process reads unless it was handed another."""
+    return datetime.now(UTC)
+
+
 def build_answers(
     retrieval: RetrievalTool,
     chat: ChatModel,
     tools: ToolSurface | FederatedSurface | None = None,
     tracer: RunTracer | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> ReasoningAnswerService:
     """The real answer service: both paths, over one retrieval tool.
 
@@ -993,11 +1016,18 @@ def build_answers(
 
     `tracer` is None for a deployment that configured no destination, and a
     no-op tracer is then used rather than a branch at the call site.
+
+    `clock` is what the time route answers from and what the prompt's clock
+    notice states -- the process's `Edges.clock`.
     """
-    return build_answer_service(retrieval, chat, tools=tools, tracer=tracer)
+    return build_answer_service(retrieval, chat, tools=tools, tracer=tracer, clock=clock)
 
 
-def build_tracer(settings: Settings, engine: AsyncEngine) -> RunTracer | None:
+def build_tracer(
+    settings: Settings,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> RunTracer | None:
     """The trace exporter, or None when nothing is configured to receive one.
 
     Three things have to be true, and a missing one is silence rather than a
@@ -1030,6 +1060,7 @@ def build_tracer(settings: Settings, engine: AsyncEngine) -> RunTracer | None:
             secret_key=settings.langfuse_secret_key.get_secret_value(),
             index=PostgresTraceIndex(engine),
             timeout=settings.tracing_timeout_seconds,
+            transport=transport,
         ),
         PostgresRetentionStore(engine),
     )
@@ -1059,7 +1090,10 @@ def build_trace_withdrawal(
 
 
 def build_catch_up(
-    settings: Settings, search: SearchBackend, chat: ChatModel
+    settings: Settings,
+    search: SearchBackend,
+    chat: ChatModel,
+    clock: Callable[[], datetime] = utc_now,
 ) -> CatchUpService:
     """The catch-up summariser, over the same two things an answer is made of.
 
@@ -1069,10 +1103,14 @@ def build_catch_up(
     instance is a second reference and not a second door: what either returns
     is decided entirely by the viewer it is handed, and `CatchUpService`
     narrows that viewer rather than widening it.
+
+    `clock` decides where "since" starts and what the prompt says the time
+    is -- the process's `Edges.clock`.
     """
     return CatchUpService(
         CorpusRetrieval(search, discord_urls(settings.discord_guild_id)),
-        ModelSynthesizer(chat),
+        ModelSynthesizer(chat, clock),
+        clock=clock,
     )
 
 
@@ -1269,11 +1307,6 @@ def build_ask_pipeline(settings: Settings, engine: AsyncEngine) -> AskPipeline:
     )
 
 
-def utc_now() -> datetime:
-    """The wall clock every process reads unless it was handed another."""
-    return datetime.now(UTC)
-
-
 @dataclass(frozen=True, slots=True)
 class Edges:
     """Everything the object graph reaches the outside world through.
@@ -1282,10 +1315,12 @@ class Edges:
     end-to-end test hands fakes here and nowhere else, so everything between
     the edges is the graph production runs, built by the same functions.
 
-    `http_transport` and `clock` are carried for that harness. Nothing reads
-    them yet: production passes the defaults, which are what every adapter
-    already uses. Until the transport is threaded, federation and tracing
-    still open their own HTTP clients, so they are not yet behind this seam.
+    `http_transport` is what every HTTP client the federation's local
+    providers and the tracer open sends through; `clock` is what the time
+    route and the prompt's clock notice read, and what the bot's scheduled
+    and notification loops pass as "now". Production leaves both at their
+    defaults -- httpx's own transport and the wall clock -- which is exactly
+    what those adapters used before the seam.
     """
 
     chat: ToolCapableChat
@@ -1345,7 +1380,9 @@ async def build_answer_stack(
     # is reached over the network, and a slow handshake must not sit in front
     # of the failures that stop the process.
     proposer = build_tool_proposer(settings, chat)
-    federation = await build_federation(settings, proposer=proposer)
+    federation = await build_federation(
+        settings, proposer=proposer, transport=edges.http_transport
+    )
     log.info(
         "composition.answer_stack",
         chat_model=settings.chat_model,
@@ -1359,10 +1396,14 @@ async def build_answer_stack(
         federated_tool_calls=proposer is not None,
         ask_min_confidence=settings.ask_min_confidence,
     )
-    tracer = build_tracer(settings, engine)
+    tracer = build_tracer(settings, engine, edges.http_transport)
     log.info("composition.tracing", enabled=tracer is not None)
     reasoning = build_answers(
-        retrieval, chat, tools=federation.surface if federation else None, tracer=tracer
+        retrieval,
+        chat,
+        tools=federation.surface if federation else None,
+        tracer=tracer,
+        clock=edges.clock,
     )
     return AnswerStack(
         engine=engine,

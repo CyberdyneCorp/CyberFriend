@@ -16,8 +16,17 @@
 - [x] 2.5 Test: nothing between the edges builds a model, embedding client or engine of its own
 - [x] 2.6 Test: `assemble` builds the whole process over fake edges
 
-## 3. Later in the series
+## 3. HTTP transport and clock
 
-- [ ] 3.1 Thread `http_transport` into the HTTP adapters
-- [ ] 3.2 Thread `clock` into the loops and services that read the time
-- [ ] 3.3 End-to-end harness over `assemble` with fakes at the edges
+- [x] 3.1 `transport` on `ChainToolsConfig`, `MarketToolsConfig` and `WebToolsConfig`, passed to every `httpx.AsyncClient` their providers open
+- [x] 3.2 `transport` on the attachment fetcher, the Drive and Notion clients, and the Langfuse tracer and deleter
+- [x] 3.3 `build_answer_stack` hands `edges.http_transport` to `build_federation` (and on to each tool config) and to `build_tracer`
+- [x] 3.4 `clock` on `ReasoningAnswerService`, `ModelPlanner` and `ModelSynthesizer`: the time route and the prompt's clock notice read it
+- [x] 3.5 `edges.clock` reaches the answer service, catch-up, and the scheduled-task and notification loops `main` starts
+- [x] 3.6 Test: no `httpx.AsyncClient(` under chain, market, web, documents or tracing is opened without `transport=`
+- [x] 3.7 Test: a mock transport handed to `build_federation` receives the `eth_getBalance` batch of a wallet lookup
+- [x] 3.8 Test: a fixed clock in `Edges` is the time the time route answers; the loops read the clock they are given
+
+## 4. Later in the series
+
+- [ ] 4.1 End-to-end harness over `assemble` with fakes at the edges
