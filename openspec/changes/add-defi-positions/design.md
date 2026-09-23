@@ -3,7 +3,8 @@
 **Uniswap v3.** The position manager is ERC-721 Enumerable, so the chain lists
 an owner's positions: `balanceOf`, then `tokenOfOwnerByIndex` for each, then
 `positions(tokenId)`. Most NFTs a regular LP owns are closed (zero liquidity);
-those are counted and not listed.
+only open positions are reported -- closed ones are neither listed nor counted,
+because a report of dozens of withdrawn NFTs buried the ones earning.
 
 **Uniswap v4.** The v4 position manager is *not* enumerable, and Infura limits
 `eth_getLogs` to 10,000 blocks, so walking `Transfer` events from deployment is

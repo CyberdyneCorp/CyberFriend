@@ -40,8 +40,9 @@ ALL_POSITIONS_TOOL = "defi_positions"
 TOOLS = (LIQUIDITY_TOOL, LENDING_TOOL, ALL_POSITIONS_TOOL)
 
 DEFAULT_TIMEOUT = 25.0
-"""Per chain. A wallet with a hundred closed position NFTs is several
-multicalls plus one simulated `collect` per open position."""
+"""Per chain; chains are read one after another. A wallet with a hundred
+withdrawn position NFTs is still several multicalls (each must be read to know
+it is empty), plus one simulated `collect` per open position."""
 
 _SCHEMA: Mapping[str, object] = MappingProxyType(
     {
@@ -62,7 +63,8 @@ _SCHEMA: Mapping[str, object] = MappingProxyType(
 
 _DESCRIPTIONS = {
     LIQUIDITY_TOOL: (
-        "Open Uniswap v3 and v4 liquidity positions of a wallet on Ethereum, "
+        "Open Uniswap v3 and v4 liquidity positions (closed ones are left out) "
+        "of a wallet on Ethereum, "
         "Base and Arbitrum: pair, fee tier, amounts and USD value, in or out "
         "of range, min/max price and uncollected fees."
     ),
@@ -155,11 +157,15 @@ class PositionsProvider:
     async def _report(self, tool: str, address: str, client: httpx.AsyncClient) -> str:
         chains = [ChainPositions(d, self._node(d, client), client) for d in self._deployments]
         parts: list[str] = []
+        # One chain at a time, not concurrently. Concurrent reads of three
+        # chains, with the v4 recent-block search, burst past Infura's
+        # per-second limit in production and Arbitrum came back "could not be
+        # reached". A few seconds slower beats a chain reported unreadable.
         if tool in (LIQUIDITY_TOOL, ALL_POSITIONS_TOOL):
-            liquidity = await asyncio.gather(*(self._liquidity(c, address) for c in chains))
+            liquidity = [await self._liquidity(c, address) for c in chains]
             parts.append(render_liquidity(address, liquidity))
         if tool in (LENDING_TOOL, ALL_POSITIONS_TOOL):
-            lending = await asyncio.gather(*(self._lending(c, address) for c in chains))
+            lending = [await self._lending(c, address) for c in chains]
             text = render_lending(address, lending)
             # One header for the whole answer: `verbatim_answer` drops the
             # first line, and a second header mid-answer would read as noise.

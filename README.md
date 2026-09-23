@@ -25,7 +25,7 @@ internet said.
 | **Web and MCP** | Wikipedia, Google via SerpApi, and any MCP server an operator allowlists |
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
 | **Wallet balances** | What a `0x` address holds on Ethereum, Base and Arbitrum, with USD values. An address you typed, or the one you saved |
-| **DeFi positions** | Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
+| **DeFi positions** | Open Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |

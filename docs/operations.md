@@ -268,7 +268,7 @@ only job is to copy the address:
 
 | Asked about | Tool | Reports |
 |---|---|---|
-| pools, liquidity, LP, Uniswap, ranges | `liquidity_positions` | Every open Uniswap v3 and v4 position: pair and fee tier, amounts and USD value, 🟢 in / 🔴 out of range, min/max price and current price, uncollected fees. Closed position NFTs are counted, not listed |
+| pools, liquidity, LP, Uniswap, ranges | `liquidity_positions` | Every open Uniswap v3 and v4 position: pair and fee tier, amounts and USD value, 🟢 in / 🔴 out of range, min/max price and current price, uncollected fees. Only open positions: withdrawn NFTs are left out entirely |
 | Aave, borrow, supplied, collateral, health factor | `lending_positions` | Aave v3 (main market) supplied and borrowed assets with USD values and APYs, total collateral and debt, health factor |
 | both, or "defi positions" | `defi_positions` | Both reports |
 
@@ -296,8 +296,9 @@ the asker's own last three questions, if one named an address.
   an Aave upgrade is followed automatically.
 
 Reads are batched through Multicall3 (50 calls per request), and a
-rate-limited request is retried with back-off. A wallet with 134 position NFTs
-reads in about three seconds per chain.
+rate-limited request is retried with back-off (up to 7.5 s). Chains are read one after another rather than
+concurrently, because concurrent reads tripped Infura's rate limit in
+production. A wallet with 134 position NFTs takes a few seconds per chain.
 
 ### Values
 

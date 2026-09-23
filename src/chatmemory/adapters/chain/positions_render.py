@@ -79,8 +79,6 @@ def _range_line(p: LiquidityPosition) -> str:
 
 
 def _status(p: LiquidityPosition) -> str:
-    if not p.liquidity:
-        return "closed, fees left to collect"
     return "🟢 in range" if p.in_range else "🔴 out of range"
 
 
@@ -94,10 +92,8 @@ def position_lines(p: LiquidityPosition) -> list[str]:
         f"• {p.protocol} #{p.token_id} · {p.token0.symbol}/{p.token1.symbol} "
         f"{fee_tier(p.fee)} · {_status(p)}"
     )
-    lines = [head]
-    if p.liquidity:
-        lines.append(_range_line(p))
-        lines.append(f"  Holds: {_pair(p.amount0, p.amount1, p)}{usd(p.value_usd())}")
+    lines = [head, _range_line(p)]
+    lines.append(f"  Holds: {_pair(p.amount0, p.amount1, p)}{usd(p.value_usd())}")
     lines.append(f"  Uncollected: {_pair(p.fees0, p.fees1, p)}{usd(p.fees_usd())}")
     if p.pool_priced:
         lines.append("  (one token has no oracle price; valued at this pool's own price)")
@@ -117,11 +113,9 @@ def render_liquidity(address: str, chains: Sequence[ChainLiquidity]) -> str:
             lines.append(f"**{chain.chain.name}**")
             for position in chain.positions:
                 lines.extend(position_lines(position))
-        if chain.closed:
-            lines.append(f"_{chain.closed} closed position(s) not shown._")
         lines.extend(f"_{note}._" for note in chain.notes)
     lines.append("")
-    lines.append("_Uniswap v3 and v4 only; other exchanges are not read._")
+    lines.append("_Open Uniswap v3 and v4 positions only; other exchanges are not read._")
     return "\n".join(lines)
 
 

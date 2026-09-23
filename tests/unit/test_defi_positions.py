@@ -257,13 +257,15 @@ def _position(**changes: object) -> LiquidityPosition:
 
 
 def test_a_position_shows_every_field_that_was_asked_for() -> None:
-    text = render_liquidity(OWNER, [ChainLiquidity(BASE, positions=(_position(),), closed=3)])
+    text = render_liquidity(OWNER, [ChainLiquidity(BASE, positions=(_position(),))])
     assert "WETH/USDC 0.05%" in text  # pair and fee tier
     assert "in range" in text  # in / out
     assert "Range: 2,000.00 – 3,000.00 USDC per WETH · now 2,700.00" in text
     assert "≈ $5,400.00" in text  # value
     assert "Uncollected: 0.01 WETH + 5 USDC ≈ $32.00" in text
-    assert "3 closed position(s) not shown" in text
+    # Only open positions exist in the result, so nothing about closed ones
+    # is said at all.
+    assert "closed" not in text
 
 
 def test_a_stablecoin_first_pair_is_quoted_in_the_stablecoin() -> None:
@@ -606,3 +608,40 @@ async def test_one_chain_failing_does_not_hide_the_others(
     assert "**Base** — no open Uniswap positions" in text
     assert "**Arbitrum** — could not be read" in text
     assert "/v3/key" not in text
+
+
+def _v3_chain(d: Deployment) -> Callable[[str, str], bytes | None]:
+    """Two v3 NFTs: #1 withdrawn with fees left in it, #2 open."""
+    v4 = _v4_chain(d)
+    pool = "0x" + "d" * 40
+
+    def answer(target: str, data: str) -> bytes | None:
+        sel, arg = data[:10], data[10:]
+        if sel == abi.BALANCE_OF:
+            return _word(2 if target == d.v3_position_manager else 0)
+        if sel == abi.TOKEN_OF_OWNER_BY_INDEX:
+            return _word(int(arg[64:128], 16) + 1)
+        if sel == abi.V3_POSITIONS:
+            token = int(arg[:64], 16)
+            liquidity, owed = (0, 5 * 10**6) if token == 1 else (1000, 0)
+            return _word(0, 0, WETH, USDC, 500, -20, 20, liquidity, 0, 0, owed, owed)
+        if sel == abi.V3_GET_POOL:
+            return _word(pool)
+        if sel == abi.V3_SLOT0:
+            return _word(Q96, 0)
+        if sel == abi.V3_COLLECT:
+            return _word(7, 9)
+        return v4(target, data)
+
+    return answer
+
+
+async def test_only_open_positions_are_read_and_reported() -> None:
+    """A withdrawn NFT is left out even with fees in it: the report is of the
+    positions that are earning, not the history of every one ever opened."""
+    node = FakeNode(_v3_chain(BASE_DEPLOYMENT))
+    result = await _reader(node, _explorer([])).liquidity(OWNER)
+
+    assert [(p.protocol, p.token_id) for p in result.positions] == [("Uniswap v3", 2)]
+    text = render_liquidity(OWNER, [result])
+    assert "#1" not in text and "closed" not in text

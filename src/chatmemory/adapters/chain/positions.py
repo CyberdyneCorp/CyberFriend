@@ -86,9 +86,8 @@ def _usd(a0: Decimal, p0: Decimal | None, a1: Decimal, p1: Decimal | None) -> De
 @dataclass(frozen=True, slots=True)
 class ChainLiquidity:
     chain: Chain
+    #: Open positions only; withdrawn NFTs are neither listed nor counted.
     positions: tuple[LiquidityPosition, ...] = ()
-    #: Position NFTs held with no liquidity and nothing left to collect.
-    closed: int = 0
     #: Things that could not be read, said in the answer rather than hidden.
     notes: tuple[str, ...] = ()
     unreachable: str = ""
