@@ -1,0 +1,258 @@
+{
+  "global": [
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Ask about what's been said",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "ask",
+      "nsfw": false,
+      "options": [
+        {
+          "description": "What do you want to know?",
+          "name": "question",
+          "required": true,
+          "type": 3
+        }
+      ],
+      "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Close or dismiss something I said was asked of you",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "resolve",
+      "nsfw": false,
+      "options": [
+        {
+          "autocomplete": true,
+          "description": "Which one \u2014 pick from your own outstanding asks",
+          "name": "ask",
+          "required": true,
+          "type": 3
+        },
+        {
+          "choices": [
+            {
+              "name": "Done",
+              "value": "done"
+            },
+            {
+              "name": "Not mine",
+              "value": "not_mine"
+            },
+            {
+              "name": "This was never a request",
+              "value": "not_a_request"
+            }
+          ],
+          "description": "What actually happened to it",
+          "name": "outcome",
+          "required": true,
+          "type": 3
+        }
+      ],
+      "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Erase what I remember of our conversation",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "forget",
+      "nsfw": false,
+      "options": [
+        {
+          "choices": [
+            {
+              "name": "This conversation",
+              "value": "here"
+            },
+            {
+              "name": "Everywhere",
+              "value": "everywhere"
+            }
+          ],
+          "description": "Just this conversation, or everywhere",
+          "name": "scope",
+          "required": true,
+          "type": 3
+        }
+      ],
+      "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Turn direct messages about things asked of you on or off",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "notifications",
+      "nsfw": false,
+      "options": [
+        {
+          "choices": [
+            {
+              "name": "off",
+              "value": "off"
+            },
+            {
+              "name": "on",
+              "value": "on"
+            }
+          ],
+          "description": "Whether I may message you about them",
+          "name": "setting",
+          "required": true,
+          "type": 3
+        }
+      ],
+      "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "List the channels I archive that you can read",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "channels",
+      "nsfw": false,
+      "options": [],
+      "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Questions I ask for you on a schedule",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "schedule",
+      "nsfw": false,
+      "options": [
+        {
+          "description": "Ask me something on a schedule",
+          "name": "create",
+          "options": [
+            {
+              "description": "What I should ask, in your own words",
+              "name": "question",
+              "required": true,
+              "type": 3
+            },
+            {
+              "description": "How often, in hours (1-24)",
+              "name": "every_hours",
+              "required": true,
+              "type": 4
+            }
+          ],
+          "type": 1
+        },
+        {
+          "description": "Show the questions I ask for you",
+          "name": "list",
+          "options": [],
+          "type": 1
+        },
+        {
+          "description": "Stop one of your scheduled questions",
+          "name": "delete",
+          "options": [
+            {
+              "description": "The number shown by `/schedule list`",
+              "name": "task",
+              "required": true,
+              "type": 4
+            }
+          ],
+          "type": 1
+        }
+      ],
+      "type": 1
+    }
+  ],
+  "guild": [
+    {
+      "contexts": [
+        0
+      ],
+      "default_member_permissions": null,
+      "description": "Archive a channel so people who can read it can search it",
+      "dm_permission": false,
+      "integration_types": null,
+      "name": "index",
+      "nsfw": false,
+      "options": [
+        {
+          "channel_types": [
+            0,
+            5
+          ],
+          "description": "The channel to change",
+          "name": "channel",
+          "required": true,
+          "type": 7
+        }
+      ],
+      "type": 1
+    },
+    {
+      "contexts": [
+        0
+      ],
+      "default_member_permissions": null,
+      "description": "Stop archiving a channel and delete what was archived",
+      "dm_permission": false,
+      "integration_types": null,
+      "name": "unindex",
+      "nsfw": false,
+      "options": [
+        {
+          "channel_types": [
+            0,
+            5
+          ],
+          "description": "The channel to change",
+          "name": "channel",
+          "required": true,
+          "type": 7
+        }
+      ],
+      "type": 1
+    }
+  ]
+}

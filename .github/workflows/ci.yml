@@ -83,4 +83,12 @@ jobs:
         run: alembic upgrade head
 
       - name: pytest (all)
-        run: pytest tests -q
+        run: pytest tests -q --ignore=tests/e2e
+
+      # The production bot process over fakes at its edges, against the
+      # migrated database above. E2E_REQUIRE_DB turns the suite's skip for a
+      # missing database into a failure: a green run here means it ran.
+      - name: pytest (e2e)
+        env:
+          E2E_REQUIRE_DB: "1"
+        run: pytest tests/e2e -q --durations=10

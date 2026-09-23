@@ -36,6 +36,10 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "testcontainers[postgres]>=4.7",
+    # Pinned for the end-to-end harness, which drives discord.py through a
+    # few private names (tests/e2e/test_harness_canary.py lists them). The
+    # runtime dependency above stays open; an upgrade moves both together.
+    "discord-py~=2.7.1",
 ]
 
 [build-system]

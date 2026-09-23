@@ -45,9 +45,18 @@ clock. Today those are constructed deep inside `build_answer_stack` and
   catch-up, and the scheduled-task and notification loops. The default is
   the UTC wall clock.
 
+- **The harness** (`tests/e2e`) drives the assembled process through a fake
+  Discord wire -- real discord.py objects built from gateway payloads, with
+  REST calls and interaction webhooks recorded -- over a scripted model,
+  hashed embeddings, a mock HTTP transport answering by host, and a real
+  migrated Postgres. Scenarios assert only what the edges saw. CI runs it
+  with `E2E_REQUIRE_DB=1`, so a missing database fails rather than skips.
+  discord.py is pinned `~=2.7.1` in the dev extras for the harness only.
+
 Non-goals (later changes in this series):
 
-- **The harness itself** -- fake Discord, fake model, fixtures.
+- **The remaining production-failure scenarios** and the routing slice; this
+  change lands the harness with its anchor scenarios.
 
 ## Capabilities
 
