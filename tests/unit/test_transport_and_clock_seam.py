@@ -44,7 +44,7 @@ from chatmemory.config import Settings
 from chatmemory.domain.audience import Audience, DeliveryMode
 from chatmemory.domain.identity import ChannelRef, Viewer
 from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
-from chatmemory.entrypoints.bot import notification_loop, scheduled_task_loop
+from chatmemory.entrypoints.bot import alert_loop, notification_loop, scheduled_task_loop
 from chatmemory.health import HealthState
 from chatmemory.ports.answers import Question
 from tests.unit.test_assembly_seam import (
@@ -367,18 +367,21 @@ class _Delivery(_Runner):
 
 
 async def test_the_loops_read_the_clock_they_are_given() -> None:
-    runner, delivery = _Runner(), _Delivery()
+    runner, delivery, alerts = _Runner(), _Delivery(), _Runner()
     with pytest.raises(asyncio.CancelledError):
         await scheduled_task_loop(runner, HealthState(), clock=lambda: FIXED)  # type: ignore[arg-type]
     with pytest.raises(asyncio.CancelledError):
         await notification_loop(delivery, HealthState(), clock=lambda: FIXED)  # type: ignore[arg-type]
+    with pytest.raises(asyncio.CancelledError):
+        await alert_loop(alerts, HealthState(), clock=lambda: FIXED)  # type: ignore[arg-type]
     assert runner.at == [FIXED]
     assert delivery.at == [FIXED]
+    assert alerts.at == [FIXED]
 
 
-def test_main_starts_both_loops_on_the_edges_clock() -> None:
+def test_main_starts_every_loop_on_the_edges_clock() -> None:
     main = _function(BOT, "main")
-    for loop in ("scheduled_task_loop", "notification_loop"):
+    for loop in ("scheduled_task_loop", "notification_loop", "alert_loop"):
         [call] = _calls(main, loop)
         clock = next((k.value for k in call.keywords if k.arg == "clock"), None)
         assert clock is not None and ast.unparse(clock) == "process.edges.clock", (

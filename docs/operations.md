@@ -436,6 +436,54 @@ the reason shown in `/schedule list`. The obstacle is their settings rather than
 any one question, and retrying the rest would be knocking on a door already
 shut. Removing a person's data deletes their tasks with it.
 
+## Position alerts
+
+Built and migrated, **not yet reachable**: there is no way to create an alert
+until the `/alert` commands and the natural-language confirmation land. With the
+switch on, the sweep runs over whatever rows exist.
+
+| | |
+|---|---|
+| `ALERTS_ENABLED` | Off by default. Bot only. Also needs `INFURA_KEY` |
+| `ALERT_SWEEP_SECONDS` | How often every alert is checked (default 300, at least 60) |
+
+An alert watches one Uniswap v3 or v4 position that was open when it was made
+(in range, out of range, closed) or one chain's Aave health factor against a
+limit between 1.05 and 5.0. Each person may keep ten, separately from scheduled
+tasks.
+
+### It messages on a change
+
+A range change counts after two consecutive agreeing checks; a health factor
+fires on the first check below the limit and re-arms only at the limit plus
+0.05. So an alert says "out of range" once, and "back in range" once, and
+nothing in between. A closed position (no liquidity, burned or transferred
+NFT) is told once and the alert is stopped with the reason kept. A check that
+cannot read the chain says nothing and changes nothing; it is counted against
+the alert. Messages are in the language the alert was made in, and the health
+message says plainly that a five-minute check is not liquidation protection.
+
+### What it costs, and what leaves
+
+No model call and no archive search: every due alert on a chain is read in one
+Multicall3 request, so a sweep is about one request per chain — about 864 a day
+at the default for a few alerts on three chains. It uses its own rate limiter,
+so it never takes spacing from interactive lookups, and reads at most 500 calls
+per chain per sweep.
+
+It is also an egress path with nobody asking: each sweep sends the watched
+addresses to Infura. The per-question guard has no question to root them in,
+so the address is checked once, when the alert is made — the person's saved
+wallet or an address they typed — and stored. That is declared in the
+`position-alerts` spec and is why the feature is off unless switched on.
+
+### When it stops
+
+Closed direct messages stop **all** of that person's alerts, as for scheduled
+tasks. Forgetting or replacing the saved wallet deletes the alerts on it;
+opting out or being removed deletes them all. All three are enforced in the
+database, so no path that removes the fact can leave the wallet watched.
+
 ## Contact facts, and a saved wallet
 
 A person can tell the assistant six things about themselves: preferred name,

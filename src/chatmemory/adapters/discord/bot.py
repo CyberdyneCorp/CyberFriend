@@ -980,8 +980,13 @@ class DiscordTaskMessenger:
     door that has been shut.
     """
 
-    def __init__(self, user: Callable[[int], Awaitable[Any]]) -> None:
+    def __init__(
+        self, user: Callable[[int], Awaitable[Any]], prefix: str = SCHEDULED_PREFIX
+    ) -> None:
         self._user = user
+        # Empty for position alerts, whose text carries its own heading in the
+        # language the alert was made in.
+        self._prefix = prefix
 
     async def deliver(self, person: PersonRef, task_id: int, text: str) -> bool:
         try:
@@ -998,7 +1003,8 @@ class DiscordTaskMessenger:
         if recipient is None:
             return False
         try:
-            for piece in split_message(f"{SCHEDULED_PREFIX}\n{text}"):
+            body = f"{self._prefix}\n{text}" if self._prefix else text
+            for piece in split_message(body):
                 await recipient.send(piece, allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
             return False

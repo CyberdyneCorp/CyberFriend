@@ -254,6 +254,22 @@ class Settings(BaseSettings):
     """How often due tasks are looked for. Well under the hour floor, so a
     task runs near its time rather than up to an interval late."""
 
+    # --- Position alerts -----------------------------------------------
+    alerts_enabled: bool = False
+    """Direct messages when a watched Uniswap position leaves its range or an
+    Aave health factor falls below a limit.
+
+    Off by default, for both reasons the other switches give. It is an
+    outbound boundary: every sweep sends the watched addresses to Infura with
+    nobody asking, which is why an address is cleared once, when the alert is
+    made. And it is an inbound one: the third feature that messages somebody
+    unprompted. Needs `infura_key`; without one nothing is built.
+    """
+
+    alert_sweep_seconds: float = 300.0
+    """How often alerts are checked. Every alert is read each sweep, in one
+    multicall per chain, so this is the whole cost knob. Not below 60."""
+
     # --- Tracing -------------------------------------------------------
     tracing_enabled: bool = False
     """Export each run -- question, answer and retrieved evidence -- for study.
@@ -413,6 +429,15 @@ class Settings(BaseSettings):
         """
         if v <= 0:
             raise ValueError("must be positive")
+        return v
+
+    @field_validator("alert_sweep_seconds")
+    @classmethod
+    def _alert_sweep_floor(cls, v: float) -> float:
+        """Refused at boot: a sweep every few seconds is a steady stream of
+        requests to Infura on behalf of people who are not asking anything."""
+        if v < 60:
+            raise ValueError("must be at least 60 seconds")
         return v
 
     @field_validator("ask_stale_after_days", "ask_extraction_window_messages")

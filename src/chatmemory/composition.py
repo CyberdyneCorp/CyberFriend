@@ -65,6 +65,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from chatmemory.adapters.chain.registration import ChainToolsConfig, build_chain_tools
+from chatmemory.adapters.chain.watch import ChainWatcher
 from chatmemory.adapters.discord.acl import (
     DiscordAclResolver,
     DiscordAudienceResolver,
@@ -95,6 +96,7 @@ from chatmemory.adapters.mcp_client.config import (
     ConfigurationError as FederationConfigurationError,
 )
 from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
+from chatmemory.adapters.store.alerts_postgres import PostgresAlertStore
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
@@ -108,6 +110,7 @@ from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseT
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
+from chatmemory.app.alerts import AlertRunner
 from chatmemory.app.ask import AskService
 from chatmemory.app.asks.answering import ObligationAnswerService
 from chatmemory.app.asks.candidates import CandidateFilter
@@ -980,6 +983,33 @@ def build_task_runner(
         PostgresScheduleStore(engine, cap=settings.scheduled_tasks_per_person),
         asks,
         messenger,
+    )
+
+
+def build_alert_runner(
+    settings: Settings,
+    engine: AsyncEngine,
+    messenger: TaskMessenger,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> AlertRunner | None:
+    """The position-alert sweep, or None when the feature is off.
+
+    Off unless switched on, and never without an Infura key: the sweep reads
+    the chain and nothing else, so with no endpoint there is nothing to build
+    and no half-feature to leave running. `transport` is the process's
+    `Edges.http_transport`, as for every other provider.
+    """
+    if not settings.alerts_enabled:
+        return None
+    key = settings.infura_key.get_secret_value().strip() if settings.infura_key else ""
+    if not key:
+        log.warning("composition.alerts_without_key", hint="ALERTS_ENABLED needs INFURA_KEY")
+        return None
+    return AlertRunner(
+        PostgresAlertStore(engine),
+        ChainWatcher(key, transport=transport),
+        messenger,
+        sweep_seconds=settings.alert_sweep_seconds,
     )
 
 

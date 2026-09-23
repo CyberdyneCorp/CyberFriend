@@ -277,6 +277,11 @@ class FakeHTTP(HTTPClient):
             return None
         if key == ("POST", "/users/@me/channels"):
             return self._wire.dm_payload(int(kwargs["json"]["recipient_id"]))
+        if key == ("GET", "/users/{user_id}"):
+            # `client.fetch_user`, which the scheduled-task and alert
+            # messengers call before opening a DM.
+            # A route keeps no `user_id` attribute, only the formatted URL.
+            return self._wire.user(int(route.url.rsplit("/", 1)[1]))
         if key == ("PUT", "/applications/{application_id}/commands"):
             self.global_commands = list(kwargs["json"])
             return _registered(self.global_commands)
@@ -397,6 +402,10 @@ class FakeDiscord:
         found = discord.utils.get(self.guild.text_channels, name=name)
         assert found is not None, f"no channel #{name} in the layout"
         return found
+
+    def user(self, user_id: int) -> dict[str, Any]:
+        """A member's user payload, as `GET /users/{id}` answers it."""
+        return dict(self._users[user_id])
 
     def dm_channel_id(self, user_id: int) -> int:
         return self._dm_channels.setdefault(user_id, snowflake())

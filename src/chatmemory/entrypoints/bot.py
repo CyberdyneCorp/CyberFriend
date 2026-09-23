@@ -71,6 +71,13 @@ permission resolver and a notifier over this client's live guild cache. A
 scope written there is re-read by this process at once and by ingest within
 its refresh period. `test_chat_indexing_wiring` reads that chain.
 
+Position alerts ride on the scheduled-task path without its model run:
+`assemble` -> `build_bot(alert_transport=edges.http_transport)` ->
+`build_alert_runner`, which reads the chain through the process's transport
+and sends through the same `DiscordTaskMessenger`, and `main` runs
+`alert_loop` beside the scheduled sweep on the edges' clock. Off unless
+`ALERTS_ENABLED`, in which case `BotGraph.alerts` is None and nothing starts.
+
 `main` and `assemble` are split at the network. `assemble(settings, edges)`
 builds the whole object graph -- every chain above -- over an `Edges` value
 holding the models, the embedding endpoint and the database engine, and
@@ -88,6 +95,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
+import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -108,6 +116,7 @@ from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.admin.audit import ChangeRecordStore
+from chatmemory.app.alerts import AlertRunner
 from chatmemory.app.ask import AskService
 from chatmemory.app.asks.corrections import CorrectionService
 from chatmemory.app.asks.obligations import discord_message_url
@@ -126,6 +135,7 @@ from chatmemory.composition import (
     AnswerStack,
     Edges,
     ask_policy,
+    build_alert_runner,
     build_answer_stack,
     build_ask_service,
     build_catch_up,
@@ -203,6 +213,9 @@ class BotGraph:
     # The sweep that runs due scheduled tasks. None when the feature is off,
     # which is also when the commands say it is unavailable.
     tasks: ScheduledTaskRunner | None = None
+    #: The position-alert sweep. None unless `ALERTS_ENABLED` with an Infura
+    #: key, and there is still no way to create one until the commands land.
+    alerts: AlertRunner | None = None
     #: The queue drain. None when no engine was handed in, or when an
     #: operator has switched notifications off -- in which case nothing in
     #: this process sends anything, which is the safe half.
@@ -221,6 +234,7 @@ def build_bot(
     facts: PersonalFactsService | None = None,
     catchup: CatchUpService | None = None,
     notifications: AsyncEngine | None = None,
+    alert_transport: httpx.AsyncBaseTransport | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -298,6 +312,19 @@ def build_bot(
         runner = build_task_runner(
             settings, notifications, asks, DiscordTaskMessenger(client.fetch_user)
         )
+    # Position alerts: the chain read through `alert_transport` (the process's
+    # edge), the message through the scheduled-task messenger with no heading
+    # of its own, since an alert's text carries one in its own language.
+    alerts = (
+        build_alert_runner(
+            settings,
+            notifications,
+            DiscordTaskMessenger(client.fetch_user, prefix=""),
+            transport=alert_transport,
+        )
+        if notifications is not None
+        else None
+    )
     delivery = build_delivery(settings, client, provider, caches, notifications, scope)
     return BotGraph(
         client=client,
@@ -306,6 +333,7 @@ def build_bot(
         indexing=service,
         notifications=delivery,
         tasks=runner,
+        alerts=alerts,
     )
 
 
@@ -487,6 +515,31 @@ async def notification_loop(
         await asyncio.sleep(interval)
 
 
+async def alert_loop(
+    runner: AlertRunner,
+    state: HealthState,
+    interval: float = 300.0,
+    ready: asyncio.Event | None = None,
+    clock: Clock = utc_now,
+) -> None:
+    """Check position alerts, and message the people whose positions changed.
+
+    Waits for the gateway, because a message is the only thing a sweep can
+    produce and the connection is how it is sent. Absorbs everything, as the
+    scheduled sweep does: a claimed alert has already been advanced, so it is
+    simply read again next sweep.
+    """
+    if ready is not None:
+        await ready.wait()
+    while True:
+        try:
+            sent = await runner.run_due(clock())
+            state.details["position_alerts"] = {"delivered": sent, "last_run_at": time.time()}
+        except Exception:
+            log.exception("alerts.sweep_failed")
+        await asyncio.sleep(interval)
+
+
 async def run_beside_scope(
     work: Coroutine[Any, Any, None],
     scope: LiveScope,
@@ -585,6 +638,10 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # `/notifications` says it is unavailable, and nobody is ever told
         # that anything was asked of them.
         notifications=stack.engine,
+        # The chain reads position alerts make, through the same transport as
+        # every other outbound call, so a test that fakes the network fakes
+        # this too.
+        alert_transport=edges.http_transport,
     )
     return Process(
         graph=graph,
@@ -650,6 +707,18 @@ async def main() -> None:
                 graph.tasks,
                 state,
                 interval=settings.scheduled_sweep_seconds,
+                ready=gateway_ready,
+                clock=process.edges.clock,
+            )
+        )
+    # Position alerts, beside the scheduled sweep for the same reason: this is
+    # the process that can reach a person.
+    if graph.alerts is not None:
+        drains.append(
+            alert_loop(
+                graph.alerts,
+                state,
+                interval=settings.alert_sweep_seconds,
                 ready=gateway_ready,
                 clock=process.edges.clock,
             )
