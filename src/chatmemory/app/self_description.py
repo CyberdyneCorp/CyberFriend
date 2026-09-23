@@ -326,3 +326,45 @@ class SelfDescriptionAnswerService:
                 )
             )
         return await self._fallback.answer(question)
+
+
+_EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED)
+
+_TYPED_COMMAND = {
+    Language.ENGLISH: (
+        "`/{name}` is a slash command, and typed as a message it doesn't run. "
+        "Type `/` and pick **/{name}** from the menu Discord shows."
+    ),
+    Language.PORTUGUESE: (
+        "`/{name}` é um comando de barra, e digitado como mensagem ele não roda. "
+        "Digite `/` e escolha **/{name}** no menu que o Discord mostra."
+    ),
+}
+
+
+def typed_command(text: str) -> Command | None:
+    """A slash command sent as a plain message, or None.
+
+    "/forget" arrived as text -- the command menu was not used -- and went to
+    the corpus, which answered that it had no evidence it could forget
+    anything. Only real command names count, longest first so "/schedule
+    list" is not read as "/schedule".
+    """
+    stripped = " ".join(text.strip().lower().split())
+    if not stripped.startswith("/"):
+        return None
+    typed = stripped[1:]
+    for command in sorted(_EVERY_COMMAND, key=lambda c: -len(c.name)):
+        if typed == command.name or typed.startswith(command.name + " "):
+            return command
+    return None
+
+
+def typed_command_reply(command: Command, language: Language) -> str:
+    """How to run it. Both languages when the message itself has none."""
+    if language is Language.UNKNOWN:
+        return "\n".join(
+            _TYPED_COMMAND[lang].format(name=command.name)
+            for lang in (Language.PORTUGUESE, Language.ENGLISH)
+        )
+    return _TYPED_COMMAND[language].format(name=command.name)

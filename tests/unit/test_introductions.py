@@ -70,7 +70,9 @@ async def test_an_introduction_is_saved_and_never_answered_or_remembered() -> No
     # In a DM every value is repeated back, so a mis-split is visible at once.
     for shown in ("Leonardo Araujo dos Santos", "Leo", EMAIL, PHONE):
         assert shown in text
-    assert "Where you live: I don't keep that" in text
+    # Answered in the language it was written in.
+    assert text.startswith("Aqui está o que salvei:")
+    assert "Onde você mora: não guardo isso" in text
 
 
 async def test_in_a_channel_contact_details_are_confirmed_without_their_values() -> None:
@@ -79,7 +81,7 @@ async def test_in_a_channel_contact_details_are_confirmed_without_their_values()
 
     assert store.rows[(LEO, FactKind.EMAIL)] == EMAIL
     assert EMAIL not in text and "980703795" not in text
-    assert "Email address: saved (shown only in a direct message)" in text
+    assert "E-mail: salvo (mostrado só em mensagem direta)" in text
     assert "Leonardo Araujo dos Santos" in text  # a name is not contact data
 
 

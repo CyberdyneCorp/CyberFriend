@@ -78,8 +78,13 @@ def detect(text: str) -> Language:
     portuguese = len(words & _PORTUGUESE)
     english = len(words & _ENGLISH)
     # An accented letter is strong evidence on its own: English borrows very
-    # few, and none of them are typed in a chat question by accident.
-    if _PORTUGUESE_LETTERS & set(lowered):
+    # few, and none of them are typed in a chat question by accident. Not in a
+    # capitalised word, though: "João's email is ..." is English about a
+    # person with a Portuguese name, and was once answered in Portuguese.
+    if any(
+        _PORTUGUESE_LETTERS & set(word.casefold()) and not word[:1].isupper()
+        for word in text.split()
+    ):
         portuguese += 2
     if portuguese > english:
         return Language.PORTUGUESE

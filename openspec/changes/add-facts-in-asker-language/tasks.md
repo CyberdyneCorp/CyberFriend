@@ -1,0 +1,5 @@
+- [x] Fact and fixed replies in English and Portuguese
+- [x] One-fact show; capabilities; "me chamo"; slash command typed as text
+- [x] Contact facts in DM prompts only
+- [x] Accents in capitalised words do not decide the language
+- [x] Tests from the production transcript

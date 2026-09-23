@@ -114,8 +114,12 @@ Leo, meu email é …, meu telefone é …"* — and the reply lists what was sa
 what was not (where you live, for example, is not kept). "My name is" with one
 word is the name you're called by; with more, it is your full name.
 
-`what do you know about me?` (or `o que você sabe sobre mim?`) shows them;
-`forget my email` deletes one.
+`what do you know about me?` (or `o que você sabe sobre mim?`) shows them,
+`what's my phone?` / `qual o meu telefone?` shows one, and `forget my email`
+deletes one. Replies come in the language you wrote in.
+
+In a direct message the assistant can also use your email, phone and wallets
+when answering you; in a channel it never sees them.
 
 **Your email, phone and wallets are only ever shown to you, in a direct
 message.** A wallet is public on its chain — what is private is that it is

@@ -978,6 +978,8 @@ class FactAction(StrEnum):
     SET = "set"
     # Several facts in one message: an introduction.
     SET_MANY = "set_many"
+    # "what can you remember about me?": the list of what may be kept.
+    CAPABILITIES = "capabilities"
     SHOW = "show"
     FORGET = "forget"
     # Something to remember that is not one of the three facts.
@@ -1146,6 +1148,50 @@ _SHOW_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_WHAT_IS_MY = r"(?:what(?:'s|\s+is|\s+are)\s+my|qual\s+(?:[ée]\s+)?(?:o\s+|a\s+)?(?:meu|minha))"
+_SHOW_ONE: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
+    (kind, re.compile(_LEAD + _WHAT_IS_MY + r"\s+" + word + _TRAIL, re.IGNORECASE))
+    for kind, word in (
+        (FactKind.PHONE, _PHONE_WORD),
+        (FactKind.EMAIL, _EMAIL_WORD),
+        (FactKind.FULL_NAME, r"(?:full\s+name|nome\s+completo|name|nome)"),
+        (FactKind.PREFERRED_NAME, r"(?:preferred\s+name|nome\s+preferido|apelido)"),
+        (FactKind.PREFERRED_LANGUAGE, _LANGUAGE_WORD),
+        (FactKind.BTC_WALLET, _BTC_WALLET_WORD + r"(?:\s+address)?"),
+        # Last: "wallet" alone is the Ethereum one, and "my btc wallet" also
+        # ends in "wallet".
+        (FactKind.ETH_WALLET, _ETH_WALLET_WORD + r"(?:\s+address)?"),
+    )
+)
+"""One fact asked for by name. "Qual o meu telefone?" and "what's my phone
+number?" went to the corpus, because only email, preferred name and language
+were recognised here."""
+
+_CAPABILITIES_PATTERN = re.compile(
+    _LEAD
+    + r"(?:"
+    r"what\s+(?:can|do|could)\s+you\s+(?:remember|store|save|keep|know)\s+about\s+me|"
+    r"what\s+(?:info(?:rmation)?|details|facts)\s+(?:can|do)\s+you\s+(?:remember|store|save|keep)"
+    r"(?:\s+about\s+me)?|"
+    r"(?:que|quais)\s+(?:informa[cç](?:[õo]es|ao|ão)|dados|coisas)\s+(?:voc[eê]|vc)\s+"
+    r"(?:pode|consegue)\s+(?:guardar|lembrar|salvar|armazenar)(?:\s+sobre\s+mim)?|"
+    r"o\s*que\s+(?:voc[eê]|vc)\s+(?:pode|consegue)\s+(?:guardar|lembrar|salvar)\s+sobre\s+mim"
+    r")" + _TRAIL,
+    re.IGNORECASE,
+)
+
+
+def _show_intent(text: str) -> FactIntent | None:
+    for kind, pattern in _SHOW_ONE:
+        if pattern.match(text):
+            return FactIntent(FactAction.SHOW, kind)
+    if _SHOW_PATTERN.match(text):
+        return FactIntent(FactAction.SHOW)
+    if _CAPABILITIES_PATTERN.match(text):
+        return FactIntent(FactAction.CAPABILITIES)
+    return None
+
+
 # The fact words a statement or request about another person is recognised by.
 # Deliberately not bare "name": "João's name is on the rota" is not a fact.
 _OTHERS_FACT_WORD = rf"(?:{_EMAIL_WORD}|preferred\s+name|preferred\s+language)"
@@ -1245,7 +1291,9 @@ def _forget_intent(text: str) -> FactIntent | None:
 
 
 _MY_NAME_IS = re.compile(
-    _LEAD + r"(?:my\s+name\s+is|meu\s+nome\s+[ée])\s+(?P<value>.+?)" + _TRAIL, re.IGNORECASE
+    _LEAD + r"(?:my\s+name\s+is|meu\s+nome\s+[ée]|(?:eu\s+)?me\s+chamo)\s+(?P<value>.+?)"
+    + _TRAIL,
+    re.IGNORECASE,
 )
 """"My name is X": a full name when X is several words, the name to call them
 by when it is one -- which is what it always meant before full names existed."""
@@ -1308,6 +1356,7 @@ def states_own_contact(text: str) -> bool:
 
 _CLAUSE_START = re.compile(
     r"\b(?:my|meu|minha|call\s+me|(?:you\s+can\s+)?call\s+me|pode\s+me\s+chamar|"
+    r"(?:eu\s+)?me\s+chamo|"
     r"me\s+cham[ae]|(?:eu\s+)?moro|i\s+live|sou\s+de|i'?m\s+from|i\s+am\s+from)\b",
     re.IGNORECASE,
 )
@@ -1381,8 +1430,9 @@ def fact_intent(text: str) -> FactIntent | None:
     intent = _forget_intent(collapsed) or _introduction(collapsed) or _set_intent(collapsed)
     if intent is not None:
         return intent
-    if _SHOW_PATTERN.match(collapsed):
-        return FactIntent(FactAction.SHOW)
+    shown = _show_intent(collapsed)
+    if shown is not None:
+        return shown
     if any(p.search(collapsed) for p in _UNSUPPORTED_PATTERNS):
         return FactIntent(FactAction.UNSUPPORTED)
     return None
