@@ -93,3 +93,20 @@ def test_the_tool_is_named_the_same_everywhere() -> None:
     tools = build_chain_tools(ChainToolsConfig(infura_key="k"))
     assert tools.allowlist[0].tool == WALLET_TOOL
     assert tools.allowlist[0].server == WalletProvider.server
+
+
+def test_enabling_wallet_tools_also_registers_positions() -> None:
+    """Liquidity and Aave positions ride on the same key and switch: the
+    process that runs is offered them, with the operator's timeout."""
+    from chatmemory.adapters.chain.registration import build_chain_tools
+
+    settings = Settings(**ENABLED | {"positions_timeout_seconds": 30})  # type: ignore[arg-type]
+    tools = build_chain_tools(chain_tools_config(settings))
+
+    assert "defi_positions" in tools.server_names
+    positions = next(s for s in tools.servers if s.name == "defi_positions")
+    # The combined tool reads liquidity then lending, each bounded per chain.
+    assert positions.timeout_seconds > 2 * 30
+    assert {e.tool for e in tools.allowlist if e.server == "defi_positions"} == {
+        "liquidity_positions", "lending_positions", "defi_positions",
+    }

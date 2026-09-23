@@ -499,6 +499,75 @@ def wallet_question(text: str) -> WalletQuestion | None:
     return None
 
 
+class PositionKind(StrEnum):
+    LIQUIDITY = "liquidity"
+    LENDING = "lending"
+    BOTH = "both"
+
+
+@dataclass(frozen=True, slots=True)
+class DefiQuestion:
+    """A question about somebody's liquidity or lending positions.
+
+    `address` is None when none was written; the route then uses the asker's
+    saved wallet, or asks for one.
+    """
+
+    kind: PositionKind
+    address: str | None
+
+
+_LIQUIDITY_TERMS = frozenset({
+    "liquidity", "liquidez", "lp", "lps", "pool", "pools", "uniswap", "range",
+    "ranges", "uncollected", "univ3", "univ4", "v3", "v4",
+})
+# Crypto-specific words only. "My loan" or "my health" alone could be about
+# anything, and a person asking about their mortgage must not be answered with
+# an Aave report.
+_LENDING_TERMS = frozenset({
+    "aave", "borrow", "borrows", "borrowed", "borrowing", "supplied", "lending",
+    "collateral", "emprestimo", "emprestimos", "empréstimo", "empréstimos",
+    "colateral",
+})
+_GENERIC_POSITION_TERMS = frozenset({
+    "defi", "position", "positions", "posicao", "posicoes", "posição", "posições",
+})
+# Positions are only ever somebody's: an address in the question, or the
+# asker's own ("my pools"). Without either, "what did we decide about the
+# pool" is a conversation about a pool and stays with the corpus.
+_FIRST_PERSON = frozenset({"my", "mine", "meu", "meus", "minha", "minhas"})
+
+
+def defi_question(text: str) -> DefiQuestion | None:
+    """The positions lookup being asked for, or None for everything else.
+
+    Checked before `wallet_question`: "what's in my pools on 0x..." names an
+    address too, and it is positions that were asked about, not balances.
+    """
+    words = set(re.findall(r"[\w.]+", text.lower()))
+    liquidity = bool(words & _LIQUIDITY_TERMS)
+    lending = bool(words & _LENDING_TERMS) or {"health", "factor"} <= words
+    generic = bool(words & _GENERIC_POSITION_TERMS)
+    if not (liquidity or lending or generic):
+        return None
+    if words & _CONVERSATION_VERBS:
+        return None
+    addresses = find_addresses(text)
+    # "I" alone is too common to mean "mine"; with a protocol named it does.
+    about_me = bool(words & _FIRST_PERSON) or bool(
+        words & {"i", "eu"} and words & {"aave", "uniswap"}
+    )
+    if not addresses and not about_me:
+        return None
+    if liquidity and not lending:
+        kind = PositionKind.LIQUIDITY
+    elif lending and not liquidity:
+        kind = PositionKind.LENDING
+    else:
+        kind = PositionKind.BOTH
+    return DefiQuestion(kind=kind, address=addresses[0] if addresses else None)
+
+
 def obligation_question(text: str) -> ObligationQuestion | None:
     """The obligation question being asked, or None for everything else.
 

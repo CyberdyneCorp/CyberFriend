@@ -285,6 +285,11 @@ address the asker typed into their own question, so the assistant can never be
 used to sweep the addresses mentioned across the channels it can read.
 """
 
+DEFI_POSITIONS_PROVIDER = "defi_positions"
+"""Liquidity and lending positions. Held to rooting like `chain_balances`, and
+for the same reason: what it carries is an address, and addresses have no
+membership to check."""
+
 MARKET_CRYPTO_PROVIDER = "market_crypto"
 MARKET_FX_PROVIDER = "market_fx"
 MARKET_INDEX_PROVIDER = "market_index"

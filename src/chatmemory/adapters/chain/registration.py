@@ -26,6 +26,16 @@ from dataclasses import dataclass, field, replace
 import httpx
 import structlog
 
+from chatmemory.adapters.chain.deployments import DEPLOYMENTS
+from chatmemory.adapters.chain.positions_provider import (
+    DEFAULT_TIMEOUT as POSITIONS_TIMEOUT,
+)
+from chatmemory.adapters.chain.positions_provider import (
+    TOOLS as POSITION_TOOLS,
+)
+from chatmemory.adapters.chain.positions_provider import (
+    PositionsProvider,
+)
 from chatmemory.adapters.chain.prices import CoinGeckoPrices
 from chatmemory.adapters.chain.provider import PriceLookup, WalletProvider
 from chatmemory.adapters.chain.rpc import DEFAULT_TIMEOUT, ChainReader
@@ -47,6 +57,7 @@ from chatmemory.app.authorization import CredentialScope, ToolEffect
 log = structlog.get_logger()
 
 CHAIN_SERVER = WalletProvider.server
+POSITIONS_SERVER = PositionsProvider.server
 
 TIMEOUT_HEADROOM = 2.0
 """The federation client waits longer than the reader, so a slow chain comes
@@ -65,6 +76,7 @@ class ChainToolsConfig:
     timeout_seconds: float = DEFAULT_TIMEOUT
     max_calls_per_run: int = DEFAULT_CALLS_PER_RUN
     min_interval_seconds: float = DEFAULT_MIN_INTERVAL
+    positions_timeout_seconds: float = POSITIONS_TIMEOUT
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +85,7 @@ class ChainTools:
 
     servers: tuple[ServerConfig, ...] = ()
     allowlist: tuple[AllowedTool, ...] = ()
-    providers: Mapping[str, WalletProvider] = field(default_factory=dict)
+    providers: Mapping[str, WalletProvider | PositionsProvider] = field(default_factory=dict)
 
     @property
     def server_names(self) -> tuple[str, ...]:
@@ -135,6 +147,14 @@ def build_chain_tools(
         # passes its own, and one that passes nothing still gets USD values.
         prices=prices or CoinGeckoPrices(client=client, timeout_seconds=settings.timeout_seconds),
     )
+    positions = PositionsProvider(
+        DEPLOYMENTS,
+        key,
+        CallBudget(settings.max_calls_per_run),
+        RateLimiter(settings.min_interval_seconds),
+        client=client,
+        timeout_seconds=settings.positions_timeout_seconds,
+    )
     return ChainTools(
         servers=(
             ServerConfig(
@@ -143,6 +163,18 @@ def build_chain_tools(
                 # surface is readable from configuration and not only code.
                 target=",".join(f"https://{c.infura_host}.infura.io" for c in CHAINS),
                 timeout_seconds=settings.timeout_seconds + TIMEOUT_HEADROOM,
+            ),
+            ServerConfig(
+                name=POSITIONS_SERVER,
+                # Blockscout is reached only to find v4 position IDs; every
+                # figure is read from the chain.
+                target=",".join(
+                    [f"https://{d.chain.infura_host}.infura.io" for d in DEPLOYMENTS]
+                    + [d.blockscout for d in DEPLOYMENTS]
+                ),
+                # The combined tool reads liquidity, then lending, each bounded
+                # per chain.
+                timeout_seconds=2 * settings.positions_timeout_seconds + TIMEOUT_HEADROOM,
             ),
         ),
         allowlist=(
@@ -156,6 +188,18 @@ def build_chain_tools(
                 effect=ToolEffect.READ_ONLY,
                 mutation_enabled=False,
             ),
+            *(
+                AllowedTool(
+                    server=POSITIONS_SERVER,
+                    tool=tool,
+                    # Public chain state and a public explorer; `collect` is
+                    # simulated with `eth_call` and never sent.
+                    credential=CredentialScope.NARROW_READ_ONLY,
+                    effect=ToolEffect.READ_ONLY,
+                    mutation_enabled=False,
+                )
+                for tool in POSITION_TOOLS
+            ),
         ),
-        providers={CHAIN_SERVER: provider},
+        providers={CHAIN_SERVER: provider, POSITIONS_SERVER: positions},
     )

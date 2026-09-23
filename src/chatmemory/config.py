@@ -209,7 +209,8 @@ class Settings(BaseSettings):
     market_timeout_seconds: float = 8.0
 
     wallet_tools_enabled: bool = False
-    """Wallet balances on Ethereum and Base, given an address.
+    """Wallet balances, Uniswap liquidity and Aave positions on Ethereum, Base
+    and Arbitrum, given an address.
 
     Off by default like every other outbound boundary. What leaves is narrower
     than a web query -- an address, and only one the asker typed into their own
@@ -229,6 +230,10 @@ class Settings(BaseSettings):
     """Wallet lookups one question may cause. Each reads every chain."""
 
     wallet_timeout_seconds: float = 8.0
+
+    positions_timeout_seconds: float = 25.0
+    """Per chain, for liquidity and Aave positions. Longer than a balance: a
+    wallet with a hundred position NFTs is several multicalls."""
 
     # --- Scheduled tasks -----------------------------------------------
     scheduled_tasks_enabled: bool = False

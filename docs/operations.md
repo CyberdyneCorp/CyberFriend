@@ -205,9 +205,10 @@ is configured, and `reasoning.trace_failed` when an export is dropped.
 ## Wallet balances
 
 With `WALLET_TOOLS_ENABLED=true` and an `INFURA_KEY`, the assistant can report
-what a `0x` address holds on Ethereum and Base: the native ETH balance and a
-named set of ERC-20 tokens, each with its USD value from the same price source
-the market tools use. One key covers both chains.
+what a `0x` address holds on Ethereum, Base and Arbitrum: the native ETH balance
+and a named set of ERC-20 tokens, each with its USD value from the same price
+source the market tools use. One key covers every chain; the key must have
+Arbitrum enabled in the Infura dashboard. It also enables DeFi positions, below.
 
 ### Only an address the asker typed
 
@@ -241,8 +242,8 @@ address is answered by asking for one, not by searching.
 
 JSON-RPC cannot enumerate holdings. `eth_getBalance` gives the native balance;
 every token requires knowing a contract to call `balanceOf` on. So the token set
-is **named, not discovered** — currently USDC, USDT, DAI and WETH on Ethereum,
-and USDC, DAI and WETH on Base. A token nobody listed is invisible to the
+is **named, not discovered** — currently USDC, USDT, DAI and WETH on Ethereum
+and Arbitrum, and USDC, DAI and WETH on Base. A token nobody listed is invisible to the
 lookup rather than absent, and the answer says so. Adding one is a line in
 `adapters/chain/tokens.py`.
 
@@ -258,6 +259,58 @@ transaction even if later code asked it to — the allowlist entry declares
 
 A chain that cannot be reached is reported as unreachable, never as an address
 holding nothing; one endpoint failing still reports the other.
+
+## DeFi positions
+
+The same switch and key also register the `defi_positions` server, with three
+read-only tools. The route picks exactly one from the question, so the model's
+only job is to copy the address:
+
+| Asked about | Tool | Reports |
+|---|---|---|
+| pools, liquidity, LP, Uniswap, ranges | `liquidity_positions` | Every open Uniswap v3 and v4 position: pair and fee tier, amounts and USD value, 🟢 in / 🔴 out of range, min/max price and current price, uncollected fees. Closed position NFTs are counted, not listed |
+| Aave, borrow, supplied, collateral, health factor | `lending_positions` | Aave v3 (main market) supplied and borrowed assets with USD values and APYs, total collateral and debt, health factor |
+| both, or "defi positions" | `defi_positions` | Both reports |
+
+It uses the same address rules as balances: the address must be in the question
+or be the asker's saved wallet, and a question with neither is answered by
+asking for one. A question needs an address or a first-person reference ("my
+pools") to route here — "what did we decide about the pool" stays a corpus
+question.
+
+### How positions are found
+
+- **Uniswap v3** positions are listed by the chain (`tokenOfOwnerByIndex`).
+  Uncollected fees come from *simulating* `collect` with `eth_call` as the
+  owner; nothing is sent.
+- **Uniswap v4**'s position manager cannot list an owner's tokens, and Infura
+  limits `eth_getLogs` to 10,000 blocks. The token IDs come from Blockscout's
+  public API (no key), and each is then confirmed with `ownerOf` on-chain. The
+  explorer is trusted for nothing else. If it is down, the answer says how many
+  v4 positions exist but could not be listed.
+- **Aave v3** contracts are resolved from each chain's addresses provider, so
+  an Aave upgrade is followed automatically.
+
+Reads are batched through Multicall3 (50 calls per request), and a
+rate-limited request is retried with back-off. A wallet with 134 position NFTs
+reads in about three seconds per chain.
+
+### Values
+
+USD values come from the Aave oracle on the same chain, so pricing adds no
+outside service. A token the oracle does not price is valued from the pool's own
+price when the other side is priced, and the answer says so — for a thin pool
+that mark can be far from what the tokens would sell for. Aave balances worth
+under a cent are counted rather than listed.
+
+`POSITIONS_TIMEOUT_SECONDS` (default 25) bounds each chain; the combined tool
+reads liquidity then lending, so its server timeout is twice that.
+
+### Not covered
+
+Other exchanges (Aerodrome, SushiSwap, …), Aave's other markets (Prime, EtherFi),
+history, P&L and impermanent loss. Adding a chain is one entry in
+`adapters/chain/deployments.py`.
 
 ## Seeing what is archived
 

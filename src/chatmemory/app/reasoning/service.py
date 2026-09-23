@@ -39,6 +39,7 @@ import structlog
 
 from chatmemory.app.egress import (
     CHAIN_BALANCES_PROVIDER,
+    DEFI_POSITIONS_PROVIDER,
     ISO_4217_CODES,
     MARKET_CRYPTO_PROVIDER,
     MARKET_FX_PROVIDER,
@@ -71,10 +72,13 @@ from chatmemory.app.reasoning.ports import (
 )
 from chatmemory.app.reasoning.stages import ModelCritic, ModelPlanner, ModelSynthesizer
 from chatmemory.app.routing import (
+    DefiQuestion,
     MarketQuestion,
+    PositionKind,
     Route,
     RoutingDecision,
     classify,
+    defi_question,
     explicit_web_search,
     market_follow_up,
     market_question,
@@ -100,6 +104,14 @@ ESCALATION = "escalation"
 
 MARKET_SERVERS = frozenset({MARKET_CRYPTO_PROVIDER, MARKET_FX_PROVIDER, MARKET_INDEX_PROVIDER})
 CHAIN_SERVERS = frozenset({CHAIN_BALANCES_PROVIDER})
+DEFI_SERVERS = frozenset({DEFI_POSITIONS_PROVIDER})
+DEFI_TOOLS = {
+    PositionKind.LIQUIDITY: f"{DEFI_POSITIONS_PROVIDER}:liquidity_positions",
+    PositionKind.LENDING: f"{DEFI_POSITIONS_PROVIDER}:lending_positions",
+    PositionKind.BOTH: f"{DEFI_POSITIONS_PROVIDER}:defi_positions",
+}
+"""Exactly one tool per kind of question. The route decides what is read; the
+model only copies the address into the call."""
 """The only server a wallet question may reach. Narrowed for the same reason
 the market route is: the offer the call is held to is this set, so a wallet
 question cannot end up searching the web instead."""
@@ -299,6 +311,11 @@ class ReasoningAnswerService:
             return _route(EXTERNAL_ROUTE, "time"), refusal(
                 current_time_answer(detect(text))
             )
+        defi = defi_question(text)
+        if defi is not None:
+            # Before the wallet route: "my pools on 0x..." names an address
+            # too, and it is positions that were asked about.
+            return await self._defi_route(question, defi)
         wallet = wallet_question(text)
         if wallet is not None:
             # A balance is never in the corpus. A channel message about a
@@ -344,6 +361,37 @@ class ReasoningAnswerService:
             return _route(EXTERNAL_ROUTE, "explicit_web_search"), outcome
         return None
 
+
+    async def _defi_route(
+        self, question: Question, defi: DefiQuestion
+    ) -> tuple[Decision, RunOutcome]:
+        """Liquidity or lending positions, from the chain, never the corpus.
+
+        Same address rules as the wallet route: the one in the question, or
+        the asker's saved wallet (admitted by the guard as an asker fact), or
+        a request for one.
+        """
+        asked = question
+        if defi.address is None:
+            saved = _saved_wallet(question)
+            if saved is None:
+                log.info("reasoning.external_route", route="defi_no_address")
+                return (
+                    _route(EXTERNAL_ROUTE, "wallet_address_missing"),
+                    refusal(WALLET_ADDRESS_MISSING),
+                )
+            asked = replace(question, text=f"{question.text} {saved}")
+        outcome = await self._loop.run_external(
+            asked, DEFI_SERVERS, verbatim=True, tools={DEFI_TOOLS[defi.kind]}
+        )
+        answer = outcome.answer
+        if answer.abstained:
+            answer = replace(answer, text=WALLET_UNAVAILABLE)
+        log.info("reasoning.external_route", route="defi", kind=str(defi.kind))
+        return (
+            _route(EXTERNAL_ROUTE, f"defi_{defi.kind}"),
+            replace(outcome, answer=answer),
+        )
 
 def current_time_answer(language: Language, now: datetime | None = None) -> str:
     """What the date and time are, said in the asker's language.

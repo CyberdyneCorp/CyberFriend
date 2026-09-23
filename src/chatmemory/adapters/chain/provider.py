@@ -37,18 +37,13 @@ from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
+from chatmemory.adapters.chain.clearance import clear_address, refusal
 from chatmemory.adapters.chain.rpc import ChainBalances, ChainReader
 from chatmemory.adapters.chain.tokens import tokens_for
 from chatmemory.adapters.mcp_client.session import DiscoveredTool, ToolResult, ToolSession
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
-from chatmemory.adapters.web.query import check_query
 from chatmemory.app.authorization import ToolEffect
-from chatmemory.app.egress import (
-    CHAIN_BALANCES_PROVIDER,
-    EgressRefused,
-    current_authorization,
-)
-from chatmemory.domain.chain import is_address, normalise
+from chatmemory.app.egress import CHAIN_BALANCES_PROVIDER
 
 log = structlog.get_logger()
 
@@ -72,7 +67,7 @@ WALLET_SCHEMA: Mapping[str, object] = MappingProxyType(
 )
 
 WALLET_DESCRIPTION = (
-    "Current balances held by a wallet address on Ethereum and Base: the "
+    "Current balances held by a wallet address on Ethereum, Base and Arbitrum: the "
     "native ETH balance and known tokens such as USDC, USDT, DAI and WETH. "
     "Use when someone gives a 0x address and asks what it holds, its balance, "
     "or how much is in it. Reports figures only."
@@ -142,44 +137,12 @@ class WalletProvider:
         if name != WALLET_TOOL:
             return self._refuse(name, "unknown_tool")
 
-        # The clearance, never the arguments. `arguments` is model output, so
-        # checking one of its fields against another compares model output
-        # with model output. The clearance was minted by `EgressGuard` from
-        # the question the person actually asked.
-        try:
-            clearance = current_authorization(self.server)
-        except EgressRefused as refused:
-            log.warning("chain.egress_refused", tool=name, reason=str(refused.reason))
-            return self._refuse(name, "egress_refused")
+        cleared = await clear_address(self.server, name, self._budget, self._limiter)
+        if isinstance(cleared, ToolResult):
+            return cleared
+        address = cleared.address
 
-        check = check_query(clearance.question, clearance.text)
-        if not check.ok:
-            log.warning(
-                "chain.query_refused",
-                tool=name,
-                reason=str(check.refusal),
-                # For an operator, never returned: these may be words a
-                # crafted message put there, and echoing them would carry
-                # them back into the prompt.
-                foreign=list(check.foreign),
-            )
-            return self._refuse(name, str(check.refusal))
-
-        # Rooting admits any word the asker wrote. Refused, not trimmed: see
-        # the module docstring.
-        if not is_address(check.query):
-            log.warning("chain.not_an_address", tool=name)
-            return self._refuse(name, "not_an_address")
-
-        address = normalise(check.query)
-        if not self._budget.spend(address):
-            log.warning("chain.budget_exhausted", tool=name)
-            return self._refuse(name, "calls_per_run_exhausted")
-        if not await self._limiter.acquire():
-            log.warning("chain.rate_limited", tool=name)
-            return self._refuse(name, "rate_limited")
-
-        # Both chains at once. One being slow must not make the other late,
+        # Every chain at once. One being slow must not make the other late,
         # and each reader is already bounded and returns its failure as a
         # value rather than raising.
         results = await asyncio.gather(
@@ -228,9 +191,7 @@ class WalletProvider:
         return f" (~${amount * priced.usd:,.2f} at {priced.as_of})"
 
     def _refuse(self, tool: str, reason: str) -> ToolResult:
-        # An error result, not an empty one: "the lookup did not run" and
-        # "this address holds nothing" must never look the same to the loop.
-        return ToolResult(text=f"{self.server}:{tool} did not run ({reason})", is_error=True)
+        return refusal(self.server, tool, reason)
 
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking only
