@@ -18,7 +18,7 @@ internet said.
 | **Audience-aware answers** | In a channel it only cites what everyone there can read; ask in a DM for your full view |
 | **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve` |
 | **Conversation memory** | Follow-ups keep context, per person and per place, and stop being recalled if you lose access to a channel behind them |
-| **Personal facts** | *call me Leo*, *my email is …*, *my phone is …*, *my wallet is 0x…*, *reply in Portuguese*. Contact details and wallets are only ever shown in a DM to you |
+| **Personal facts** | *my name is …*, *call me Leo*, *my email is …*, *my phone is …*, *my wallet is 0x…*, *reply in Portuguese*. Contact details and wallets are only ever shown in a DM to you |
 | **Knows the time** | Every answering prompt carries the current date and time in UTC, so *today* and *recent* mean something |
 | **Answers in your language** | An answer is written in the language you asked in; a saved preferred language still wins |
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
@@ -32,6 +32,57 @@ internet said.
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
 | **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |
+
+### Every feature at a glance
+
+```mermaid
+mindmap
+  root((CyberFriend))
+    Your channels
+      Answers with citations
+      Scoped to what you can read
+      Audience-aware in channels
+      Documents and links
+      Catch-up on a channel
+    What you owe
+      Asks extracted from chat
+      what do I need to do
+      Close with a reaction or /resolve
+      DM when someone asks you
+    Memory
+      Follow-ups keep context
+      Chain and price answers remembered
+      /forget here or everywhere
+    About you
+      Full and preferred name
+      Email and phone, DM only
+      ETH and BTC wallets
+      Several facts in one message
+      Replies in your language
+      Knows the date and time
+    Outside the server
+      Wikipedia and Google
+      Allowlisted MCP servers
+      BTC, ETH, S&P 500, FX
+    On-chain
+      Ethereum, Base, Arbitrum
+      Wallet balances with USD
+      Open Uniswap v3 and v4 positions
+      Range, fees, in or out of range
+      Aave supplies, borrows, health factor
+    Commands
+      /ask /channels /forget
+      /resolve /notifications
+      /schedule create, list, delete
+      In the server and in DMs
+      /index /unindex in the server
+    Operators
+      Index a channel from chat
+      Admin console
+      MCP interface to the corpus
+      Langfuse tracing
+      Retention and opt-outs
+```
 
 ### What you can ask for
 
@@ -91,9 +142,11 @@ asked in the moment.
 | `/notifications` | Turn DMs about obligations on or off |
 | `/schedule create`, `list`, `delete` | Questions asked on a rhythm |
 
-`/notifications` and `/schedule` appear only where those features are switched
-on — a command Discord will not show you is worse than one that is missing from
-this table.
+Every command except `/index` and `/unindex` works in the server **and in a
+direct message with the bot**; those two act on a channel, so they live in the
+server only. `/notifications` and `/schedule` appear only where those features
+are switched on — a command Discord will not show you is worse than one that is
+missing from this table.
 
 ### What it can remember about you
 
