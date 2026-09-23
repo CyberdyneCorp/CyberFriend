@@ -1284,7 +1284,8 @@ class Edges:
 
     `http_transport` and `clock` are carried for that harness. Nothing reads
     them yet: production passes the defaults, which are what every adapter
-    already uses.
+    already uses. Until the transport is threaded, federation and tracing
+    still open their own HTTP clients, so they are not yet behind this seam.
     """
 
     chat: ToolCapableChat

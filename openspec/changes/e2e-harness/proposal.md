@@ -31,8 +31,9 @@ clock. Today those are constructed deep inside `build_answer_stack` and
 - **Wiring tests move with the code**: the AST checks that read `main()` for
   graph construction now read `assemble()`, and new tests assert that `main`
   assembles over `Edges.production`, that `assemble` hands `build_bot` every
-  collaborator it accepts, and that nothing between the edges constructs an
-  edge of its own.
+  collaborator it accepts, and that nothing between the edges constructs a
+  chat model, embedding client or engine of its own. Federation and tracing
+  still open their own HTTP clients until `http_transport` is threaded.
 
 Non-goals (later changes in this series):
 

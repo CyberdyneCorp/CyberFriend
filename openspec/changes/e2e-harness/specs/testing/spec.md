@@ -7,7 +7,10 @@ that takes the settings and the process's network edges -- the chat model,
 the summary model, the embedding client, the database engine, an optional
 HTTP transport and a clock. The production entrypoint and end-to-end tests
 SHALL both build the process through that function, and nothing inside it
-SHALL construct an edge of its own.
+SHALL construct a chat model, summary model, embedding client or database
+engine of its own. Outbound HTTP made by the federation layer and the tracer
+is not yet routed through the edges; threading the HTTP transport into those
+adapters is a later change.
 
 #### Scenario: Production builds its edges from settings
 - WHEN the bot process starts
@@ -19,7 +22,8 @@ SHALL construct an edge of its own.
 #### Scenario: A test replaces only the edges
 - WHEN a test calls the assembly function with fake edges
 - THEN the returned process SHALL hold the object graph production runs,
-  built over those fakes
+  with its chat model, summary model, embedding client and database engine
+  being those fakes
 
 #### Scenario: Assembly starts nothing
 - WHEN the assembly function returns

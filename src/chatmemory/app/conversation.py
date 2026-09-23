@@ -93,6 +93,11 @@ class ConversationSummariser:
         self._model = model
         self._policy = policy
 
+    @property
+    def model(self) -> ChatModel:
+        """The handle summaries are written with."""
+        return self._model
+
     async def summarise(self, viewer: Viewer, location: ConversationLocation) -> bool:
         """Condense what is past the bound. Returns whether a summary was written.
 
@@ -158,6 +163,11 @@ class Conversations:
         # Held so a background summary is not garbage-collected mid-flight,
         # and so the same conversation is never summarised twice at once.
         self._pending: dict[tuple[PersonRef, ConversationLocation], asyncio.Task[None]] = {}
+
+    @property
+    def summariser(self) -> ConversationSummariser:
+        """What condenses a conversation once it passes the bound."""
+        return self._summariser
 
     async def recall(self, viewer: Viewer, location: ConversationLocation) -> Recollection:
         """The viewer's own permitted conversation here, or nothing on any failure."""

@@ -13,7 +13,7 @@
 - [x] 2.2 Test: `main` calls `assemble` with `Edges.production`
 - [x] 2.3 Test: `assemble` passes every `build_bot` collaborator
 - [x] 2.4 Test: `Edges.production` builds the same component types as before
-- [x] 2.5 Test: nothing between the edges builds an edge of its own
+- [x] 2.5 Test: nothing between the edges builds a model, embedding client or engine of its own
 - [x] 2.6 Test: `assemble` builds the whole process over fake edges
 
 ## 3. Later in the series

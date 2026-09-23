@@ -3,15 +3,17 @@
 `assemble(settings, edges)` builds everything `main` runs; `Edges` is the only
 thing it reaches the outside world through. Two things are proved here: that
 production still builds the same edges it always did, and that nothing inside
-`assemble` or `build_answer_stack` builds an edge of its own -- which is what
-would let an end-to-end test silently exercise a different graph.
+`assemble` or `build_answer_stack` builds a model, embedding client or engine
+of its own -- which is what would let an end-to-end test silently exercise a
+different graph. Outbound HTTP (federation, tracing) is not routed through the
+edges yet, so it is not checked here.
 """
 
 from __future__ import annotations
 
 import ast
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -88,12 +90,22 @@ class FakeChat:
         return self
 
 
-def fake_edges(width: int = 1536) -> Edges:
+@pytest.fixture
+async def engine() -> AsyncIterator[AsyncEngine]:
+    """An engine pointed at nothing, disposed whether or not the test passes."""
+    engine = create_async_engine(BASE["database_url"])
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
+def fake_edges(engine: AsyncEngine, width: int = 1536) -> Edges:
     return Edges(
         chat=FakeChat(),
         summary_chat=FakeChat(),
         embeddings=FakeEmbeddings(width),
-        engine=create_async_engine(BASE["database_url"]),
+        engine=engine,
     )
 
 
@@ -126,8 +138,13 @@ def test_main_assembles_over_the_production_edges() -> None:
     )
 
 
-def test_nothing_between_the_edges_builds_an_edge_of_its_own() -> None:
-    """Each of these is an edge; built inside, a fake handed in is ignored."""
+def test_nothing_between_the_edges_builds_a_model_or_engine_of_its_own() -> None:
+    """Each of these is an edge; built inside, a fake handed in is ignored.
+
+    Only calls made directly in the two bodies are checked, and only for the
+    model, embedding and engine edges: federation and tracing still open their
+    own HTTP clients until the transport is threaded through.
+    """
     stack = _function(COMPOSITION, "build_answer_stack")
     for edge in ("build_chat_model", "build_embeddings", "create_async_engine"):
         assert not _calls(stack, edge), f"build_answer_stack builds {edge} itself"
@@ -153,13 +170,17 @@ def test_assemble_hands_build_bot_every_collaborator() -> None:
 # --- the graph, built over fakes ----------------------------------------
 
 
-async def test_the_embedding_width_is_still_checked_against_the_edges() -> None:
+async def test_the_embedding_width_is_still_checked_against_the_edges(
+    engine: AsyncEngine,
+) -> None:
     with pytest.raises(ConfigurationError, match="reindex"):
-        await build_answer_stack(settings(), edges=fake_edges(width=768))
+        await build_answer_stack(settings(), edges=fake_edges(engine, width=768))
 
 
-async def test_assemble_builds_the_whole_process_over_the_edges_it_is_given() -> None:
-    edges = fake_edges()
+async def test_assemble_builds_the_whole_process_over_the_edges_it_is_given(
+    engine: AsyncEngine,
+) -> None:
+    edges = fake_edges(engine)
     process = await assemble(settings(), edges)
 
     assert isinstance(process, Process)
@@ -171,5 +192,4 @@ async def test_assemble_builds_the_whole_process_over_the_edges_it_is_given() ->
     # A failed read keeps the environment's scope, which is the one at boot.
     assert set(process.scope.current()) == {100}
     # The summariser writes with the summary edge, not a handle built inside.
-    assert process.conversations._summariser._model is edges.summary_chat
-    await edges.engine.dispose()
+    assert process.conversations.summariser.model is edges.summary_chat
