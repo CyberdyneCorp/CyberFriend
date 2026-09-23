@@ -41,6 +41,12 @@ ADDRESS = "0xB26B933a075fBB3D4E8b0925CAd4f2bc345475e0"
         ("me aviza se o hf cair abaixo de 1,15", HEALTH),
         ("quero um alerta se o fator de saúde cair para 1,2", HEALTH),
         ("crie um alerta pro meu health factor abaixo de 1,4", HEALTH),
+        # Put politely, to the assistant: still a request.
+        ("can you alert me when my LP goes out of range?", RANGE),
+        ("hey, could you tell me when my hf drops below 1.2", HEALTH),
+        ("você pode me avisar quando minha posição sair da faixa?", RANGE),
+        ("pode me avisar se o health factor cair abaixo de 1,3?", HEALTH),
+        ("what does hf mean? tell me when my hf drops below 1.2", HEALTH),
     ],
 )
 def test_requests_are_recognised(text: str, kind: AlertKind) -> None:
@@ -66,6 +72,17 @@ def test_requests_are_recognised(text: str, kind: AlertKind) -> None:
         "is my LP out of range?",
         "qual é o meu health factor?",
         "how do alerts work?",
+        # Questions about alerting, not requests for an alert.
+        "does uniswap notify me when my position goes out of range?",
+        "is there a bot that can alert me when my LP goes out of range?",
+        "which app can warn me when my aave health factor gets low?",
+        "what is the best tool to create an alert for health factor?",
+        "can revert finance notify me if my health factor drops below 1.2?",
+        "revert finance can notify me if my health factor drops below 1.2",
+        "como criar um alerta quando a posição sair da faixa no revert?",
+        "qual app consegue me avisar quando o health factor cair?",
+        # The health factor is in another sentence from the request.
+        "what does hf mean? tell me when you know",
         "",
     ],
 )
@@ -121,9 +138,9 @@ def test_an_address_the_asker_typed_before_is_carried() -> None:
     previous = (f"what positions does {ADDRESS} have?",)
     found = alert_intent("tell me when that position goes out of range", previous)
     assert found is not None
-    assert (found.address, found.carried) == (ADDRESS.lower(), True)
+    assert found.address == ADDRESS.lower()
 
 
 def test_without_an_address_the_caller_decides() -> None:
     found = alert_intent("tell me when my LP goes out of range", ("what's the weather?",))
-    assert found is not None and (found.address, found.carried) == (None, False)
+    assert found is not None and found.address is None

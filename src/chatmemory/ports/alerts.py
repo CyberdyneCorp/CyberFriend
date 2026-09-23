@@ -273,8 +273,6 @@ class HealthCandidate:
 
     chain: str
     health_factor: Decimal | None
-    collateral_usd: Decimal = Decimal(0)
-    debt_usd: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)

@@ -50,7 +50,8 @@ back -- and before either answer path, so an alert request never reaches the
 corpus or the positions route. What comes back is the list of what would be
 watched, carried on `AskOutcome.alert` for the surface to show with a Confirm
 button; nothing is stored until that button is pressed. An alert turn is not
-remembered: it is a command, and its reply may name the wallet.
+remembered: it is a command, and its reply may name the wallet. A scheduled
+run (`metered=False`) is never an alert turn: nobody is there to confirm.
 
 And it is where "what did I miss in #x" becomes an answer. A catch-up is not
 a second way into the corpus: `_produce` below swaps which collaborator
@@ -416,8 +417,15 @@ class AskService:
             asker_values=values,
         )
         # Before either answer path, and with the asker's own earlier questions:
-        # an address typed there is theirs, as one typed here is.
-        alert = alert_intent(request.text, tuple(turn.question for turn in memory.turns))
+        # an address typed there is theirs, as one typed here is. Only for
+        # somebody present: a proposal needs a Confirm press, and a scheduled
+        # run has nobody to press it, so its question is answered as before
+        # rather than reading every chain on each run to propose to no one.
+        alert = (
+            alert_intent(request.text, tuple(turn.question for turn in memory.turns))
+            if metered
+            else None
+        )
         if alert is not None:
             return await self._alert_turn(request, alert, facts, values)
         # The confirmation channel is opened around the whole of answer

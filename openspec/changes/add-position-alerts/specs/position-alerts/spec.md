@@ -235,13 +235,20 @@ SHALL NOT store an alert until the person who asked presses Confirm.
 - AND they SHALL be told privately that it is not theirs to confirm
 
 #### Scenario: A question about alerts
-- WHEN a message asks what people said about alerts, or asks for a reading
-  ("tell me if my health factor is ok")
+- WHEN a message asks what people said about alerts, asks for a reading
+  ("tell me if my health factor is ok"), or asks about alerting itself
+  ("does Uniswap notify me when my position goes out of range?", "como criar
+  um alerta quando a posição sair da faixa?")
 - THEN it SHALL NOT be treated as an alert request
+- AND a request put politely to the assistant ("can you alert me when my LP
+  goes out of range?") SHALL still be one
 
 #### Scenario: Asked by a scheduled question
 - WHEN a scheduled question is an alert request
-- THEN its proposal SHALL NOT be sent, since nobody is present to confirm it
+- THEN it SHALL be answered as any other question, since nobody is present to
+  confirm a proposal
+- AND no chain SHALL be read for a proposal and no "not available" reply SHALL
+  be sent on its behalf
 
 #### Scenario: Alerts not enabled
 - WHEN the deployment has not enabled alerts, or has no chain endpoint key,

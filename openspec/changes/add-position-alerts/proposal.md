@@ -96,6 +96,16 @@ side.
   with the tool-approval prompt). `AskOutcome` carries an optional proposal;
   the positions reader's result carries each position's pool reference, which
   the positions answer does not show.
+- PR-A2 registers `/alert list` and `/alert delete` on every deployment, as
+  `/schedule` is: with alerts off they answer that the feature is off, and a
+  typed "/alert list" gets the "use the slash menu" reply like any other
+  command name. They are listed by the capability reply only where alerts are
+  on.
+- PR-A2 adds a last line to every alert message from the PR-A1 engine naming
+  `/alert list` and `/alert delete <id>`; visible only where alerts are on.
+- An alert request is recognised only in a question somebody is present for.
+  A scheduled task whose question reads as an alert request is answered as any
+  question, as before this change, whether alerts are on or off.
 
 ## Risk
 

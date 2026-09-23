@@ -148,12 +148,7 @@ class ChainTargets:
         reading = health_reading(raw)
         if not isinstance(reading, HealthObservation):
             raise _Unreadable
-        return HealthCandidate(
-            chain=deployment.chain.key,
-            health_factor=reading.health_factor,
-            collateral_usd=reading.collateral_usd,
-            debt_usd=reading.debt_usd,
-        )
+        return HealthCandidate(chain=deployment.chain.key, health_factor=reading.health_factor)
 
 
 class _Unreadable(Exception):

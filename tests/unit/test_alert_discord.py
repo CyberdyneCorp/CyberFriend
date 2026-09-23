@@ -46,7 +46,7 @@ class Message:
 
 
 def proposal(language: AlertLanguage = EN) -> AlertProposal:
-    return AlertProposal(LEO, language, True, (), "Here's what I'll watch:")
+    return AlertProposal(LEO, language, (), "Here's what I'll watch:")
 
 
 async def test_an_unanswered_prompt_expires_and_loses_its_buttons() -> None:

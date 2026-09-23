@@ -456,7 +456,11 @@ my health factor drops below 1.25 on base". The request is recognised before
 retrieval and before the positions route (route label `ALERT_CREATE`), with no
 model call. The wallet is one the person typed — in this message or one of
 their last few questions — or their saved wallet; nothing read from a channel
-is ever a candidate.
+is ever a candidate. A question about alerting — "does Uniswap notify me
+when…", "which app can warn me when…", "como criar um alerta…" — is not a
+request and is answered as any question; "can you alert me when…" is.
+A scheduled task is never an alert request: nobody is there to press Confirm,
+so its question is answered as any other.
 
 The chain is then read once, with the positions reader, and the reply lists
 exactly what would be watched with the reading right now: each open Uniswap

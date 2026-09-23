@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from decimal import Decimal
 
 import structlog
@@ -261,14 +261,11 @@ def target_label(
 class AlertProposal:
     """Alerts to create if, and only if, `person` presses Confirm.
 
-    `text` is the confirmation as they read it. `direct` is whether it was
-    shown only to them, which decides whether the wallet may be named in the
-    reply to the press as well.
+    `text` is the confirmation as they read it.
     """
 
     person: PersonRef
     language: AlertLanguage
-    direct: bool
     alerts: tuple[NewAlert, ...]
     text: str
 
@@ -379,7 +376,6 @@ class AlertRequests:
         proposal = AlertProposal(
             person=request.person,
             language=request.language,
-            direct=request.direct,
             alerts=tuple(p.alert for p in kept),
             text=body,
         )
@@ -452,16 +448,27 @@ def _proposed(request: _Request, read: TargetsRead) -> list[_Proposed]:
     return [_lp(request, c) for c in read.lp if wanted is None or c.target.token_id == wanted]
 
 
-def _new(request: _Request, chain: str, **fields: object) -> NewAlert:
-    base = NewAlert(
+def _new(
+    request: _Request,
+    chain: str,
+    *,
+    state: AlertState,
+    last_value: Decimal,
+    threshold: Decimal | None = None,
+    lp: LpTarget | None = None,
+) -> NewAlert:
+    return NewAlert(
         person=request.person,
         kind=request.intent.kind,
         chain=chain,
         address=request.address,
         address_source=request.source,
         language=request.language,
+        lp=lp,
+        threshold=threshold,
+        state=state,
+        last_value=last_value,
     )
-    return replace(base, **fields)  # type: ignore[arg-type]
 
 
 def _health(request: _Request, found: HealthCandidate) -> _Proposed:

@@ -131,7 +131,7 @@ class Chain:
 
 def debt(chain: str = "base", health: str | None = "1.43") -> HealthCandidate:
     value = Decimal(health) if health is not None else None
-    return HealthCandidate(chain, value, Decimal("27699.05"), Decimal("15221.12"))
+    return HealthCandidate(chain, value)
 
 
 def lp(token_id: int = 4558452, state: AlertState = AlertState.IN_RANGE) -> LpCandidate:
@@ -343,7 +343,6 @@ async def test_the_wallet_is_named_only_in_a_direct_message(direct: bool, shown:
     reply = await propose(flow, health(), direct=direct)
 
     assert (SAVED in reply.text) is shown
-    assert reply.proposal.direct is direct
 
 
 # --- confirming -----------------------------------------------------------------
@@ -451,7 +450,7 @@ async def test_in_a_channel_the_saved_wallet_is_used_but_not_shown() -> None:
 
     outcome = await service.ask(in_channel("alert me if my health factor drops below 1.3"))
 
-    assert outcome.alert is not None and not outcome.alert.direct
+    assert outcome.alert is not None
     assert SAVED not in outcome.scoped.answer.text
 
 
@@ -462,6 +461,24 @@ async def test_with_alerts_off_a_request_is_told_so_and_not_answered() -> None:
 
     assert answers.seen == [] and outcome.alert is None
     assert outcome.scoped.answer.text.startswith("Alerts aren't available")
+
+
+@pytest.mark.parametrize("alerts_on", [True, False])
+async def test_a_scheduled_run_of_an_alert_request_is_answered_as_a_question(
+    alerts_on: bool,
+) -> None:
+    """Nobody is present to press Confirm on a scheduled run, so an alert-shaped
+    task question is answered as before: no chain read, no proposal, and no
+    "not available" or refusal text sent on every interval."""
+    flow, store, chain = requests(TargetsRead())
+    service, answers = _ask(flow if alerts_on else None)
+    question = "tell me when my LP goes out of range"
+
+    outcome = await service.ask(in_dm(question), metered=False)
+
+    assert [q.text for q in answers.seen] == [question]
+    assert outcome.alert is None
+    assert chain.asked == [] and store.rows == []
 
 
 async def test_a_question_about_alerts_still_reaches_the_answers() -> None:

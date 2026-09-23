@@ -21,6 +21,7 @@ client.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import datetime
 from typing import Any, Protocol
 
 import discord
@@ -278,8 +279,8 @@ async def follow_up_with_confirmation(
 # --- the listing ------------------------------------------------------------------
 
 
-def _when(moment: object) -> str:
-    return discord.utils.format_dt(moment, "R") if moment is not None else ""  # type: ignore[arg-type]
+def _when(moment: datetime | None) -> str:
+    return discord.utils.format_dt(moment, "R") if moment is not None else ""
 
 
 def _state(alert: PositionAlert, language: AlertLanguage) -> str:
