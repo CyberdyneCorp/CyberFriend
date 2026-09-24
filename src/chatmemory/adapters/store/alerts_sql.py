@@ -14,7 +14,8 @@ by a closed position is kept for the listing, and should not use up a slot.
 A range alert asked for again with an edge distance is the same watch with one
 more warning, not a second watch: two alerts on one position would send two
 messages when it leaves its range. So that one conflict updates the existing
-alert's edge distance and baseline instead of being skipped.
+alert's edge distance and baseline instead of being skipped, and, needing no
+new slot, is not stopped by the cap.
 """
 
 from __future__ import annotations
@@ -58,6 +59,18 @@ WHERE (
     SELECT count(*) FROM position_alert
      WHERE person_id = :person_id AND disabled_at IS NULL
 ) < :cap
+   -- Adding an edge distance to a watched position takes no new slot.
+   OR (CAST(:edge_percent AS numeric) IS NOT NULL AND EXISTS (
+    SELECT 1 FROM position_alert
+     WHERE person_id = :person_id AND disabled_at IS NULL AND kind = :kind
+       AND coalesce(chain, '') = coalesce(CAST(:chain AS text), '')
+       AND coalesce(address, '') = coalesce(CAST(:address AS text), '')
+       AND coalesce(token_id, -1) = coalesce(CAST(:token_id AS numeric), -1)
+       AND coalesce(threshold, 0) = coalesce(CAST(:threshold AS numeric), 0)
+       AND coalesce(asset, '') = coalesce(CAST(:asset AS text), '')
+       AND coalesce(direction, '') = coalesce(CAST(:direction AS text), '')
+       AND coalesce(price_level, 0) = coalesce(CAST(:price_level AS numeric), 0)
+   ))
 ON CONFLICT (person_id, kind, (coalesce(chain, '')), (coalesce(address, '')),
              (coalesce(token_id, -1)), (coalesce(threshold, 0)), (coalesce(asset, '')),
              (coalesce(direction, '')), (coalesce(price_level, 0)))

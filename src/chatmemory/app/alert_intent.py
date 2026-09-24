@@ -28,7 +28,17 @@ Four kinds of request, in English and Portuguese:
     vocabulary, nothing else), and a direction or a level: "avisa quando o BTC
     passar de 100k", "alert me when ETH goes above $3,000". A level with no
     direction ("when BTC hits 100k") is left for the proposal to settle from
-    the price now. Checked last, so "my LP on ethereum" stays a range alert.
+    the price now. Checked last, so "my LP on ethereum" stays a range alert,
+    and "ethereum" after "on" or "na" is the chain, never the coin. Gas, fees,
+    dominance and the like are numbers about a coin, not its price, and are
+    not price alerts. The direction is the one nearest before the level, so
+    "if ETH over the next week drops below 2500" is a drop.
+
+A price that already happened is history, not a watch: a past verb ("went",
+"crossed", "passou") or a past date keeps it a question. After "tell me when"
+a change still to come must be named ("hits", "goes", "passar"), and "first"
+or "ever" keeps it a question too -- "tell me when BTC first went above 100k"
+is asking the archive or the model, not setting an alarm.
 
 "Tell me if" and "let me know if" also start plain questions -- "tell me if my
 health factor is ok" is asking for a reading -- so after those a change must
@@ -150,9 +160,12 @@ _ASSET = re.compile(
     r"\b(?:(?P<btc>btc|bitcoin|xbt)|(?P<eth>eth|ether|ethereum|[eé]ter))\b", re.IGNORECASE
 )
 _ABOVE = re.compile(
-    r"\b(?:above|over|exceeds?|surpass(?:es)?|breaks?|tops?|past|higher\s+than|"
+    r"\b(?:above|exceeds?|surpass(?:es)?|breaks?|tops?|higher\s+than|"
     r"more\s+than|rises?|acima|passar|passa|ultrapassar|ultrapassa|subir|sobe|suba|"
-    r"maior\s+(?:que|do\s+que)|mais\s+de)\b|>",
+    r"maior\s+(?:que|do\s+que)|mais\s+de)\b"
+    # "Over" and "past" are directions only right before a level: "if ETH over
+    # the next week drops below 2500" is a drop.
+    r"|\b(?:over|past)(?=\s*(?:US\$|\$)?\s?\d)|>",
     re.IGNORECASE,
 )
 _BELOW_PRICE = re.compile(
@@ -167,6 +180,38 @@ _LEVEL = re.compile(
     re.IGNORECASE,
 )
 _MULTIPLIERS = {"k": 1000, "mil": 1000}
+
+# "Ethereum" after "on" or "na" is the chain, not the coin: "the gas on ethereum".
+_CHAIN_BEFORE = re.compile(r"\b(?:on|in|at|na|no|em)\s+(?:the\s+|a\s+)?$", re.IGNORECASE)
+# Numbers about BTC or ETH that are not its price in dollars.
+_NOT_A_PRICE = re.compile(
+    r"\b(?:gas|gwei|fees?|taxas?|dominance|domin[aâ]ncia|funding|apy|apr|tvl|volume|"
+    r"market\s*cap|supply|hash\s*rate|hashrate|sats?|satoshis?|bps)\b",
+    re.IGNORECASE,
+)
+# A price that already happened: "tell me when BTC first went above 100k",
+# "me diga quando o BTC passou de 100k". Past verbs are never a watch.
+_PAST = re.compile(
+    r"\b(?:was|were|did|went|crossed|reached|dropped|fell|rose|broke|surpassed|exceeded|"
+    r"topped|dipped|touched|passou|chegou|bateu|atingiu|subiu|caiu|ultrapassou|foi|"
+    r"esteve|ficou|era|estava|yesterday|ontem|ano\s+passado|"
+    r"last\s+(?:year|month|week|time)|(?:in|em|during|durante)\s+(?:19|20)\d\d)\b",
+    re.IGNORECASE,
+)
+# After "tell me when/if", words that ask about the past even with a present verb:
+# "tell me if BTC ever hit 100k". An alert verb keeps "the first time" a request.
+_HISTORY = re.compile(
+    r"\b(?:first|ever|primeira\s+vez|alguma\s+vez|nunca|hist[oó]ri\w*|history)\b",
+    re.IGNORECASE,
+)
+# After "tell me when/if", a change still to come: "hits", "goes", "passar".
+# Bare "hit" is left out, since it is as often the past.
+_FUTURE_CHANGE = re.compile(
+    r"\b(?:goes|go|gets|get|falls?|drops?|dips?|rises?|hits|reach(?:es)?|cross(?:es)?|"
+    r"breaks?|moves?|is|will|passar|passe|cair|caia|subir|suba|chegar|chegue|atingir|"
+    r"atinja|bater|bata|ultrapassar|ultrapasse|ficar|fique|estiver|for|baixar|baixe)\b",
+    re.IGNORECASE,
+)
 
 _HEALTH = re.compile(
     r"\b(?:health\s*-?\s*factor|healthfactor|hf|fator\s+de\s+sa[uú]de)\b",
@@ -273,9 +318,22 @@ def _kind(text: str, request: str) -> AlertKind | None:
     leaves = _OUT_OF_RANGE.search(request) or _EDGE.search(request)
     if leaves and _LIQUIDITY.search(text):
         return AlertKind.LP_RANGE
-    if _ASSET.search(request) and (_direction(request) or _level(request)):
-        return AlertKind.PRICE
-    return None
+    return AlertKind.PRICE if _asks_for_price(request) else None
+
+
+def _asks_for_price(request: str) -> bool:
+    """A watch on BTC or ETH crossing a level, not a question about its past.
+
+    "Tell me when" asks about history as often as it asks to be told, so after
+    it a change still to come must be named and no history word may be.
+    """
+    if _asset(request) is None or _NOT_A_PRICE.search(request) or _PAST.search(request):
+        return False
+    if _STRONG_TRIGGER.search(request) is None and (
+        _FUTURE_CHANGE.search(request) is None or _HISTORY.search(request)
+    ):
+        return False
+    return _direction(request) is not None or _level(request) is not None
 
 
 def _trigger(text: str) -> re.Match[str] | None:
@@ -335,26 +393,46 @@ def _edge_percent(request: str) -> Decimal | None:
 
 
 def _price_intent(request: str) -> AlertIntent:
-    asset = _ASSET.search(request)
+    asset = _asset(request)
     ticker = "BTC" if asset is not None and asset.group("btc") else "ETH"
     return AlertIntent(
         AlertKind.PRICE, asset=ticker, direction=_direction(request), level=_level(request)
     )
 
 
+def _asset(request: str) -> re.Match[str] | None:
+    """The first BTC or ETH named as a coin, not "ethereum" named as a chain."""
+    for match in _ASSET.finditer(request):
+        chain = match.group().lower() == "ethereum" and _CHAIN_BEFORE.search(
+            request[: match.start()]
+        )
+        if not chain:
+            return match
+    return None
+
+
 def _direction(request: str) -> PriceDirection | None:
-    """Above or below, whichever the request says first; None for neither."""
-    above, below = _ABOVE.search(request), _BELOW_PRICE.search(request)
-    if above is None or below is None:
-        return PriceDirection.ABOVE if above else PriceDirection.BELOW if below else None
-    return PriceDirection.ABOVE if above.start() < below.start() else PriceDirection.BELOW
+    """Above or below: the word nearest before the level, else the first one."""
+    marks = sorted(
+        [(m.start(), PriceDirection.ABOVE) for m in _ABOVE.finditer(request)]
+        + [(m.start(), PriceDirection.BELOW) for m in _BELOW_PRICE.finditer(request)],
+        key=lambda mark: mark[0],
+    )
+    if not marks:
+        return None
+    level = _level_match(request)
+    before = [d for start, d in marks if level is not None and start < level.start()]
+    return before[-1] if before else marks[0][1]
+
+
+def _level_match(request: str) -> re.Match[str] | None:
+    asset = _asset(request)
+    return _LEVEL.search(request, asset.end() if asset is not None else 0)
 
 
 def _level(request: str) -> Decimal | None:
     """The first level after the asset, in dollars: "100k" is 100000."""
-    asset = _ASSET.search(request)
-    after = request[asset.end() :] if asset is not None else request
-    match = _LEVEL.search(after)
+    match = _level_match(request)
     if match is None:
         return None
     amount = parse_amount(match.group("number"))

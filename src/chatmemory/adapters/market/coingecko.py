@@ -17,6 +17,7 @@ the rate limit and the client, so it is this provider, not a second one.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -118,11 +119,14 @@ class CoinGeckoProvider(MarketProvider):
         nothing anybody wrote, and cannot reveal what anybody watches. A
         fresh cache entry answers without a request; an expired one is never
         returned, so this raises `ProviderUnavailable` rather than hand an
-        alert a stale price.
+        alert a stale price. One coin missing from a response is not every
+        coin missing: the ones it did carry are cached by `fetch` and returned.
         """
         missing = [a for a in sorted(COIN_IDS) if self._cache.get((a,)) is None]
         if missing:
-            await self._refresh(missing[0])
+            # Whatever the response did carry is in the cache either way.
+            with contextlib.suppress(ProviderUnavailable):
+                await self._refresh(missing[0])
         quotes = {a: q for a in sorted(COIN_IDS) if (q := self._cache.get((a,))) is not None}
         if not quotes:
             raise ProviderUnavailable("coingecko returned no usable price")

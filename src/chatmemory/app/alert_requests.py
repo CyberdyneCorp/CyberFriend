@@ -462,7 +462,8 @@ class AlertRequests:
             return AlertReply(refused)
         active = [a for a in await self._service.list_for(person) if a.active]
         room = self._cap - len(active)
-        if room <= 0:
+        # An edge distance on a position already watched needs no new slot.
+        if room <= 0 and intent.edge_percent is None:
             return AlertReply(text("at_cap", language, cap=self._cap))
         source = AddressSource.TYPED if intent.address else AddressSource.SAVED
         request = _Request(person, intent, address, source, language, direct)
@@ -486,16 +487,21 @@ class AlertRequests:
         found = _proposed(request, read)
         if not found:
             return AlertReply(_nothing_found(request, read))
-        taken = {_key(a) for a in active}
-        fresh = [p for p in found if _key(p.alert) not in taken]
+        fresh = [p for p in found if not _covered(p.alert, active)]
         if not fresh:
             return AlertReply(text("already", request.language))
-        kept = fresh[:room]
+        # Adding an edge distance to a watched position takes no slot.
+        watched = {_watch(a) for a in active}
+        new = [p for p in fresh if _watch(p.alert) not in watched]
+        admitted = new[: max(room, 0)]
+        kept = [p for p in fresh if _watch(p.alert) in watched or p in admitted]
+        if not kept:
+            return AlertReply(text("at_cap", request.language, cap=self._cap))
         notes = _notes(
             request,
             read,
             duplicates=len(found) - len(fresh),
-            cut=len(fresh) > len(kept),
+            cut=len(new) > len(admitted),
             kept=len(kept),
             cap=self._cap,
         )
@@ -533,7 +539,7 @@ class AlertRequests:
         if quote is None:
             return AlertReply(text("price_unreadable", language, asset=intent.asset))
         proposed = _price(person, intent.level, intent.direction, quote, language)
-        if _key(proposed.alert) in {_key(a) for a in active}:
+        if _covered(proposed.alert, active):
             return AlertReply(text("already", language))
         lines = [text("price_heading", language), proposed.line, ""]
         lines.append(text("price_footer", language, minutes=self._minutes))
@@ -603,17 +609,25 @@ def _edge_refusal(edge: Decimal | None, language: AlertLanguage) -> str | None:
     return text("edge_out_of_bounds", language, low=low, high=high, value=value)
 
 
-def _key(alert: NewAlert | PositionAlert) -> tuple[object, ...]:
-    """What makes two alerts the same watch, as the store's unique index says.
-
-    With one difference: the edge distance counts here, so asking for a
-    warning near the edge of a position already watched is offered, and the
-    store then adds the distance to the existing alert rather than a second.
-    """
+def _watch(alert: NewAlert | PositionAlert) -> tuple[object, ...]:
+    """What makes two alerts the same watch, as the store's unique index says."""
     token = alert.lp.token_id if alert.lp is not None else -1
     address = (alert.address or "").lower()
-    extra = (alert.threshold or 0, alert.edge_percent, alert.price)
-    return (alert.kind, alert.chain, address, token, *extra)
+    return (alert.kind, alert.chain, address, token, alert.threshold or 0, alert.price)
+
+
+def _covered(alert: NewAlert, active: Sequence[PositionAlert]) -> bool:
+    """An active alert already does what this one would.
+
+    The edge distance counts only when this one has one: asking for a warning
+    near the edge of a position already watched is offered, and the store then
+    adds the distance to the existing alert; a plain range request for a
+    position with an edge warning is already covered by it.
+    """
+    same = [a for a in active if _watch(a) == _watch(alert)]
+    if alert.edge_percent is None:
+        return bool(same)
+    return any(a.edge_percent == alert.edge_percent for a in same)
 
 
 def _proposed(request: _Request, read: TargetsRead) -> list[_Proposed]:

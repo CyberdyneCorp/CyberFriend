@@ -121,6 +121,20 @@ async def test_a_near_edge_request_adds_its_distance_to_the_watched_position(
     assert await store.create(lp(210171), NOW) is AlertRefusal.DUPLICATE
 
 
+async def test_adding_an_edge_distance_takes_no_slot_at_the_cap(clean: AsyncEngine) -> None:
+    await seed_person(clean, LEO, "Leo")
+    store = PostgresAlertStore(clean, cap=2)
+    plain = await created(store, lp(210171))
+    await created(store, price())
+
+    upgraded = await created(store, lp(210171, edge_percent=Decimal(3)))
+
+    assert upgraded.id == plain.id and upgraded.edge_percent == Decimal(3)
+    assert await store.create(lp(1, edge_percent=Decimal(3)), NOW) is AlertRefusal.AT_CAP
+    assert await store.create(lp(2), NOW) is AlertRefusal.AT_CAP
+    assert await count(clean) == 2
+
+
 @pytest.mark.parametrize(
     ("columns", "values"),
     [

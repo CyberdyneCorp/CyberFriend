@@ -19,6 +19,20 @@ direction SHALL be taken as the side the price is not on when the alert is made.
 - WHEN a person asks "what is the BTC price?" or "quanto está o ETH?"
 - THEN no alert SHALL be offered
 
+#### Scenario: A question about a past price
+- WHEN a person asks "tell me when BTC first went above 100k", "can you tell me
+  when bitcoin crossed 100k?" or "me diga quando o BTC passou de 100k"
+- THEN no alert SHALL be offered and the question SHALL be answered as one
+
+#### Scenario: A number that is not the price
+- WHEN a person asks to be told when the gas on ethereum drops below 20 gwei,
+  or when BTC dominance goes above 60%
+- THEN no price alert SHALL be offered
+
+#### Scenario: The direction nearest the level
+- WHEN a person writes "alert me if ETH over the next week drops below 2500"
+- THEN the alert offered SHALL be for ETH below US$ 2,500
+
 #### Scenario: No level
 - WHEN a person asks to be told when BTC rises, with no level
 - THEN the reply SHALL ask for the level and SHALL read nothing
@@ -53,6 +67,11 @@ and send nothing.
 - WHEN the price source does not answer
 - THEN each price alert SHALL count a failed check and no message SHALL be sent
 
+#### Scenario: One coin missing from the answer
+- WHEN the price source answers with ETH but no usable BTC price
+- THEN the ETH alerts SHALL be checked and only the BTC alerts SHALL count a
+  failed check
+
 ### Requirement: A range alert can warn near its edge
 
 A range alert MAY carry a distance between 1% and 50% from the range's edge.
@@ -61,7 +80,9 @@ nearer bound. The alert SHALL message once when a position in range comes
 within that distance, SHALL re-arm silently one percentage point further back,
 and SHALL still message on leaving the range and coming back. Asking for a
 distance on a position already watched SHALL add it to that alert rather than
-create a second.
+create a second, and SHALL NOT need a free slot under the cap. A plain range
+request for a position that already has a near-edge warning SHALL be answered
+as already watched.
 
 #### Scenario: The confirmation shows the distance
 - WHEN a person asks "warn me when my LP is within 3% of the range edge" and
@@ -72,6 +93,11 @@ create a second.
 - WHEN a position with a 5% warning reads within 5% of an edge on two
   consecutive checks
 - THEN one message SHALL be sent naming the edge and the distance
+
+#### Scenario: A distance on a watched position at the cap
+- WHEN a person with ten active alerts, one of them a range alert on #210171,
+  asks for a 3% warning on #210171
+- THEN the warning SHALL be offered and, on Confirm, added to that alert
 
 #### Scenario: A distance out of bounds
 - WHEN a person asks for a warning at 60% from the edge

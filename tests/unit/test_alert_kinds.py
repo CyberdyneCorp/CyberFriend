@@ -147,10 +147,46 @@ def test_a_plain_range_request_has_no_edge_distance() -> None:
         "o que disseram sobre avisar quando o ETH cair abaixo de 2500?",
         # An alert verb, no asset.
         "me avisa quando o deploy passar de 100 testes",
+        # History, not a watch, even after "tell me when".
+        "tell me when BTC first went above 100k",
+        "can you tell me when bitcoin crossed 100k?",
+        "tell me if BTC ever hit 100k",
+        "tell me when ETH was above 4000 in 2021",
+        "tell me when ETH reached 4000",
+        "tell me when BTC hit 100k",
+        "me diga quando o BTC passou de 100k",
+        "me diz quando o ETH chegou a 4 mil pela primeira vez",
+        "me fala se o bitcoin alguma vez passar de 100k",
+        # A number about a coin that is not its price in dollars.
+        "remind me when the gas on ethereum drops below 20 gwei",
+        "alert me when the ETH gas price goes over 50",
+        "alert me when BTC dominance goes above 60%",
+        # Ethereum the chain.
+        "alert me when my pool on ethereum goes above 3000",
     ],
 )
 def test_price_and_edge_questions_are_not_requests(text: str) -> None:
     assert alert_intent(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "asset", "direction", "level"),
+    [
+        ("tell me when ETH is above 4000", "ETH", ABOVE, "4000"),
+        ("me diga quando o BTC passar de 100k", "BTC", ABOVE, "100000"),
+        # The direction nearest the level, not the first word that could be one.
+        ("alert me if ETH over the next week drops below 2500", "ETH", BELOW, "2500"),
+        ("alert me when ETH goes over 3000", "ETH", ABOVE, "3000"),
+        ("avisa quando o preço do ethereum passar de 4 mil", "ETH", ABOVE, "4000"),
+    ],
+)
+def test_a_change_still_to_come_is_a_price_request(
+    text: str, asset: str, direction: PriceDirection, level: str
+) -> None:
+    found = alert_intent(text)
+    assert found == AlertIntent(
+        AlertKind.PRICE, asset=asset, direction=direction, level=Decimal(level)
+    )
 
 
 def test_ethereum_the_chain_keeps_a_range_request_a_range_request() -> None:
@@ -633,6 +669,54 @@ async def test_an_edge_warning_is_offered_on_a_position_already_watched() -> Non
     assert "#210171 on Arbitrum - in range" in listing
 
 
+def watched_arbitrum(**changes: Any) -> NewAlert:
+    alert = NewAlert(
+        person=LEO,
+        kind=AlertKind.LP_RANGE,
+        chain="arbitrum",
+        address=SAVED,
+        address_source=None,
+        language=EN,
+        lp=V4,
+        state=AlertState.IN_RANGE,
+    )
+    return replace(alert, **changes)
+
+
+async def test_a_plain_range_request_is_covered_by_an_edge_warning() -> None:
+    store = Store()
+    await store.create(watched_arbitrum(edge_percent=Decimal(5)), NOW)
+    requests, _ = flow(None, TargetsRead(lp=(arbitrum_candidate(),)), store)
+
+    reply = await requests.propose(
+        LEO, AlertIntent(AlertKind.LP_RANGE), saved_wallet=SAVED, language=EN, direct=True
+    )
+
+    assert reply.proposal is None and reply.text.startswith("I'm already watching")
+
+
+async def test_an_edge_warning_on_a_watched_position_is_offered_at_the_cap() -> None:
+    """It adds to an alert rather than taking a slot; a new position still needs one."""
+    store = Store(cap=1)
+    await store.create(watched_arbitrum(), NOW)
+
+    def at_cap(candidate: LpCandidate) -> AlertRequests:
+        service = AlertService(store)  # type: ignore[arg-type]
+        return AlertRequests(service, Chain(TargetsRead(lp=(candidate,))), cap=1)
+
+    edge = AlertIntent(AlertKind.LP_RANGE, edge_percent=Decimal(3))
+    reply = await at_cap(arbitrum_candidate()).propose(
+        LEO, edge, saved_wallet=SAVED, language=EN, direct=True
+    )
+    assert reply.proposal is not None
+    [alert] = reply.proposal.alerts
+    assert alert.edge_percent == Decimal(3) and alert.lp == V4
+
+    other = replace(arbitrum_candidate(), target=replace(V4, token_id=999))
+    refused = await at_cap(other).propose(LEO, edge, saved_wallet=SAVED, language=EN, direct=True)
+    assert refused.proposal is None and refused.text.startswith("You already have 1 alerts")
+
+
 # --- reading prices ---------------------------------------------------------------
 
 
@@ -690,6 +774,19 @@ async def test_no_price_is_a_failed_read_for_every_price_alert() -> None:
     provider, _ = coingecko([{}])
     readings = await AlertPrices(provider).observe([price_alert(AlertState.BELOW)])
     assert isinstance(readings[21], ReadFailure)
+
+
+async def test_a_coin_missing_from_the_response_leaves_the_other_priced() -> None:
+    provider, seen = coingecko([{"ethereum": QUOTES["ethereum"]}])
+    eth = replace(
+        price_alert(AlertState.ABOVE, id=22), price=PriceTarget("ETH", BELOW, Decimal(2500))
+    )
+
+    readings = await AlertPrices(provider).observe([price_alert(AlertState.BELOW), eth])
+
+    assert len(seen) == 1
+    assert isinstance(readings[21], ReadFailure)
+    assert isinstance(readings[22], PriceObservation) and readings[22].price == Decimal("2480.5")
 
 
 async def test_the_sweep_reads_prices_apart_from_the_chain() -> None:
