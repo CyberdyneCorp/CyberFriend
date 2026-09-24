@@ -122,3 +122,25 @@ def test_portuguese_possessives_agree_with_the_noun() -> None:
     assert possessive(FactKind.ETH_WALLET, Language.PORTUGUESE) == "sua carteira Ethereum"
     assert possessive(FactKind.PHONE, Language.PORTUGUESE) == "seu telefone"
     assert possessive(FactKind.PHONE, Language.ENGLISH) == "your phone number"
+
+
+@pytest.mark.parametrize(
+    ("saved", "language"),
+    [("Portuguese", Language.PORTUGUESE), ("português", Language.PORTUGUESE),
+     ("pt-BR", Language.PORTUGUESE), ("English", Language.ENGLISH), ("Klingon", Language.UNKNOWN),
+     (None, Language.UNKNOWN)],
+)
+def test_a_saved_language_preference_is_read_as_a_language(
+    saved: str | None, language: Language
+) -> None:
+    """A bare mention has no words to detect; the saved preference decides."""
+    from chatmemory.app.language import language_named
+
+    assert language_named(saved) is language
+
+
+def test_a_portuguese_request_with_only_articles_is_portuguese() -> None:
+    """ "adicione um servidor MCP de issues" was UNKNOWN, so the MCP refusal
+    reached a Portuguese speaker in English."""
+    assert detect("adicione um servidor MCP de issues") is Language.PORTUGUESE
+    assert detect("de facto standard for the index") is Language.ENGLISH

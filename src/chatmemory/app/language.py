@@ -29,6 +29,9 @@ _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 _PORTUGUESE_LETTERS = frozenset("ãõçáéíóúâêôàü")
 
 _PORTUGUESE = frozenset({
+    # Articles and prepositions: short, but no English word shares them, and
+    # a request like "adicione um servidor MCP de issues" has nothing else.
+    "um", "de", "da", "do", "das", "dos",
     "que", "qual", "quais", "como", "quando", "onde", "porque", "porquê",
     "voce", "você", "vocês", "voces", "nao", "não", "sim", "para", "pra",
     "com", "sem", "uma", "uns", "umas", "sao", "são", "esta", "está",
@@ -36,7 +39,7 @@ _PORTUGUESE = frozenset({
     "consegue", "tem", "tinha", "foi", "seja", "seu", "sua", "seus", "suas",
     "meu", "minha", "isso", "isto", "aquilo", "mais", "menos", "muito",
     "tambem", "também", "agora", "hoje", "ontem", "amanha", "amanhã",
-    "aqui", "ali", "sobre", "pelo", "pela", "dos", "das", "nos", "nas",
+    "aqui", "ali", "sobre", "pelo", "pela", "nos", "nas",
     "ele", "ela", "eles", "elas", "nosso", "nossa", "obrigado", "obrigada",
     "ola", "olá", "bom", "boa", "dia", "tarde", "noite", "favor",
     "funcionalidades", "comandos", "ferramentas", "carteira", "saldo",
@@ -90,5 +93,21 @@ def detect(text: str) -> Language:
     if portuguese > english:
         return Language.PORTUGUESE
     if english > portuguese:
+        return Language.ENGLISH
+    return Language.UNKNOWN
+
+
+def language_named(value: str | None) -> Language:
+    """The language a saved preference names ("Portuguese", "português", "pt-BR").
+
+    UNKNOWN for anything else, which callers answer in English: a preference
+    this module cannot place is not a reason to guess.
+    """
+    if not value:
+        return Language.UNKNOWN
+    folded = value.strip().casefold()
+    if folded.startswith(("port", "pt")):
+        return Language.PORTUGUESE
+    if folded.startswith(("eng", "en", "ingl")):
         return Language.ENGLISH
     return Language.UNKNOWN

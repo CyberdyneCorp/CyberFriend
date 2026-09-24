@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from chatmemory.adapters.discord.bot import CAPABILITIES
+from chatmemory.adapters.discord.bot import CAPABILITIES_PT
 from chatmemory.app.catchup import NAME_THE_CHANNEL
 from chatmemory.app.localise import PORTUGUESE
 from chatmemory.app.reasoning.contract import NOTHING_FOUND
@@ -56,7 +56,6 @@ async def test_a_corpus_miss_is_answered_in_portuguese(bot: E2EBot) -> None:
     turn.assert_language("pt")
 
 
-@open_item("adapters.discord.bot.CAPABILITIES")
 async def test_a_bare_mention_from_a_portuguese_speaker(bot: E2EBot) -> None:
     ana = bot.person("Ana")
     await bot.dm(ana).say("fale comigo em português")
@@ -66,7 +65,7 @@ async def test_a_bare_mention_from_a_portuguese_speaker(bot: E2EBot) -> None:
     turn = await bot.channel("general", ana).mention_only()
 
     precondition(bool(turn.sent) and not turn.searched, "a bare mention no longer replies")
-    precondition(turn.text.strip() == CAPABILITIES.strip(), f"not CAPABILITIES: {turn.text!r}")
+    assert turn.text.strip() == CAPABILITIES_PT.strip()
     turn.assert_language("pt")
 
 
@@ -88,14 +87,12 @@ Say = Callable[[E2EBot, str], Awaitable[Turn]]
             _say_in_dm,
             "adicione um servidor MCP de issues",
             MCP_CHANGE_REFUSAL,
-            marks=open_item("app.reasoning.service.MCP_CHANGE_REFUSAL"),
             id="mcp-change-refusal",
         ),
         pytest.param(
             _say_in_general,
             "resuma o que perdi em #inexistente",
             NAME_THE_CHANNEL,
-            marks=open_item("app.catchup.NAME_THE_CHANNEL"),
             id="catch-up-refusal",
         ),
     ],
@@ -105,8 +102,6 @@ async def test_a_fixed_refusal_to_a_portuguese_question(
 ) -> None:
     turn = await say(bot, text)
 
-    precondition(
-        turn.edge() == "NONE" and turn.text.strip() == reply.strip(),
-        f"{text!r} no longer gets the reply its xfail names: {turn}",
-    )
+    precondition(turn.edge() == "NONE", f"{text!r} no longer gets a fixed reply: {turn}")
+    assert turn.text.strip() == PORTUGUESE[reply].strip()
     turn.assert_language("pt")
