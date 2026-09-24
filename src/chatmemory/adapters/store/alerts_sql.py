@@ -8,8 +8,13 @@ evaluation needs the stored state, and reading it in the same statement is
 what makes the claim and the state it acts on the same snapshot.
 
 `CREATE_WITHIN_CAP` makes the per-person cap a predicate on the insert, as for
-scheduled tasks. Only active alerts count: one stopped by a closed position is
-kept for the listing, and should not use up a slot.
+scheduled tasks. Only active alerts count, of every kind together: one stopped
+by a closed position is kept for the listing, and should not use up a slot.
+
+A range alert asked for again with an edge distance is the same watch with one
+more warning, not a second watch: two alerts on one position would send two
+messages when it leaves its range. So that one conflict updates the existing
+alert's edge distance and baseline instead of being skipped.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ WHERE platform = :platform AND platform_user_id = :platform_user_id
 _COLUMNS = """
 id, person_id, kind, chain, address, address_source, protocol, token_id, pool_ref,
 token0_symbol, token1_symbol, token0_decimals, token1_decimals, fee, threshold,
+asset, direction, price_level, edge_percent,
 notify_return, language, state, state_since, pending_state, pending_count,
 last_value, consecutive_failures, created_at, next_check_at, last_checked_at,
 last_fired_at, disabled_at, disabled_reason
@@ -38,22 +44,33 @@ CREATE_WITHIN_CAP = text(f"""
 INSERT INTO position_alert (
     person_id, kind, chain, address, address_source, protocol, token_id, pool_ref,
     token0_symbol, token1_symbol, token0_decimals, token1_decimals, fee, threshold,
+    asset, direction, price_level, edge_percent,
     notify_return, language, state, last_value, next_check_at
 )
 SELECT :person_id, :kind, :chain, :address, :address_source, :protocol,
        CAST(:token_id AS numeric), :pool_ref, :token0_symbol, :token1_symbol,
        CAST(:token0_decimals AS smallint), CAST(:token1_decimals AS smallint),
        CAST(:fee AS integer), CAST(:threshold AS numeric),
+       :asset, :direction, CAST(:price_level AS numeric), CAST(:edge_percent AS numeric),
        CAST(:notify_return AS boolean), :language, :state,
        CAST(:last_value AS numeric), CAST(:next_check_at AS timestamptz)
 WHERE (
     SELECT count(*) FROM position_alert
      WHERE person_id = :person_id AND disabled_at IS NULL
 ) < :cap
-ON CONFLICT (person_id, kind, chain, address, (coalesce(token_id, -1)),
-             (coalesce(threshold, 0)))
+ON CONFLICT (person_id, kind, (coalesce(chain, '')), (coalesce(address, '')),
+             (coalesce(token_id, -1)), (coalesce(threshold, 0)), (coalesce(asset, '')),
+             (coalesce(direction, '')), (coalesce(price_level, 0)))
    WHERE disabled_at IS NULL
-DO NOTHING
+DO UPDATE SET edge_percent = EXCLUDED.edge_percent,
+              state = EXCLUDED.state,
+              state_since = now(),
+              pending_state = NULL,
+              pending_count = 0,
+              last_value = EXCLUDED.last_value,
+              language = EXCLUDED.language
+    WHERE EXCLUDED.edge_percent IS NOT NULL
+      AND position_alert.edge_percent IS DISTINCT FROM EXCLUDED.edge_percent
 RETURNING {_COLUMNS}
 """)
 

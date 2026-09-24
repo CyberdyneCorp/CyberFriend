@@ -7,10 +7,16 @@ rather than by when we happened to ask.
 The instrument vocabulary is the ticker a person uses ("ETH"); CoinGecko
 wants its own coin id ("ethereum"). The mapping is a constant here, so what
 leaves is still a function of a closed-set member and nothing else.
+
+`latest` is the one way in that is not a tool call: the price-alert sweep has
+no asker, so no clearance, and asks for every coin at once. It sends the very
+request a tool call sends -- a constant, see `fetch` -- and shares the cache,
+the rate limit and the client, so it is this provider, not a second one.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -103,6 +109,32 @@ class CoinGeckoProvider(MarketProvider):
 
     def check_arguments(self, arguments: Mapping[str, object]) -> ArgumentCheck:
         return single_member(arguments, ARG_ASSET, CRYPTO_ASSETS)
+
+    async def latest(self) -> Mapping[str, Quote]:
+        """Every supported coin's fresh quote, by ticker, for the alert sweep.
+
+        Not through `call_tool`, so not through the egress guard, for the
+        reason `adapters.chain.prices` gives: the request is constant, carries
+        nothing anybody wrote, and cannot reveal what anybody watches. A
+        fresh cache entry answers without a request; an expired one is never
+        returned, so this raises `ProviderUnavailable` rather than hand an
+        alert a stale price.
+        """
+        missing = [a for a in sorted(COIN_IDS) if self._cache.get((a,)) is None]
+        if missing:
+            await self._refresh(missing[0])
+        quotes = {a: q for a in sorted(COIN_IDS) if (q := self._cache.get((a,))) is not None}
+        if not quotes:
+            raise ProviderUnavailable("coingecko returned no usable price")
+        return quotes
+
+    async def _refresh(self, asset: str) -> None:
+        """One request, which fills the cache for every coin it carries."""
+        if not await self._limiter.acquire():
+            raise ProviderUnavailable("coingecko rate limited")
+        async with asyncio.timeout(self._timeout):
+            quote = await self._fetch_with_client(Lookup(terms=(asset,)))
+        self._cache.put((asset,), quote)
 
     async def fetch(self, lookup: Lookup, client: httpx.AsyncClient) -> Quote:
         (asset,) = lookup.terms

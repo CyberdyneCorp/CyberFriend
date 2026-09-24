@@ -28,8 +28,8 @@ import discord
 import structlog
 
 from chatmemory.adapters.discord.views import RequesterOnlyView
-from chatmemory.app.alert_requests import AlertProposal, target_label
-from chatmemory.app.alerts import number
+from chatmemory.app.alert_requests import AlertProposal, alert_label
+from chatmemory.app.alerts import dollars, number
 from chatmemory.ports.alerts import (
     AlertKind,
     AlertLanguage,
@@ -64,7 +64,8 @@ _WORDS: dict[AlertLanguage, dict[str, str]] = {
         ),
         "none": (
             "You have no alerts. Ask me, for example: `tell me when my LP goes out of "
-            "range` or `alert me if my health factor drops below 1.3`."
+            "range`, `warn me when my LP is within 5% of the range edge`, `alert me if "
+            "my health factor drops below 1.3` or `alert me when BTC goes above 100k`."
         ),
         "heading": "**Your alerts ({count}):**",
         "since": "since",
@@ -79,6 +80,7 @@ _WORDS: dict[AlertLanguage, dict[str, str]] = {
             "I don't have an alert with that number for you. `/alert list` shows yours."
         ),
         "hf": "HF {value}",
+        "now": "now {value}",
     },
     PT: {
         "confirm": "Confirmar",
@@ -94,7 +96,9 @@ _WORDS: dict[AlertLanguage, dict[str, str]] = {
         ),
         "none": (
             "Você não tem alertas. Me peça, por exemplo: `me avise quando minha posição "
-            "sair da faixa` ou `me avisa se o health factor cair abaixo de 1,3`."
+            "sair da faixa`, `me avise quando minha posição estiver a 3% da borda`, "
+            "`me avisa se o health factor cair abaixo de 1,3` ou `me avisa quando o BTC "
+            "passar de 100k`."
         ),
         "heading": "**Seus alertas ({count}):**",
         "since": "desde",
@@ -109,6 +113,7 @@ _WORDS: dict[AlertLanguage, dict[str, str]] = {
             "Não tenho um alerta com esse número para você. `/alert list` mostra os seus."
         ),
         "hf": "HF {value}",
+        "now": "agora {value}",
     },
 }
 
@@ -116,22 +121,29 @@ _STATES: dict[AlertLanguage, dict[AlertState, str]] = {
     EN: {
         AlertState.UNKNOWN: "not read yet",
         AlertState.IN_RANGE: "in range",
+        AlertState.NEAR_EDGE: "near the range edge",
         AlertState.OUT_OF_RANGE: "out of range",
         AlertState.CLOSED: "closed",
         AlertState.OK: "above the limit",
         AlertState.BELOW: "below the limit",
         AlertState.NO_DEBT: "no debt",
+        AlertState.ABOVE: "above the level",
     },
     PT: {
         AlertState.UNKNOWN: "ainda não lido",
         AlertState.IN_RANGE: "dentro da faixa",
+        AlertState.NEAR_EDGE: "perto da borda da faixa",
         AlertState.OUT_OF_RANGE: "fora da faixa",
         AlertState.CLOSED: "fechada",
         AlertState.OK: "acima do limite",
         AlertState.BELOW: "abaixo do limite",
         AlertState.NO_DEBT: "sem dívida",
+        AlertState.ABOVE: "acima do nível",
     },
 }
+
+_PRICE_BELOW = {EN: "below the level", PT: "abaixo do nível"}
+"""A price alert's low side: "below the limit" is the health factor's words."""
 
 _REASONS: dict[AlertLanguage, dict[str, str]] = {
     PT: {
@@ -285,9 +297,21 @@ def _when(moment: datetime | None) -> str:
 
 def _state(alert: PositionAlert, language: AlertLanguage) -> str:
     state = _STATES[language][alert.state]
-    if alert.kind is AlertKind.AAVE_HEALTH and alert.last_value is not None:
-        state += f", {word('hf', language, value=number(alert.last_value, language))}"
+    if alert.kind is AlertKind.PRICE and alert.state is AlertState.BELOW:
+        state = _PRICE_BELOW[language]
+    state += _reading(alert, language)
     return f"{state} {word('since', language)} {_when(alert.state_since)}"
+
+
+def _reading(alert: PositionAlert, language: AlertLanguage) -> str:
+    """The last figure read, where it says more than the state: HF, or the price."""
+    if alert.last_value is None:
+        return ""
+    if alert.kind is AlertKind.AAVE_HEALTH:
+        return f", {word('hf', language, value=number(alert.last_value, language))}"
+    if alert.kind is AlertKind.PRICE:
+        return f", {word('now', language, value=dollars(alert.last_value, language))}"
+    return ""
 
 
 def _status(alert: PositionAlert, language: AlertLanguage) -> str:
@@ -312,7 +336,7 @@ def alert_listing(alerts: Sequence[PositionAlert], language: AlertLanguage) -> s
         return word("none", language)
     lines = [word("heading", language, count=len(alerts))]
     for alert in alerts:
-        label = target_label(alert.kind, alert.chain, alert.lp, alert.threshold, language)
+        label = alert_label(alert, language)
         lines.append(f"**{alert.id}** - {label} - {_state(alert, language)}")
         lines.append(f"  {_status(alert, language)}")
     lines.append(word("tail", language))
