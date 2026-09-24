@@ -58,7 +58,8 @@ a second way into the corpus: `_produce` below swaps which collaborator
 writes the answer, and everything around it -- the viewer, the audience, the
 delivery guard, the remembered turn -- is the same code every other question
 goes through. See `app.catchup` for why the channel bound is a viewer and not
-a query field.
+a query field. "What did Ana say about X last week" is the same kind of
+swap: `app.said_by` pins the author and the span, under the same viewer.
 """
 
 from __future__ import annotations
@@ -99,6 +100,7 @@ from chatmemory.app.facts import (
 )
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
+from chatmemory.app.said_by import SAID_BY, SaidByService
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.chain import is_address, named_by_suffix, suffixes_named
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
@@ -288,6 +290,7 @@ class AskService:
         facts: PersonalFactsService | None = None,
         catchup: CatchUpService | None = None,
         alerts: AlertRequests | None = None,
+        said_by: SaidByService | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
@@ -310,6 +313,11 @@ class AskService:
         # corpus for those words -- a worse answer, never a wider one, since
         # that search is scoped by the same viewer this would have been.
         self._catchup = catchup
+        # Optional like catch-up, and proven wired the same way:
+        # `test_said_by_wiring` reads the chain from the entrypoint down.
+        # Without it "what did Ana say about X" is answered by the ordinary
+        # search -- everybody's words about X, under the same viewer.
+        self._said_by = said_by
         # Optional, and absent unless alerts are switched on with an Infura
         # key. An alert request is still recognised without it, and answered
         # that alerts are not available here -- never searched for.
@@ -473,22 +481,15 @@ class AskService:
         and remembered as a turn. A deployment that wires no catch-up service
         answers the question by searching the corpus, exactly as before.
 
-        No withheld-evidence probe for a catch-up, and that is not an
-        omission. The probe asks "is there more about this question in
+        No withheld-evidence probe for a catch-up or a said-by answer, and
+        that is not an omission. The probe asks "is there more about this question in
         channels the room cannot read", and for a catch-up the answer is a
         statement about the one channel named -- which is the very thing the
         refusal above declines to disclose.
         """
-        catch_up = catch_up_request(request.text)
-        if catch_up is not None and self._catchup is not None:
-            log.info(
-                "ask.catch_up",
-                asker=str(request.asker),
-                period_named=catch_up.period_named,
-                named_a_channel=catch_up.named_a_channel,
-            )
-            summary = await self._catchup.summarise(question, catch_up, request.destination)
-            return summary, frozenset()
+        routed = await self._routed(request, question)
+        if routed is not None:
+            return routed, frozenset()
         # Concurrent, and not merely for speed. Run after the answer, the
         # probe would add its latency only for askers who have channels the
         # room does not -- which makes "this person can see more than you" a
@@ -498,6 +499,35 @@ class AskService:
             self._withheld_channels(viewer, audience, request.text),
         )
         return answer, withheld
+
+    async def _routed(self, request: AskRequest, question: Question) -> Answer | None:
+        """A catch-up or a "what did X say", or None for the ordinary answer.
+
+        Catch-up first: "o que eu perdi" is a catch-up whatever else it says.
+        A said-by question whose person resolves to nobody falls through, so
+        it is answered exactly as it was before the route existed.
+        """
+        catch_up = catch_up_request(request.text)
+        if catch_up is not None and self._catchup is not None:
+            log.info(
+                "ask.catch_up",
+                asker=str(request.asker),
+                period_named=catch_up.period_named,
+                named_a_channel=catch_up.named_a_channel,
+            )
+            return await self._catchup.summarise(question, catch_up, request.destination)
+        said = self._said_by.recognise(request.text) if self._said_by is not None else None
+        if said is None or self._said_by is None:
+            return None
+        outcome = await self._said_by.answer(question, said)
+        log.info(
+            "ask.said_by",
+            route=SAID_BY,
+            asker=str(request.asker),
+            outcome=outcome.decision.outcome,
+            detail=outcome.decision.detail,
+        )
+        return outcome.answer
 
     async def _alert_turn(
         self,

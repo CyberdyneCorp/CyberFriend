@@ -333,6 +333,32 @@ class E2EBot:
             self.corpus[body] = message_id
         await EmbeddingWorker(store, self.embeddings, batch_size=len(windows) or 1).run_once()
 
+    async def seed_conversation(
+        self, name: str, lines: Sequence[tuple[PersonRef, str, str, datetime]]
+    ) -> list[int]:
+        """One archived window of several people's (author, name, body, at) lines.
+
+        Rendered as windowing renders it, so the window text holds every
+        author's words -- which is what an author-scoped answer must not show.
+        Returns the message ids, in order, and adds each body to `corpus`.
+        """
+        store = PostgresStore(self.engine)
+        channel = ChannelRef(PLATFORM, self.discord.channel(name).id)
+        messages = [
+            Message(snowflake(), channel, who, body, at, author_display=display)
+            for who, display, body, at in lines
+        ]
+        await store.upsert_messages(messages)
+        rendered = "\n".join(f"{m.author_display}: {m.content}" for m in messages)
+        ids = tuple(m.platform_message_id for m in messages)
+        await store.replace_windows(
+            channel,
+            [Window(channel, ids, rendered, messages[0].created_at, messages[-1].created_at)],
+        )
+        self.corpus.update({m.content: m.platform_message_id for m in messages})
+        await EmbeddingWorker(store, self.embeddings, batch_size=8).run_once()
+        return list(ids)
+
     async def facts_of(self, who: discord.Member) -> dict[str, str]:
         """The person's stored facts, by SQL: one value per kind (for a wallet
         kind with several, any one of them -- use `fact_rows`)."""

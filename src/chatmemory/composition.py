@@ -59,6 +59,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import structlog
@@ -179,6 +180,7 @@ from chatmemory.app.reasoning.retrieval import (
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.stages import ModelSynthesizer, ModelToolProposer
 from chatmemory.app.reasoning.tracing import OptOutAwareTracer, TraceWithdrawal
+from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import (
     ScheduledTaskRunner,
     ScheduleService,
@@ -1201,6 +1203,29 @@ def build_catch_up(
     )
 
 
+def build_said_by(
+    settings: Settings,
+    search: SearchBackend,
+    chat: ChatModel,
+    clock: Clock = utc_now,
+) -> SaidByService:
+    """"What did Ana say about X last week", over the answer stack's backend.
+
+    Built like `build_catch_up`: a `CorpusRetrieval` and a `ModelSynthesizer`
+    over the search backend and chat handle the process already holds, plus
+    that same backend as the name lookup. Every one of them takes the viewer
+    the service narrows to. `clock` and `ANSWER_TIMEZONE` decide what "ontem"
+    and "semana passada" mean.
+    """
+    return SaidByService(
+        CorpusRetrieval(search, discord_urls(settings.discord_guild_id)),
+        ModelSynthesizer(chat, clock),
+        search,
+        tz=ZoneInfo(settings.answer_timezone),
+        clock=clock,
+    )
+
+
 def build_tool_proposer(
     settings: Settings, chat: ToolCapableChat
 ) -> ModelToolProposer | None:
@@ -1605,6 +1630,7 @@ def build_ask_service(
     facts: PersonalFactsService | None = None,
     catchup: CatchUpService | None = None,
     alerts: AlertRequests | None = None,
+    said_by: SaidByService | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -1639,6 +1665,9 @@ def build_ask_service(
         # searching the corpus for its words instead -- which is a worse
         # answer under exactly the same access, never a wider one.
         catchup=catchup,
+        # "What did Ana say about X", from Ana's own messages under the same
+        # viewer. None answers it by the ordinary search, as before.
+        said_by=said_by,
         # Without this the withheld-evidence notice is built, tested, and
         # structurally unable to fire: retrieval is pre-scoped to
         # asker INTERSECT audience, so nothing is ever dropped later for the

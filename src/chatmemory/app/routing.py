@@ -239,6 +239,15 @@ _NOT_A_LOOKUP = frozenset(
 )
 
 
+def single_lookup(text: str) -> bool:
+    """Whether the question asks one thing, as a filter route needs.
+
+    False when it also compares, reaches an external system, joins a second
+    line of enquiry or asks a second question: those keep the loop.
+    """
+    return not signals_in(text) & _NOT_A_LOOKUP
+
+
 @dataclass(frozen=True, slots=True)
 class Period:
     """A span of days a question named, resolved against a clock.

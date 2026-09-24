@@ -23,7 +23,7 @@ from chatmemory.adapters.store import sql
 from chatmemory.adapters.store.postgres import HybridSearch
 from chatmemory.app.reasoning.retrieval import CorpusRetrieval, discord_urls
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
-from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
+from chatmemory.domain.search import PersonCandidate, RelevanceSource, SearchHit, SearchQuery
 
 GUILD = 7
 GENERAL = 100
@@ -63,6 +63,11 @@ class StubSearch:
         return []
 
     async def list_channels(self, viewer: Viewer) -> Sequence[ChannelRef]:
+        return []
+
+    async def people_named(
+        self, viewer: Viewer, name: str, limit: int = 6
+    ) -> Sequence[PersonCandidate]:
         return []
 
 

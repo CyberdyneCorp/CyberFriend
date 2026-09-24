@@ -489,6 +489,64 @@ channels this person cannot see.
 Operators who need the full picture, with message counts, use the admin
 console's channel view rather than this command.
 
+## What someone said
+
+"o que o João disse sobre o deploy semana passada?", "what did Ana say about
+pricing yesterday?", "o que eu falei sobre X?", "@Maria comentou algo sobre Y
+ontem?". Recognised without a model call (`app/said_by.py`), after catch-up
+and before the ordinary answer; obligation questions ("o que o João me
+pediu"), market questions, fact requests and compound questions keep their
+own routes. Provenance is logged as `ask.said_by` with `route=SAID_BY` and
+`outcome` one of `resolved`, `ambiguous`, `fallback`, `unavailable`.
+
+**It is bounded by the asker's own access.** Filtering a colleague's
+messages only ever covers what the person asking could already read in
+Discord, narrowed further by the room the answer lands in. The author, the
+span, the viewer's channels and tombstones are all one statement
+(`sql.AUTHOR_SEARCH`); the person filter can only remove rows.
+
+**Who.** A mention is used as is; "eu"/"I" is the asker; a name is matched
+among people with a live message in a channel the asker and the room can
+read (`SearchBackend.people_named`, `sql.PEOPLE_VISIBLE`), accent- and
+case-insensitive, exact full name first, then first name, prefix or surname.
+Several matches get "Qual João? …" listing at most six — no search, no model
+call, and nobody who only speaks in channels the room cannot read. No match
+at all falls through to the ordinary answer, so "what did the docs say" works
+as before. A typed "@Maria" (not picked from autocomplete) is a name like any
+other. Two people with the same display name are listed once and the reply
+asks for a mention, the only thing that tells them apart. Per-server
+nicknames are not stored; mention such a person.
+
+**When.** `app/timespan.py` in `ANSWER_TIMEZONE`: "semana passada" is the
+previous Monday-to-Monday, "ontem" the local day. A question naming two spans
+or a range falls through rather than searching one end of it, and so does one
+naming a day no rule reads ("de segunda a quarta", "1 a 5 de setembro", "on
+monday") rather than searching all of the person's history. A month alone
+("o evento de setembro") is part of the topic. Catch-up and
+obligations still use their older rolling, UTC-cut periods.
+
+**How much is read.** The topic is ranked over all of the person's messages
+in the span, and the best 200 (`AUTHOR_CANDIDATES`) are grouped into at most
+20 conversations; an old on-topic message is not lost behind newer chatter.
+With no topic, the newest 200 are used.
+
+**What the model sees.** Only the person's own lines from each conversation,
+each stamped in UTC, and the citation lands on their own message. Messages
+not yet windowed by ingest (seconds old) are not found yet. The answer's
+first line states who and when, so a wrong resolution or span is visible.
+
+**One empty reply.** Nothing said, said only in private channels, opted out
+or deleted all read "I found nothing X said … in the channels I can search
+here", in the question's language. A retrieval failure is reported as a
+failure, never as silence. No withheld-evidence notice is sent for this
+route.
+
+**Cost.** One topic embedding and one synthesis call per resolved question
+(none without a topic for the embedding); the ambiguity and fall-through
+replies cost no model call. Migration `0023` adds `ix_message_author_time`,
+a partial index on `message(author_person_id, created_at)` that serves both
+statements.
+
 ## Scheduled tasks
 
 With `SCHEDULED_TASKS_ENABLED=true`, a person can have a question asked on

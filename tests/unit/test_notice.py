@@ -27,7 +27,7 @@ from chatmemory.app.limits import RateLimiter
 from chatmemory.app.reasoning.retrieval import WithheldRetrieval
 from chatmemory.domain.audience import Audience, DeliveryMode
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
-from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
+from chatmemory.domain.search import PersonCandidate, RelevanceSource, SearchHit, SearchQuery
 from chatmemory.ports.answers import Answer, Citation, Question
 from tests.unit.fakes import FakeChannel, FakeGuild, FakeMember
 
@@ -95,6 +95,11 @@ class FakeSearch:
         return []
 
     async def list_channels(self, viewer: Viewer) -> Sequence[ChannelRef]:
+        return []
+
+    async def people_named(
+        self, viewer: Viewer, name: str, limit: int = 6
+    ) -> Sequence[PersonCandidate]:
         return []
 
 

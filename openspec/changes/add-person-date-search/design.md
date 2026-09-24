@@ -56,9 +56,11 @@ are migrated deliberately.
 With `authors` set, `search()` takes a message-level branch: `message` joined
 to `person_platform_id` for the refs, left-joined to its window; filters on
 the viewer's channels, `deleted_at IS NULL`, author and bounds, all in one
-statement; newest first, about 200 rows. The topic is ranked inside that set
-by exact cosine against the containing window's embedding (no approximate
-scan, so nothing is under-returned), `ts_rank` breaking ties. Hits are grouped
+statement. The topic is ranked over every matching row by exact cosine
+against the containing window's embedding (no approximate scan, so nothing is
+under-returned), `ts_rank` breaking ties and recency after that, and only then
+cut to about 200 rows -- so an old on-topic message is not lost behind newer
+off-topic ones. With no topic the order is newest first. Hits are grouped
 by window, carrying only the author's lines and message ids, so the citation
 lands on their message and the model never reads another author's words.
 Messages not yet windowed are left out. One partial index,
@@ -71,7 +73,11 @@ A mention resolves directly; "eu"/"I" resolves to the asker; a name resolves
 through `people_named(viewer, name, limit)`, which only returns people with a
 visible, non-deleted message in the viewer's channels. Exact full name beats a
 first-name or prefix match. Zero candidates fall back to the ordinary path;
-several get "Qual João? ..." with no retrieval and no model call.
+several get "Qual João? ..." with no retrieval and no model call. When two of
+them share a display name the reply lists it once and asks for a mention,
+the one thing that tells them apart; no channel is named to help, since that
+would say where somebody speaks. A typed "@Maria" (not autocompleted) is a
+name like any other.
 
 ### The route (PR 3)
 

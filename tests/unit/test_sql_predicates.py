@@ -18,6 +18,8 @@ CONTENT_STATEMENTS = {
     "VECTOR_SEARCH": sql.VECTOR_SEARCH,
     "THREAD_CONTEXT": sql.THREAD_CONTEXT,
     "LIST_CHANNELS": sql.LIST_CHANNELS,
+    "AUTHOR_SEARCH": sql.AUTHOR_SEARCH,
+    "PEOPLE_VISIBLE": sql.PEOPLE_VISIBLE,
 }
 
 
@@ -51,6 +53,15 @@ def test_the_filter_is_in_the_same_statement_as_the_ranking(name: str) -> None:
     where_pos = statement.index("ANY(:channel_ids)")
     order_pos = statement.index("ORDER BY")
     assert where_pos < order_pos, f"{name} filters after ranking"
+
+
+def test_author_search_puts_author_and_span_beside_the_viewer() -> None:
+    """The person filter narrows the viewer's rows; it never replaces them."""
+    statement = str(sql.AUTHOR_SEARCH)
+    where = statement.index("ANY(:channel_ids)")
+    for predicate in ("ANY(:author_ids)", "m.created_at >= ", "m.created_at < "):
+        position = statement.index(predicate)
+        assert where < position < statement.index("ORDER BY"), predicate
 
 
 def test_iterative_scan_is_configured() -> None:

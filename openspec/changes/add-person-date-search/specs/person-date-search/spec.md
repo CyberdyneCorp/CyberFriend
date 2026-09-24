@@ -55,6 +55,16 @@ citations to that person's own messages, retrieved under the same viewer as
 any other retrieval, with the author, span, channel permissions and deletions
 applied in one statement.
 
+#### Scenario: An old message on the topic
+- WHEN a person wrote one message about the topic long ago and hundreds of
+  messages about other things since
+- THEN the old message SHALL be cited, not "nothing found"
+
+#### Scenario: A time the parser cannot read
+- WHEN someone asks what João said "de segunda a quarta" or "on monday"
+- THEN the question SHALL be answered by the ordinary route, not searched
+  across all of João's history
+
 #### Scenario: A multi-author conversation
 - WHEN Bea and Caio spoke in the same conversation and someone asks what Bea
   said about it
@@ -81,6 +91,14 @@ retrieval or a model call, and with none it SHALL answer as before.
 - WHEN two people named João have spoken where the asker can read and someone
   asks what João said
 - THEN the reply SHALL ask which João, naming both, and no search SHALL run
+
+#### Scenario: Two people with the same full name
+- WHEN two visible people go by the same display name
+- THEN the reply SHALL list that name once and ask for a mention
+
+#### Scenario: A namesake known only from a private channel
+- WHEN a third João speaks only in a channel the asker cannot read
+- THEN the "which João?" reply SHALL NOT name him
 
 #### Scenario: A name that is not a person
 - WHEN someone asks "what did the docs say about X"

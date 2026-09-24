@@ -13,7 +13,7 @@ from starlette.testclient import TestClient
 from chatmemory.app.tokens import InMemoryTokenStore
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message
-from chatmemory.domain.search import SearchHit, SearchQuery
+from chatmemory.domain.search import PersonCandidate, SearchHit, SearchQuery
 from chatmemory.health import HealthState
 from chatmemory.mcp.auth import Authenticator
 from chatmemory.mcp.server import build_app
@@ -31,6 +31,11 @@ class EmptySearch:
         return []
 
     async def list_channels(self, viewer: Viewer) -> Sequence[ChannelRef]:
+        return []
+
+    async def people_named(
+        self, viewer: Viewer, name: str, limit: int = 6
+    ) -> Sequence[PersonCandidate]:
         return []
 
 

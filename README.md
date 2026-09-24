@@ -15,6 +15,7 @@ internet said.
 | | |
 |---|---|
 | **Answers from your channels** | Hybrid lexical and vector retrieval over conversation windows, scoped to what you may read, with citations that link back to the message |
+| **What someone said** | *o que o João disse sobre o deploy semana passada?*, *what did Ana say about pricing yesterday?*, *o que eu falei sobre X?*, *@Maria comentou algo sobre Y ontem?* — only that person's own messages, from channels you and the room can read, cited. Days and weeks are calendar ones in `ANSWER_TIMEZONE`. Two Joãos get *Qual João?*; a name nobody visible goes by is answered as an ordinary question |
 | **Audience-aware answers** | In a channel it only cites what everyone there can read; ask in a DM for your full view |
 | **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve` |
 | **Conversation memory** | Follow-ups keep context, per person and per place, and stop being recalled if you lose access to a channel behind them |
@@ -47,6 +48,8 @@ mindmap
       Audience-aware in channels
       Documents and links
       Catch-up on a channel
+      What someone said, and when
+      o que o João disse semana passada
     What you owe
       Asks extracted from chat
       what do I need to do
@@ -106,6 +109,7 @@ graph LR
     CORPUS --> C1["what was decided about the deploy"]
     CORPUS --> C2["what did I miss in #infra"]
     CORPUS --> C3["/ask &middot; /channels"]
+    CORPUS --> C4["o que o João disse sobre o deploy semana passada?"]
 
     P --> OWED["What you owe"]
     OWED --> O1["what do I need to do"]

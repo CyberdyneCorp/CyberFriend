@@ -102,7 +102,10 @@ class CorpusRetrieval:
         # resolves these ids in the same statement as the search; a hit that
         # arrives without them still gets a working link, to the channel.
         message_id = hit.message_ids[0] if hit.message_ids else None
-        return Evidence.from_hit(hit, url=self._url(hit.channel, message_id))
+        # An author-scoped hit names its author, so the citation label does.
+        return Evidence.from_hit(
+            hit, url=self._url(hit.channel, message_id), author_display=hit.author_display
+        )
 
 
 class WithheldRetrieval:
