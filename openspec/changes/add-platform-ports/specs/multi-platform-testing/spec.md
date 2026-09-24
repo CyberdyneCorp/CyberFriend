@@ -36,3 +36,23 @@ identifier guard) against every enabled wire that can express them.
 #### Scenario: Adding a platform
 - WHEN a new platform wire is added
 - THEN the privacy scenarios SHALL run against it without being rewritten
+
+### Requirement: A scenario may drive several wires against one assembled process
+
+The harness SHALL let one scenario drive several platform wires against a
+single assembled process, sharing its database, registry and fakes, so
+cross-platform behaviour is tested end to end rather than only in unit tests.
+
+#### Scenario: A link code issued on Discord and redeemed on WhatsApp
+- WHEN a scenario requests a code on `DiscordWire`, redeems it on
+  `WhatsAppWire` and confirms on `DiscordWire`
+- THEN the WhatsApp participant SHALL see their Discord facts afterwards
+
+#### Scenario: The same id on two platforms stays isolated
+- WHEN `DiscordWire` and `SlackWire` each have a participant with id `123`
+- THEN facts saved by one SHALL NOT be returned to the other
+
+#### Scenario: A Slack question calls no Discord fake
+- WHEN a Slack participant asks a question in a deployment with Discord and
+  Slack enabled
+- THEN the Discord fake SHALL record no call

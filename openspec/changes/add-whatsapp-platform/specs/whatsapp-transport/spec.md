@@ -17,9 +17,11 @@ personal WhatsApp account.
 The webhook endpoint SHALL answer Meta's verification GET only when
 `hub.verify_token` equals the configured verify token, SHALL accept a POST
 only when `X-Hub-Signature-256` matches an HMAC-SHA256 of the raw body keyed
-with the app secret (compared in constant time), SHALL respond 200 before any
-model or network work, and SHALL process each message id (`wamid`) at most
-once regardless of retries or delivery order.
+with the app secret (compared in constant time), SHALL ignore a payload whose
+`metadata.phone_number_id` is not the configured number, SHALL record each
+message id (`wamid`) durably with only its timestamps before responding 200
+and before any model or network work, and SHALL process each recorded message
+exactly once regardless of retries, delivery order or a process restart.
 
 #### Scenario: A forged webhook
 - WHEN a POST arrives with a missing or wrong signature
@@ -28,6 +30,20 @@ once regardless of retries or delivery order.
 #### Scenario: A retried delivery
 - WHEN Meta delivers the same `wamid` twice
 - THEN the person SHALL get one reply
+
+#### Scenario: A restart after the insert
+- WHEN the process stops after recording a message and before answering it
+- THEN after restart the message SHALL be answered once
+
+#### Scenario: A payload for another number
+- WHEN a signed payload names a `phone_number_id` other than
+  `WHATSAPP_PHONE_NUMBER_ID`
+- THEN it SHALL be acknowledged and nothing in it SHALL be processed
+
+#### Scenario: What the dedup row holds
+- WHEN a message has been processed
+- THEN its inbound row SHALL hold only the `wamid` and timestamps, and no
+  message body
 
 #### Scenario: Verification with a wrong token
 - WHEN a verification GET carries a verify token that does not match
@@ -54,6 +70,11 @@ person's language, and SHALL report `NEEDS_TEMPLATE` when none is registered.
 - THEN only the registered utility template for that purpose and language
   SHALL be sent
 
+#### Scenario: An alert fires for a BSUID-only person
+- WHEN an opted-in person known only by BSUID, with no phone number, has an
+  alert fire outside the window
+- THEN the template SHALL be delivered to their BSUID recipient address
+
 #### Scenario: No template for the language
 - WHEN the window is closed and no template exists for the person's language
 - THEN the template in the deployment's default language SHALL be sent if
@@ -66,7 +87,8 @@ it, the full content SHALL be sent free-form in the window that tap opened.
 Held content SHALL expire after seven days.
 
 #### Scenario: Tapping "Show"
-- WHEN a person taps "Show" on a scheduled-answer template
+- WHEN a person taps "Show" ("Ver" in Portuguese) on a scheduled-answer
+  template
 - THEN the full scheduled answer SHALL be sent as free-form messages
 
 #### Scenario: Tapping after expiry
@@ -76,15 +98,23 @@ Held content SHALL expire after seven days.
 
 ### Requirement: Proactive messages stay within limits and cost controls
 
-The adapter SHALL stop sending proactive templates when the configured daily
-cap is reached, prioritising alerts over digests, SHALL batch obligation
-notifications into at most one daily digest per person, and SHALL record each
-template delivery's category and cost for the admin console and traces.
+The adapter SHALL stop sending proactive templates to new recipients when the
+number of unique recipients of business-initiated templates over the rolling
+last 24 hours reaches the configured cap, prioritising alerts over digests,
+SHALL batch obligation notifications into at most one daily digest per
+person, and SHALL record each template delivery's category, cost and currency
+for the admin console and traces.
 
-#### Scenario: The daily cap is reached
-- WHEN `WHATSAPP_DAILY_PROACTIVE_CAP` templates have been sent today
-- THEN further digests SHALL be deferred to the next day
+#### Scenario: The cap is reached
+- WHEN templates have reached `WHATSAPP_DAILY_PROACTIVE_CAP` unique
+  recipients in the last 24 hours
+- THEN further digests to new recipients SHALL be deferred until the rolling
+  count falls below the cap
 - AND alerts SHALL be deferred only after digests
+
+#### Scenario: Cost recorded with currency
+- WHEN a template is delivered to a Brazilian number after 2026-07-01
+- THEN its cost SHALL be recorded with currency `BRL`
 
 #### Scenario: Several asks in a day
 - WHEN five asks addressed to a linked person are extracted in one day
@@ -117,3 +147,21 @@ keep.
 #### Scenario: An expired media URL
 - WHEN a download fails because the URL expired
 - THEN the media id SHALL be resolved again once and the download retried
+
+### Requirement: Template status changes are followed
+
+The adapter SHALL subscribe to template status and category webhooks. A
+template that Meta pauses, rejects or disables, or recategorises away from
+utility, SHALL be disabled in the registry at once; sends for its purpose
+SHALL then hold the content until the person's next inbound message, with
+the outcome recorded as `deferred`, and the operator SHALL be alerted.
+
+#### Scenario: A template is paused
+- WHEN `message_template_status_update` reports `cf_alert_fired` as paused
+- THEN no further send SHALL use it
+- AND an alert firing outside the window SHALL be held until the person next
+  writes, and the operator alerted
+
+#### Scenario: A template is moved to marketing
+- WHEN `template_category_update` moves `cf_scheduled_ready` to marketing
+- THEN it SHALL be disabled and never sent as a marketing message

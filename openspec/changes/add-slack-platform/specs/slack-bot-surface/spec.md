@@ -124,8 +124,10 @@ SHALL be treated as closed, as on Discord.
 
 Answers SHALL be rendered as standard Markdown through `markdown_text` up to
 12,000 characters, and fixed replies and blocks as mrkdwn with Slack's
-entity escaping. Mass mentions (`<!here>`, `<!channel>`, `<!everyone>`) SHALL
-be defanged. Longer answers SHALL be split into several messages in the same
+entity escaping. Mass and user-group mentions (`<!here>`, `<!channel>`,
+`<!everyone>`, `<!subteam^…>`) SHALL be defanged, and person mentions
+(`<@U…>`) SHALL be rendered as plain names unless the controller placed
+them. Longer answers SHALL be split into several messages in the same
 thread. Corpus citations SHALL link to Slack permalinks.
 
 #### Scenario: A citation
@@ -135,6 +137,15 @@ thread. Corpus citations SHALL link to Slack permalinks.
 #### Scenario: Model output with `<!channel>`
 - WHEN the model's answer contains `<!channel>`
 - THEN the posted message SHALL NOT notify the channel
+
+#### Scenario: Model output with a user-group mention
+- WHEN the model's answer contains `<!subteam^S1>`
+- THEN the posted message SHALL NOT notify any member of that group
+
+#### Scenario: Model output with a person mention
+- WHEN the model's answer contains `<@U0123>`
+- THEN the posted message SHALL show that person's name and SHALL NOT notify
+  them
 
 ### Requirement: Every existing feature is available on Slack with Slack's rules
 

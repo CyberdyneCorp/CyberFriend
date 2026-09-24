@@ -56,10 +56,13 @@ access to the affected channel.
 ### Requirement: Channel replies draw only on what the whole audience can read
 
 An answer posted visibly in a Slack conversation SHALL use evidence only from
-channels every member of that conversation can read. In a Slack Connect
-channel the audience SHALL read only that channel. In a public channel with
-guests or external members, the audience SHALL be computed over its actual
-members. A thread SHALL take its parent channel's audience.
+channels every member of that conversation can read, including anyone who
+could open it later. In a public channel without guests or external members,
+the audience SHALL read only the indexed public channels of that workspace,
+never a private channel, whoever the current members are. In a public channel
+with guests or external members, and in a Slack Connect channel, the audience
+SHALL read only that channel. A thread SHALL take its parent channel's
+audience.
 
 #### Scenario: A question in a Slack Connect channel
 - WHEN someone asks in a shared channel about another indexed channel
@@ -68,8 +71,13 @@ members. A thread SHALL take its parent channel's audience.
 
 #### Scenario: A public channel with a guest present
 - WHEN a guest is a member of a public channel where a question is asked
-- THEN the visible answer SHALL NOT use evidence from channels the guest
-  cannot read
+- THEN the visible answer SHALL use evidence only from that channel
+
+#### Scenario: A public channel whose members all share a private channel
+- WHEN a question is asked in a public channel whose three members all belong
+  to the private channel #exec
+- THEN the visible answer SHALL NOT use #exec evidence
+- AND the asker SHALL be offered a private answer instead
 
 #### Scenario: A private channel
 - WHEN a question is asked in a private channel

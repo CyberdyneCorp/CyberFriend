@@ -20,7 +20,10 @@ data to train or fine-tune a model.
 - THEN retrieval SHALL use Slack's Real-time Search with that person's user
   token
 - AND after the answer is sent no Slack message content SHALL remain in the
-  database
+  database, in Langfuse traces, in `trace_export` rows, in conversation-memory
+  turns or in log output
+- AND the stored memory turn SHALL hold only the asker's own question and the
+  answer text, without citations or quoted evidence
 
 #### Scenario: Federated mode not yet built
 - WHEN `SLACK_MODE=federated` is set before the federated phase ships
@@ -34,7 +37,12 @@ an authenticated transport: a Socket Mode connection opened with the app-level
 token, or HTTP requests whose `X-Slack-Signature` verifies against the signing
 secret with a timestamp no older than five minutes. Every payload SHALL be
 acknowledged within 3 seconds, before any model or network work, and
-redelivered events SHALL be processed once.
+redelivered events SHALL be processed once. Each envelope SHALL be recorded
+durably, keyed by its `event_id` (or `envelope_id` for commands and
+interactivity), before it is acknowledged, and a worker SHALL process every
+recorded envelope that has not been marked processed, so an acknowledged
+envelope is never lost. Exactly one process SHALL hold the Slack connection
+for a deployment.
 
 #### Scenario: A forged HTTP request
 - WHEN a request to the Slack endpoints has a missing or wrong signature, or a
@@ -50,6 +58,21 @@ redelivered events SHALL be processed once.
 #### Scenario: A retried event
 - WHEN Slack redelivers an event with an `event_id` already processed
 - THEN no message SHALL be stored twice and no reply sent twice
+
+#### Scenario: A process restart after ack still answers the event
+- WHEN the process stops after acknowledging a DM question and before
+  answering it
+- THEN after restart the question SHALL be answered once
+
+#### Scenario: A retried event after a restart
+- WHEN Slack redelivers an already-processed `event_id` after a restart
+- THEN it SHALL still be recognised as processed and nothing SHALL be sent
+  twice
+
+#### Scenario: Two processes never split the event stream
+- WHEN the bot and ingest processes are both running
+- THEN only the Slack runtime process SHALL open a Socket Mode connection
+- AND every event SHALL reach the ingest and controller paths through it
 
 #### Scenario: Socket connection refresh
 - WHEN Slack asks the Socket Mode client to refresh its connection
@@ -112,20 +135,34 @@ opaque cursor after an interruption.
 
 ### Requirement: Deletion by retention policy is reconciled
 
-For workspaces with a retention policy, the adapter SHALL periodically
-reconcile recent history for each indexed channel and SHALL tombstone
-messages that Slack no longer returns or that are older than the configured
-`SLACK_RETENTION_DAYS`, because retention purges do not reliably emit delete
-events.
+Because Slack retention purges do not reliably emit delete events, the
+adapter SHALL periodically reconcile the recent window of each indexed
+channel, fetching both `conversations.history` and `conversations.replies`
+for each thread in the window. It SHALL tombstone a stored message only when
+the whole window was fetched without error and Slack no longer returns it,
+and SHALL tombstone nothing for a channel whose fetch failed in any way.
+Messages older than the deployment retention policy (`app/retention.py`)
+SHALL be purged by the existing retention job, as on Discord.
 
 #### Scenario: A purged message
-- WHEN the reconcile finds a stored message within its window that Slack no
-  longer returns
+- WHEN a complete reconcile of the window does not return a stored message
+  within it
 - THEN the message SHALL be tombstoned as if a delete event had arrived
 
+#### Scenario: A thread reply within the window is not tombstoned
+- WHEN a stored thread reply from the window is returned by
+  `conversations.replies` but not by `conversations.history`
+- THEN it SHALL NOT be tombstoned
+
+#### Scenario: A reconcile that fails mid-window tombstones nothing
+- WHEN a reconcile page fails, is rate limited past its retries, returns
+  `missing_scope` or `not_in_channel`, or comes back short
+- THEN nothing in that channel SHALL be tombstoned
+- AND the failure SHALL appear in the ingest status
+
 #### Scenario: Past the retention period
-- WHEN `SLACK_RETENTION_DAYS=365` and a stored message is older than 365 days
-- THEN it SHALL be tombstoned
+- WHEN `RETENTION_DAYS=365` and a stored Slack message is older than 365 days
+- THEN the existing retention job SHALL purge it
 
 ### Requirement: Shared files are ingested with the bot's own authorisation
 
@@ -146,18 +183,55 @@ the document from the channels it no longer belongs to.
 ### Requirement: Installs, tokens and uninstalls are managed and auditable
 
 Slack tokens SHALL be stored per team or enterprise, encrypted at rest, never
-logged, and redacted in the admin console and traces. An uninstall or token
-revocation SHALL stop ingestion for that install and SHALL delete its stored
-Slack data within the retention job's next run. Operators SHALL see each
-install and each indexed channel's ingest status in the admin console.
+logged, and redacted in the admin console and traces. An `app_uninstalled`
+event, or a `tokens_revoked` event naming the bot token, SHALL delete the
+install's tokens at once, stop ingestion for that install, and have its
+stored Slack data purged by the retention job's next run. A `tokens_revoked`
+event naming only user tokens SHALL delete those user tokens and nothing
+else. Operators SHALL see each install and each indexed channel's ingest
+status in the admin console.
 
 #### Scenario: App uninstalled
-- WHEN an `app_uninstalled` or `tokens_revoked` event arrives
+- WHEN an `app_uninstalled` event arrives, or `tokens_revoked` names the bot
+  token
 - THEN the install's tokens SHALL be deleted immediately
-- AND its messages, windows, documents and membership cache SHALL be purged
+- AND its messages, windows, documents, membership cache and inbound rows
+  SHALL be purged by the next retention run
+
+#### Scenario: User token revoked
+- WHEN `tokens_revoked` names only one person's user token
+- THEN that token SHALL be deleted
+- AND nothing else SHALL be purged
+
+#### Scenario: Channel deleted
+- WHEN a `channel_deleted` event arrives for an indexed channel
+- THEN its stored messages SHALL be tombstoned and its documents and asks
+  withdrawn, and it SHALL leave the scope
+
+#### Scenario: Channel archived
+- WHEN an indexed channel is archived
+- THEN its stored content SHALL stay retrievable under the same membership
+  rules
 
 #### Scenario: Admin console view
 - WHEN an operator opens the Slack page of the admin console
 - THEN they SHALL see each install's team, enterprise and scopes, and each
   indexed channel's last event, backfill progress and last error
 - AND no token SHALL be shown
+
+### Requirement: Group direct messages are answered only when addressed and never stored
+
+In an `mpim` that includes the assistant, the assistant SHALL answer only a
+message that mentions it, and SHALL NOT store, window, index or keep in
+conversation memory the other members' messages; only the asker's own
+addressed turn and the reply MAY be kept.
+
+#### Scenario: An mpim message without a mention
+- WHEN a member of an mpim with the assistant writes without mentioning it
+- THEN no reply SHALL be posted and nothing from the message SHALL be stored
+
+#### Scenario: An mpim message with a mention
+- WHEN a member mentions the assistant in the mpim
+- THEN it SHALL answer under group-direct audience rules
+- AND the other members' earlier messages SHALL NOT appear in conversation
+  memory

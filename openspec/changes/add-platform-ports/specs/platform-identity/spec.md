@@ -50,8 +50,18 @@ indexed-channel setting to platform-qualified entries.
 
 #### Scenario: New platforms cannot collide with snowflakes
 - WHEN a non-Discord channel or message is stored
-- THEN its internal id SHALL come from a range disjoint from Discord
-  snowflakes
+- THEN its internal id SHALL come from a descending negative sequence, which
+  is disjoint from every Discord snowflake by construction
+
+#### Scenario: Thread and message references on a string-id platform
+- WHEN a Slack thread (`thread_ts` string) holds a message, an ask, a reaction
+  and a conversation window
+- THEN windows, asks, ask reactions and document entries SHALL reference it
+  without loss, through TEXT thread ids and internal message ids
+
+#### Scenario: A channel in several workspaces
+- WHEN a Slack channel is shared between two workspaces of one Grid org
+- THEN the channel SHALL record both workspaces, and the ACL SHALL use them
 
 #### Scenario: Downgrade with foreign rows
 - WHEN the downgrade runs while any non-Discord row exists
@@ -105,3 +115,90 @@ id, so existing configuration and tokens keep working.
 #### Scenario: A malformed identifier
 - WHEN an identifier names an unknown platform or is empty after the prefix
 - THEN it SHALL be rejected with an error naming the expected form
+
+### Requirement: Identities on different platforms are linked only by proof
+
+Any two platform identities SHALL be linked to one person only by redeeming a
+one-time code that the person obtained in a private conversation on the
+issuing platform, and only after the person confirms the link with a button
+pressed on the issuing platform. A link SHALL be recorded by pointing the
+redeeming identity's `person_platform_id` row at the existing person; no
+separate link table SHALL exist. Codes SHALL be six digits, single use,
+expire after ten minutes and be stored hashed; a code SHALL be invalidated
+after five failed redemptions across all identities; redemption failures
+SHALL additionally be capped per redeeming identity (five per hour) and
+globally (a per-hour ceiling that, when reached, refuses all redemptions and
+alerts the operator). Either side SHALL be able to remove the link, which
+re-points the removed identity at a new, empty person and carries nothing
+across.
+
+#### Scenario: Linking Discord and WhatsApp
+- WHEN a Discord person gets code `482913` in their DM, writes "link 482913"
+  on WhatsApp within ten minutes, and presses Confirm on the Discord prompt
+  "WhatsApp account ending …3f link request, Confirm?"
+- THEN the WhatsApp identity SHALL resolve to the Discord person
+- AND both platforms SHALL confirm the link to that person
+
+#### Scenario: Linking Discord and Slack
+- WHEN a Slack person redeems a code issued in their Discord DM and confirms
+  it on Discord
+- THEN both identities SHALL resolve to one person
+
+#### Scenario: No confirmation on the issuing platform
+- WHEN a correct code is redeemed but the issuing-platform prompt is not
+  confirmed within its window
+- THEN no link SHALL be made
+
+#### Scenario: A code requested in a channel
+- WHEN a person asks for a link code in a public channel
+- THEN no code SHALL be shown there
+- AND the reply SHALL point them to a DM
+
+#### Scenario: Guessing one code from several identities
+- WHEN five wrong redemptions are made against live codes from five different
+  identities
+- THEN the targeted code SHALL be invalidated and its owner told to request a
+  new one
+
+#### Scenario: A global guessing wave
+- WHEN failed redemptions across the deployment reach the hourly ceiling
+- THEN every redemption SHALL be refused until the hour passes
+- AND the operator SHALL be alerted
+
+#### Scenario: Unlinking
+- WHEN the person writes "unlink" on either platform
+- THEN the removed identity SHALL lose access to the linked person's facts,
+  wallets and corpus from its next question
+
+### Requirement: A linked person's viewer is the union of each identity's live viewer
+
+For a person with identities on several platforms, the readable channel set
+SHALL be the union of each linked identity's current readable set, each
+computed by that identity's own platform resolver at question time. Answers
+SHALL be delivered only where the person's audience rules allow; a linked
+identity SHALL NOT widen the audience of any channel reply.
+
+#### Scenario: Access removed on one platform
+- WHEN a person linked across Discord and Slack loses access to a Slack
+  channel
+- THEN their next question on any platform SHALL NOT use evidence from it
+
+#### Scenario: A channel reply
+- WHEN a linked person asks in a Discord channel
+- THEN the visible answer SHALL still use only what that channel's audience
+  can read
+
+### Requirement: Rate limits and opt-outs apply to the person, not the identity
+
+Per-person rate limits, corpus opt-out and conversation-memory opt-out SHALL
+be keyed on the internal person id, so linking identities neither multiplies
+a person's allowance nor leaves an identity outside an opt-out.
+
+#### Scenario: A linked person asking from two platforms
+- WHEN a person linked on Discord and WhatsApp asks from both within one
+  rate-limit window
+- THEN both questions SHALL count against one allowance
+
+#### Scenario: Opting out from one platform
+- WHEN a linked person opts out of the corpus on Slack
+- THEN their Discord messages SHALL also be excluded and purged

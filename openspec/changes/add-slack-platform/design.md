@@ -18,18 +18,39 @@ policy line.
 ## Transports
 
 - **Socket Mode** (default): app-level token `xapp-` with
-  `connections:write`; one connection per process (limit is 10); every
-  envelope is acknowledged immediately, before any work; `refresh_requested`
-  and disconnect warnings trigger reconnect. Liveness = a connection
-  acknowledged within the last N minutes.
+  `connections:write`. Slack load-balances envelopes across open connections
+  rather than broadcasting them, so **exactly one Slack runtime process**
+  (`entrypoints/slack.py`) owns the connection and dispatches to the ingest
+  and controller paths; the bot and ingest processes never open their own.
+  Every envelope is persisted and then acknowledged (below);
+  `refresh_requested` and disconnect warnings trigger reconnect. Liveness = a
+  connection acknowledged within the last N minutes.
 - **HTTP**: `/slack/events`, `/slack/interactivity`, `/slack/commands`,
   `/slack/oauth/*` on the existing web server; `X-Slack-Signature` v0 HMAC
   over `v0:{timestamp}:{body}` with the signing secret, timestamps older than
   5 minutes rejected, constant-time compare; `url_verification` answered.
   Retries (`X-Slack-Retry-Num`) are deduplicated by `event_id`.
 
-Both transports feed one `SlackIngress` that acks first and hands the payload
-to a worker queue. Ack budget: 3,000 ms for everything.
+Both transports feed one `SlackIngress`:
+
+```
+envelope ─▶ INSERT slack_inbound(event_key PK, kind, payload_enc, received_at)
+             ON CONFLICT DO NOTHING           (event_id, or envelope_id for
+                                               commands/interactivity)
+         ─▶ ack (Socket Mode ack / HTTP 200)  budget 3,000 ms in total
+worker   ─▶ SELECT … WHERE processed_at IS NULL FOR UPDATE SKIP LOCKED
+         ─▶ handle ─▶ UPDATE processed_at = now()
+```
+
+- The insert fits comfortably in the 3 s budget; if it fails, the envelope is
+  not acked, so Slack redelivers it.
+- A crash or deploy after the ack leaves the row unprocessed; the worker
+  drains it on restart, so an acked DM question, command or `block_actions`
+  payload is never dropped. A `response_url` older than 30 minutes falls back
+  to the person's `im`.
+- Dedup survives restarts because it is the primary key, not memory. Rows are
+  kept 7 days after `processed_at`, then deleted; the payload is encrypted at
+  rest and, in federated mode, redacted to ids once processed.
 
 ## Capture
 
@@ -59,6 +80,16 @@ Only channels in the indexing scope are stored; DMs and mpims with the bot
 are handled as conversations (memory, facts) and are never indexed into the
 corpus, matching Discord.
 
+Channel lifecycle and uninstall:
+
+| Event | Handling |
+|---|---|
+| `channel_archive` / `group_archive` | stays indexed and readable under the same membership rules; live capture stops naturally; `channel_unarchive` resumes |
+| `channel_deleted` / `group_deleted` | tombstone every stored message of the channel, withdraw its asks and documents, drop it from the scope |
+| `app_uninstalled` | delete the install's tokens now; its messages, windows, documents, membership cache and `slack_inbound` rows are purged by the next retention run |
+| `tokens_revoked` naming the **bot** token (`tokens.bot`) | same as `app_uninstalled` |
+| `tokens_revoked` naming only user tokens (`tokens.oauth`) | delete those user tokens only; nothing else is purged |
+
 ## Backfill
 
 When a channel enters the scope (bot joined and `/cyberfriend index`), a
@@ -74,11 +105,23 @@ the oldest `ts` stored plus the Slack pagination cursor.
 ## Retention reconcile
 
 Slack retention purges are believed not to emit `message_deleted` (to verify
-against a test workspace; tracked as an open task). A reconcile job re-reads
-`conversations.history` for the last `SLACK_RECONCILE_DAYS` (default 7) per
-indexed channel daily and, when the workspace has a retention policy
-configured by the operator (`SLACK_RETENTION_DAYS`), tombstones anything
-older than it. Both run at the internal rate limits.
+against a test workspace; tracked as an open task). A reconcile job runs
+daily per indexed channel over the last `SLACK_RECONCILE_DAYS` (default 7):
+
+1. Page `conversations.history` over the window to the end, and
+   `conversations.replies` for every thread root in the window (and for every
+   stored thread whose root is in the window), since `history` returns roots
+   and broadcasts but not thread replies.
+2. Only when every page of every call succeeded, compare the fetched set with
+   what is stored for the window and tombstone what Slack no longer returns.
+3. On any API error, 429 after retries, `missing_scope`, `not_in_channel` or
+   a short page, abort the channel's run and tombstone **nothing**; record the
+   failure in `slack_reconcile_state` and the ingest status.
+
+Age-based deletion is not a Slack setting: Slack messages follow the existing
+deployment retention policy (`app/retention.py`, `RetentionPolicy`,
+`RETENTION_DAYS`), the same clock as Discord, so there is one retention clock.
+Both jobs run at the internal rate limits.
 
 ## ACL
 
@@ -109,12 +152,16 @@ channel ids.
 | im with the bot | the asker's readable set; private |
 | mpim | intersection of members' sets; GROUP_DIRECT, not private |
 | private channel | intersection over `conversations.members` |
-| public channel, no guests or external members | all indexed public channels of the workspace + private channels every member shares (usually none) — equivalent to intersecting over all full members |
-| public channel with guests | intersection over members, which in practice is the destination only |
+| public channel, no guests or external members | indexed public channels of that workspace only, never private channels, whoever the current members are: any full member can open a public channel without joining, and guests or Connect orgs added later see its history |
+| public channel with guests or external members | the destination channel only |
 | Slack Connect (`is_ext_shared`) | the destination channel only |
 | thread | same as its parent channel |
 
 This matches Slack's own RTS rule for public and Connect channels.
+
+mpims: the assistant answers only when mentioned, and never stores other
+members' messages (they are not indexed, not windowed and not kept in
+conversation memory; only the asker's own addressed turn and the reply are).
 
 ## Commands
 
@@ -166,7 +213,10 @@ several-wallets uses a static select plus a confirm button.
 
 `markdown_text` (standard Markdown, 12,000 chars) is the default for answers;
 fixed replies and blocks use mrkdwn (`*bold*`, `_italic_`, `<url|label>`,
-`&amp; &lt; &gt;` escaping, `<!here>`/`<!channel>`/`<!everyone>` defanged).
+`&amp; &lt; &gt;` escaping, `<!here>`/`<!channel>`/`<!everyone>` and
+`<!subteam^…>` defanged, `<@U…>` produced by the model or copied from evidence
+rendered as the plain display name; only mentions the controller placed stay
+live).
 Beyond 12,000 characters the shared splitter produces several messages in the
 same thread. Tables render as Markdown tables in `markdown_text`, as lists in
 mrkdwn. Citations are permalinks from `chat.getPermalink` (cached) or built
@@ -187,37 +237,34 @@ as `https://<domain>.slack.com/archives/<C>/p<ts without dot>`.
 `search:read.public/private/im/mpim`, admin + user consent), 20 results per
 page, a per-user limiter at 10/min, keyword search unless the workspace has
 Slack AI Search. No message, window or embedding is persisted; an answer-time
-cache is dropped when the answer is sent. Catch-up becomes an RTS query with
+cache is dropped when the answer is sent. The same rule covers every other
+persistent copy: Langfuse traces and `trace_export` rows carry evidence ids
+and scores but no Slack content, conversation memory stores the asker's own
+turn and the answer text without citations or quoted evidence, structlog
+never logs message text, and `slack_inbound` payloads are reduced to ids once
+processed. Catch-up becomes an RTS query with
 `after` and a channel filter; ask extraction runs only on messages addressed
 to the bot; conversation memory keeps only the asker's own turns. Guests get
 "not available". This mode cannot use Socket Mode if Marketplace-listed.
 
 ## Feature parity
 
-| Feature | Discord | Slack (internal) | WhatsApp | Notes |
-|---|---|---|---|---|
-| Corpus answers + citations | yes | yes, permalinks | no (linked identity only) | federated: RTS, no storage |
-| ACL | permissions_for | public/private/guest/Connect rules | n/a | fail closed |
-| Audience-aware channel answers | yes | yes; Connect = channel only | n/a | |
-| Asks + DM notifications | yes | yes; `<@U>` mentions, ✅ `reaction_added` | delivery only | |
-| Conversation memory | yes | yes; thread = sub-place | 1:1 | |
-| Personal facts DM-only | yes | im only; mpim not private | always 1:1 | |
-| Language EN/PT | yes | yes; users.info locale hint | yes | |
-| Documents | yes | file_share + url_private | 1:1 uploads | |
-| Web/MCP federation | yes | yes | narrowed | |
-| Market, wallets, DeFi, portfolio, activity | yes | yes | yes | formatting only |
-| Alerts with confirm | View | Block Kit + confirm object | reply buttons / template | |
-| Scheduled questions | yes | yes, DM | template | |
-| Catch-up/digest | yes | yes | no | |
-| /channels /index /unindex | yes | yes (join / invite) | no | |
-| /forget /resolve /notifications /schedule /alert | slash | `/cyberfriend <sub>` + mention in threads | keywords | |
-| Ephemeral replies | yes | yes (not persisted) | no | |
-| Threads | yes | native, default reply target | no | |
-| Edits/deletes | events | events + retention reconcile | /forget only | |
-| Voice | no | clips via STT (later) | STT | |
-| App Home / assistant pane | n/a | optional | n/a | |
-| Admin, MCP, tracing | yes | + installs, ingest status | + number, costs | |
-| e2e | DiscordWire | SlackWire | WhatsAppWire | |
+The single feature matrix is in `add-platform-ports/design.md` (Feature
+matrix). Slack-specific notes on it:
+
+- Asks: `<@U…>` mentions; ✅ via `reaction_added`.
+- Threads: native, default reply target; thread = conversation-memory
+  sub-place; commands cannot run in threads, so thread actions go through a
+  mention or the message shortcut.
+- Ephemeral replies are not persisted by Slack; the private fallback is the
+  `im`.
+- Edits/deletes: events, plus the retention reconcile above.
+- Documents: `file_share` + `url_private`; files uploaded in the `im` are
+  owner-only.
+- App Home / assistant pane: optional, Slack only.
+- Admin console: installs, scopes and per-channel ingest status.
+- Federated mode (not built): RTS retrieval, no persistence anywhere,
+  reduced catch-up, asks and memory.
 
 ## Open questions (answers change defaults, not structure)
 
@@ -231,6 +278,8 @@ to the bot; conversation memory keeps only the asker's own turns. Guests get
    `SLACK_ALLOW_CONNECT=false` refuses indexing them.)
 6. Umbrella command or separate commands? (Default umbrella + optional
    aliases.)
-7. Cross-platform identity linking between Discord and Slack people? (Reuses
-   the linking flow of `add-whatsapp-platform`.)
-8. Clip transcription in v1? (Default: later, via the shared STT port.)
+7. Cross-platform identity linking between Discord and Slack people? (Uses the
+   platform-neutral linking requirement of `add-platform-ports`
+   `platform-identity`.)
+8. Clip transcription in v1? (Default: later, via the `SpeechToText` port of
+   `add-platform-ports`, once a backend is chosen.)

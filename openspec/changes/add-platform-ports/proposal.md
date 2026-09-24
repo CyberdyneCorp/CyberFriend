@@ -34,7 +34,7 @@ cheaper and safer than doing it twice inside two feature changes.
 
 ## What Changes
 
-A behaviour-preserving refactor, delivered as six pull requests (see
+A behaviour-preserving refactor, delivered as seven pull requests (see
 `tasks.md`), after which Discord is one registered platform among possibly
 several:
 
@@ -43,24 +43,29 @@ several:
   `ConversationKind` (channel, private channel, thread, group DM, DM).
 - **Migration** (next free number, 0023 at time of writing) that keeps BIGINT
   surrogate keys (existing Discord rows keep `id = snowflake`, so no foreign
-  key or `bigint[]` permission array is rewritten), adds `external_id TEXT`
-  with `UNIQUE(platform, external_id)` to `channel` and
-  `UNIQUE(channel_id, external_id)` to `message`, turns user, location,
-  cursor, thread and reply columns into TEXT, and rewrites the indexed-channel
-  runtime setting to `platform:id` entries.
+  key or `bigint[]` permission array is rewritten) and allocates non-Discord
+  ids from a descending negative sequence, adds `external_id TEXT` with
+  `UNIQUE(platform, external_id)` to `channel` (whose `platform` column
+  already exists) and `UNIQUE(channel_id, external_id)` to `message`, adds a
+  `channel_workspace` table for Slack Grid, turns user, location, cursor and
+  every thread column (`message`, `conversation_window`, `ask`) into TEXT,
+  points ask, ask-reaction and document message references at internal
+  message ids, lets a document entry be owned by a person instead of a
+  channel, and rewrites the indexed-channel runtime setting to `platform:id`
+  entries.
 - **Ordering and cursors stop depending on id order**: `ChatSource.backfill`
   returns a `BackfillPage(messages, next_cursor, exhausted)` with an opaque
   cursor chosen by the adapter.
 - **A `PlatformCapabilities` value object** per platform (channels, threads,
   history backfill, ephemeral replies, slash menu, buttons and their limit,
-  list pickers, edits/deletes as events, reactions, message length, markup
-  dialect, proactive-message policy, permalinks). App services branch on
-  capabilities, never on platform names.
+  list pickers, edits/deletes as events, reactions, plain and rich message
+  length, markup dialect, proactive-message policy, permalinks). App services
+  branch on capabilities, never on platform names.
 - **Platform ports** in `ports/platform.py` and `ports/inbound.py`:
   `MessageRenderer`, `ReplySink`, `ProgressIndicator`, `DirectMessenger`,
   `ChoicePrompt` (generalising `ConfirmationSurface` and alert confirmation),
   `CommandSurface`, `PermalinkBuilder`, `MentionCodec`, `AttachmentFetcher`,
-  and the neutral inbound events `IncomingMessage`, `CommandInvocation`,
+  `SpeechToText` (with a null implementation), and the neutral inbound events `IncomingMessage`, `CommandInvocation`,
   `ChoiceResponse`, `ReactionEvent`. `AclResolver`, `AudienceResolver`,
   `AskerProfileResolver` and `ChannelAccessResolver` are kept and re-typed.
 - **A `PlatformRegistry`** built in the composition root from
@@ -68,7 +73,8 @@ several:
   fail closed for a platform that is not registered.
 - **Neutral rich text.** The app layer emits a small `RichText` model
   (paragraphs, bold, italic, code, lists, subtext, links, channel and person
-  mentions); each platform's renderer converts, escapes, defangs mass mentions
+  mentions); each platform's renderer converts, escapes, defangs mass and
+  user-group mentions, renders model-produced person mentions as plain names,
   and splits at its own limit with one shared fence-aware splitter.
 - **A `CommandCatalog`** replaces the `Command` list in `self_description.py`
   as the single source of commands, each declaring what it requires
@@ -86,36 +92,66 @@ several:
 - **Per-platform settings**: `ENABLED_PLATFORMS` (default `discord`) and
   nested optional settings; only an enabled platform's secrets are required.
 - **The e2e harness is generalised** to a platform-neutral scenario API over
-  pluggable wires, with the existing Discord wire unchanged in behaviour.
+  pluggable wires, with the existing Discord wire unchanged in behaviour, and
+  scenarios that drive several wires against one process.
+- **Cross-platform identity linking** for any pair of platforms, by a
+  one-time code confirmed on the issuing platform, recorded by pointing a
+  `person_platform_id` row at the existing person; rate limits and opt-outs
+  keyed on the person; the viewer of a linked person is the union of each
+  identity's live viewer.
+- **Delivery routing**: proactive items are delivered on the platform they
+  were created on unless the person sets a preferred delivery platform.
+- **Personal documents**: a document uploaded in a 1:1 conversation is
+  visible only to its uploader.
+- **A secret-material guard** (seed phrases, framed private keys), platform
+  neutral, enabled per platform and off for Discord by default.
+- **One feature matrix** covering every feature on every platform, which the
+  Slack and WhatsApp changes reference instead of copying.
 
 Non-goals:
 
 - Any Slack or WhatsApp adapter (their own changes).
-- Any user-visible change on Discord: every existing e2e snapshot SHALL pass
-  unchanged.
-- Cross-platform identity linking (specified in `add-whatsapp-platform`,
-  where it is first needed; Slack reuses it).
+- Any user-visible change on Discord other than the E.164 egress check, which
+  ships in its own pull request as a documented, intended snapshot change;
+  every other existing e2e snapshot SHALL pass unchanged.
+- A real speech-to-text backend (only the port and a null implementation).
 
 ## Capabilities
 
 ### New Capabilities
 
 - `platform-identity`: how people, channels, messages and conversations are
-  identified across platforms, how they are stored, and how the existing
-  Discord data migrates.
+  identified across platforms, how they are stored, how the existing Discord
+  data migrates, and how identities on several platforms are linked to one
+  person.
 - `platform-surface`: the capability matrix, the platform ports and their
   routing, neutral rich text, the command catalogue, self-description by
-  capability, mention neutralisation and per-platform configuration.
+  capability, mention neutralisation, per-platform configuration, progress
+  refresh, delivery routing, the secret-material guard and the speech port.
 - `multi-platform-testing`: the platform-neutral e2e scenario API and the
   guarantees it gives every platform.
 
 ### Modified Capabilities
 
-None at the requirement level. `self-description`, `rich-formatting`,
-`discord-bot-surface`, `channel-acl`, `answer-disclosure`, `message-ingestion`
-and `testing` keep every requirement; this change moves where they are
-implemented and adds platform-neutral requirements beside them. Nothing a
-Discord user sees changes.
+Existing requirements worded in Discord terms are generalised to "the source
+platform", with Discord behaviour unchanged:
+
+- `channel-acl`: visibility is resolved by the source platform's access rules.
+- `chat-indexing`: scope changes need the platform's channel-management
+  authority.
+- `rich-formatting`: the platform renderer's markup and limit; mention
+  suppression covers user groups and model-produced person mentions.
+- `document-ingestion`: visibility of the source channel; new requirement for
+  owner-only 1:1 uploads.
+- `external-document-access`: visibility comes from the source platform.
+- `message-retrieval`: citations open the message on its platform.
+- `asker-context`: the profile fields each platform supplies.
+- `self-description`: commands listed per platform and conversation kind.
+- `external-sources`: new requirement that outbound queries carry no platform
+  identifier or phone number (the E.164 part is new on Discord, see Non-goals).
+
+`discord-bot-surface`, `answer-disclosure`, `message-ingestion` and `testing`
+keep every requirement; this change moves where they are implemented.
 
 ## Impact
 
@@ -123,18 +159,21 @@ Discord user sees changes.
   new `domain/platform.py`.
 - Ports: `ports/sources.py`, `ports/store.py`, `ports/memory.py`,
   `ports/acl.py`, `ports/answers.py`, `ports/notifications.py`, new
-  `ports/platform.py`, `ports/inbound.py`.
+  `ports/platform.py`, `ports/inbound.py`, `ports/speech.py`.
 - App: `ingest.py`, `scope.py`, `indexing.py`, `channel_listing.py`,
   `catchup.py`, `routing.py`, `self_description.py`, `confirmation.py`,
   `alerts.py`, `alert_requests.py`, `schedules.py`, `reasoning/*`,
-  `asks/*`, `windowing.py`, new `chat_controller.py`, `rich_text.py`,
-  `commands.py`.
+  `asks/*`, `windowing.py`, `limits.py`, `optout.py`, `documents/*`, new
+  `chat_controller.py`, `rich_text.py`, `commands.py`, `identity_linking.py`,
+  `delivery_routing.py`, `secret_guard.py`.
 - Adapters: every store (`adapters/store/*`, `adapters/documents/store.py`),
   `adapters/web/query.py`, `adapters/discord/*`, new
   `adapters/chat_common/splitting.py`.
 - Composition, entrypoints, `config.py`, `app/configuration.py`, `mcp/*`,
   `admin/*`, `tests/e2e/harness/*`.
 - One migration, reversible for Discord-only data.
+- New settings: `ENABLED_PLATFORMS`, `SECRET_GUARD_PLATFORMS`,
+  `LINK_FAILURE_CEILING`.
 
 ## Risk
 

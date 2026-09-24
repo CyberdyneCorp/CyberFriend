@@ -34,11 +34,14 @@ installation, so that decision does not require a redesign.
 - **`adapters/slack/`** on `slack_bolt` (async) and `slack_sdk`:
   - Socket Mode transport by default (no public URL, fits Coolify), and an
     HTTP Events/Interactivity transport with signing-secret verification
-    behind the same ingress, selected by `SLACK_TRANSPORT`.
+    behind the same ingress, selected by `SLACK_TRANSPORT`. Every envelope is
+    written to a `slack_inbound` table before it is acknowledged and drained
+    by a worker, so an acked event survives a crash or deploy.
   - `SlackChatSource`: message events (including edits, deletes, thread
     replies, broadcasts, file shares), a rate-limit-aware newest-first
     backfill over `conversations.history` + `conversations.replies`, and a
-    periodic reconcile for workspaces with retention policies.
+    periodic reconcile (history and thread replies, aborting on any error)
+    for workspaces with retention policies.
   - `SlackAclResolver` and `SlackAudienceResolver` over a membership cache,
     covering public and private channels, mpims, DMs, guests, Slack Connect
     and deactivated users, failing closed.
@@ -85,21 +88,27 @@ Non-goals:
 
 ### Modified Capabilities
 
-None. Existing capabilities keep their requirements; Slack satisfies them
-through the ports introduced by `add-platform-ports`.
+None here. The existing requirements that were worded in Discord terms are
+generalised by `add-platform-ports`; Slack satisfies them through its ports.
 
 ## Impact
 
-- Depends on `add-platform-ports` (all of it).
-- New: `src/chatmemory/adapters/slack/*`, `entrypoints/slack.py` (or a Slack
-  runtime inside the bot and ingest processes), `admin/handlers/slack.py`,
+- Depends on `add-platform-ports` (all of it). Age-based deletion uses the
+  existing `app/retention.py` policy; there is no Slack-specific retention
+  setting.
+- New: `src/chatmemory/adapters/slack/*`, `entrypoints/slack.py` (exactly one
+  Slack runtime process owns the Socket Mode connection and dispatches to the
+  ingest and controller paths), `admin/handlers/slack.py`,
   `tests/e2e/harness/slack_wire.py`, a Slack app manifest in `deploy/slack/`.
 - New dependencies: `slack_bolt`, `slack_sdk`.
 - New migration: `slack_install` (per team/enterprise tokens, encrypted at
-  rest), `slack_channel_membership` cache, `slack_reconcile_state`.
+  rest), `slack_inbound` (persistent dedup and work queue), `slack_user`,
+  `slack_channel_membership` cache, `slack_reconcile_state`.
 - Settings: `SLACK_MODE`, `SLACK_TRANSPORT`, `SLACK_BOT_TOKEN`,
   `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_TEAM_ID` /
-  `SLACK_ENTERPRISE_ID`, `SLACK_BACKFILL_DAYS`, `SLACK_COMMAND`,
+  `SLACK_ENTERPRISE_ID`, `SLACK_BACKFILL_DAYS`, `SLACK_RECONCILE_DAYS`,
+  `SLACK_COMMAND`, `SLACK_INDEX_MANAGERS`, `SLACK_ALLOW_CONNECT`,
+  `SLACK_APP_HOME`,
   `SLACK_CLIENT_ID`/`SLACK_CLIENT_SECRET` (OAuth only).
 - Docs: `docs/slack-setup.md`, `docs/operations.md`, README.
 

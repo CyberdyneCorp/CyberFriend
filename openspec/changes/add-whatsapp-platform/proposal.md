@@ -40,10 +40,13 @@ more than the code does:
 - **`adapters/whatsapp/`** on the Cloud API (direct or via a BSP reselling the
   same API), behind `ENABLED_PLATFORMS` containing `whatsapp`:
   - `webhook.py`: GET verification (`hub.challenge` with the verify token),
-    POST with `X-Hub-Signature-256` HMAC verification, fast 200 and async
-    processing, dedup by `wamid`.
-  - `inbound.py`: text, interactive replies, reactions, media, statuses;
-    BSUID and phone extraction.
+    POST with `X-Hub-Signature-256` HMAC verification and a
+    `metadata.phone_number_id` check, fast 200, a durable `whatsapp_inbound`
+    row (wamid and timestamps only) drained by a worker until
+    `processed_at` is set, so a message is answered once even across a
+    crash.
+  - `inbound.py`: text, interactive replies, reactions, media, statuses,
+    template status and category updates; BSUID and phone extraction.
   - `graph_client.py`: messages, media, typing/read endpoints; retries; 429.
   - `renderer.py`: WhatsApp markup, 4,096-char chunks, tables as lists.
   - `choices.py`: reply buttons (max 3) and list messages (max 10 rows);
@@ -51,26 +54,42 @@ more than the code does:
   - `commands.py`: leading `/word` and localised keywords (`menu`, `ajuda`,
     `alertas`, `esquecer`, …) mapped to catalogue commands.
   - `media.py`: download within the 5-minute URL lifetime; documents to the
-    existing pipeline; voice notes to the speech-to-text port.
+    existing pipeline as owner-only personal documents; voice notes to the
+    `SpeechToText` port of `add-platform-ports`.
   - `templates.py`: registry of approved utility templates per purpose and
-    language.
+    language, disabled automatically when Meta pauses, rejects or
+    recategorises one.
 - **Window-aware delivery**: a `service_window` per person, and a
-  `DeliveryPolicy` inside `WhatsAppDirectMessenger` that sends free-form in
-  the window and a utility template with a quick-reply button outside it,
-  sending the full content when the person taps.
-- **Opt-in** per person per platform, recorded, required for proactive
-  messages, revocable with `stop`/`parar`.
+  platform-neutral `DeliveryPolicy` in `app/delivery_policy.py`, driven by
+  capabilities, that sends free-form in the window and a utility template
+  with a quick-reply button outside it, sending the full content when the
+  person taps; the adapter only sends templates. The send address lives in
+  an encrypted `whatsapp_recipient` table (BSUID preferred), separate from
+  identity and from the phone fact.
+- **Opt-in** per person per platform in `notification_preference` (default
+  not opted in on WhatsApp, unchanged elsewhere), required for proactive
+  messages, revocable with `stop`/`parar`. The daily cap counts unique
+  recipients over a rolling 24 hours; template cost is recorded with its
+  currency.
 - **Scope and disclosure**: a per-platform tool allowlist
-  (`WHATSAPP_TOOLS`), a WhatsApp persona and self-description that state what
-  the assistant is for and that Meta processes messages.
-- **Identity and privacy**: people keyed by BSUID (phone kept only as a
-  masked, consented fact); phone and BSUID never in logs, traces, prompts or
-  the admin console in clear.
-- **Identity linking**: a one-time code issued on one platform and redeemed on
-  another links two platform identities to one person, which is the only way a
-  WhatsApp user reaches their Discord or Slack corpus.
-- **Voice notes** transcribed through the `SpeechToText` port introduced by
-  the voice-transcription change (feature 10); without it, a fixed reply.
+  (`WHATSAPP_TOOLS`) applied to questions, schedule creation and every
+  scheduled run; scope decided by deterministic routes plus one
+  classification call; a WhatsApp persona and self-description that state
+  what the assistant is for and that Meta processes messages.
+- **Identity and privacy**: people keyed by BSUID only (no phone-derived
+  identity, so a recycled number never inherits a previous owner's data;
+  phone kept only as a masked, consented fact); phone and BSUID never in
+  logs, traces, prompts or the admin console in clear. `forget everything`
+  is a full erasure through the existing opt-out purge triggers plus alerts,
+  schedules, documents and traces, and for a linked person removes only the
+  WhatsApp side unless the person confirms erasing the whole person.
+- **Identity linking** uses the platform-neutral flow of `add-platform-ports`;
+  linked team corpus and ask content reach WhatsApp only when
+  `LINKED_CORPUS_ON_WHATSAPP=true` (default `false`), with Meta named as a
+  processor in the disclosure.
+- **Voice notes** through the `SpeechToText` port of `add-platform-ports`
+  (port and null implementation only); until a backend is chosen (a
+  data-flow decision, because audio is personal data), a fixed reply.
 - **Feature matrix**: capabilities hide channels, catch-up, indexing and
   audience features from self-description and command hints on WhatsApp.
 - **Groups**: specified as a later, optional phase requiring an OBA; off in
@@ -100,22 +119,30 @@ Non-goals:
 
 ### Modified Capabilities
 
-None. Existing capabilities keep their requirements; the ones WhatsApp cannot
-offer are hidden by the capability matrix of `add-platform-ports`.
+None here. The existing requirements worded in Discord terms are generalised
+by `add-platform-ports`; the features WhatsApp cannot offer are hidden by its
+capability matrix.
 
 ## Impact
 
-- Depends on `add-platform-ports`. Voice notes depend on the
-  voice-transcription change; everything else does not.
+- Depends on `add-platform-ports` (including PR-P7: linking, delivery
+  routing, personal documents, the secret-material guard and the
+  `SpeechToText` port). Voice notes additionally need an STT backend
+  decision (task 0.7); everything else does not.
 - New: `src/chatmemory/adapters/whatsapp/*`, `entrypoints/whatsapp.py`,
-  `app/identity_linking.py`, `app/delivery_policy.py`,
+  `app/delivery_policy.py`,
   `tests/e2e/harness/whatsapp_wire.py`, `docs/whatsapp-setup.md`.
-- Migration: `whatsapp_inbound` (wamid dedup), `service_window`,
-  `messaging_consent`, `identity_link_code`, `person_link`.
+- Migration: `whatsapp_inbound` (wamid PK, `received_at`, `processed_at`,
+  encrypted work payload cleared once processed), `service_window`,
+  `whatsapp_recipient` (encrypted), `pending_delivery`, `whatsapp_template`
+  (status, category), `template_delivery` (cost, currency);
+  `notification_preference.proactive_opt_in`; `ck_notification_outcome`
+  gains `needs_template`, `not_opted_in`, `deferred`.
 - Settings: `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
   `WHATSAPP_WABA_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`,
   `WHATSAPP_TEMPLATES`, `WHATSAPP_TOOLS`, `WHATSAPP_DAILY_PROACTIVE_CAP`,
-  `WHATSAPP_GROUPS` (default false).
+  `WHATSAPP_GROUPS` (default false), `LINKED_CORPUS_ON_WHATSAPP` (default
+  false).
 - A public HTTPS endpoint on Coolify.
 - Tracing gains window state and template cost attributes.
 
