@@ -49,7 +49,7 @@ PORTFOLIO = ExternalTool(
 )
 
 REPORT = (
-    f"Portfolio for `{ADDRESS.lower()}`\n\n**Base** — $19,686.36\n"
+    f"Portfolio for …{ADDRESS.lower()[-4:]}\n\n**Base** — $19,686.36\n"
     "  Wallet $69.80 · 69.13 USDC\n\n**Total ≈ $19,756.16**"
 )
 
@@ -186,6 +186,12 @@ def test_each_chain_question_gets_exactly_one_label(text: str, route: CryptoRout
         "my balance of vacation days",
         "qual o saldo das minhas férias?",
         "quanto eu tenho de férias no total?",
+        # No possessive: nobody's wallet, so the corpus answers.
+        "qual o saldo?",
+        "qual saldo?",
+        "qual é o saldo atual?",
+        "qual o saldo total?",
+        "qual o valor total?",
     ],
 )
 def test_questions_about_anything_else_get_no_chain_label(text: str) -> None:

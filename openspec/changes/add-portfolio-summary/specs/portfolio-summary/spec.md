@@ -45,6 +45,11 @@ question is about that address, with at most three addresses per question.
 - WHEN the addresses handed to the tool contain anything that is not an address
 - THEN nothing SHALL be read
 
+#### Scenario: Asked in a channel
+- WHEN someone asks for their portfolio in a channel
+- THEN no wallet SHALL be written out in full anywhere in the reply, its
+  citation included; each is named by its last four characters
+
 ### Requirement: Nothing is counted twice or left out silently
 
 The total SHALL be wallet balances, plus open liquidity positions with their

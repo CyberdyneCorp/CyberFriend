@@ -261,11 +261,7 @@ async def test_without_a_saved_wallet_an_address_is_still_asked_for() -> None:
 
 
 async def test_a_saved_bitcoin_wallet_is_not_sent_to_an_evm_node() -> None:
-    """An Ethereum lookup of a Bitcoin address returns a confident zero.
-
-    A bare "what is my balance?" is a wallet question too, now; only a longer
-    question about a balance must name a wallet (`test_portfolio_routing`).
-    """
+    """An Ethereum lookup of a Bitcoin address returns a confident zero."""
     surface = ScriptedSurface(WALLET, WEB, completion=WANTS_BALANCES)
     retrieval = FakeRetrieval([[SOMEBODY_ELSES_PROJECT]])
     asked = replace(

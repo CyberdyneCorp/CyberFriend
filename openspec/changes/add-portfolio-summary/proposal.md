@@ -34,6 +34,9 @@ limits made the balances path report a chain unreadable that a retry read.
   PORTFOLIO, then the positions labels, then WALLET_BALANCE, each answered from
   one table in the answer service.
 - **"What's my balance?"** alone is a wallet question about the saved wallet.
+- **Language detection** counts "quanto" and "tenho" as Portuguese on every
+  route, so a short question built on them ("quanto eu tenho?") is answered in
+  Portuguese, fixed replies included, instead of being left unknown.
 - **Back-off on the balances path**, the same as positions reads, and one node
   per chain shared by everything a portfolio lookup reads.
 

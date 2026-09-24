@@ -141,8 +141,8 @@ CHAIN_HANDLERS = {
     ),
     CryptoRoute.WALLET_BALANCE: ChainHandler(CHAIN_SERVERS, None, "wallet"),
 }
-"""One row per chain label. `ASK_ADDRESS` has none: it is what any of these
-becomes with no address to read, and it reads nothing."""
+"""One row per chain label. With no address to read, any of them is answered
+with a request for one (`wallet_address_missing`), and nothing is read."""
 
 MCP_CHANGE_REFUSAL = (
     "I can't add, remove or change MCP servers from chat. Connecting a server "

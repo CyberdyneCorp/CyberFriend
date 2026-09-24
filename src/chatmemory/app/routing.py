@@ -508,7 +508,7 @@ def wallet_question(text: str) -> WalletQuestion | None:
 _MY_BALANCE = re.compile(
     r"\A\s*(?:"
     r"(?:what(?:'s|\s+is)|show(?:\s+me)?|check)\s+my\s+(?:current\s+)?balances?"
-    r"|qual\s+(?:[ée]\s+)?(?:o\s+)?(?:meu\s+)?saldo(?:\s+atual)?"
+    r"|qual\s+(?:[ée]\s+)?(?:o\s+)?meu\s+saldo(?:\s+atual)?"
     r"|(?:mostra|mostre|ver)\s+(?:o\s+)?meu\s+saldo"
     r"|meu\s+saldo"
     r")[\s?!.,]*\Z",
@@ -650,7 +650,7 @@ _PORTFOLIO_BARE = re.compile(
     r"quanto\s+(?:eu\s+)?tenho(?:\s+(?:no\s+total|ao\s+todo|em\s+cripto))?"
     r"|quanto\s+vale\s+(?:a\s+|o\s+)?"
     r"(?:minha\s+carteira|meu\s+portf[oó]lio|meu\s+patrim[oô]nio)"
-    r"|qual\s+(?:[ée]\s+)?(?:o\s+)?(?:meu\s+)?(?:saldo|valor|patrim[oô]nio)\s+total"
+    r"|qual\s+(?:[ée]\s+)?(?:o\s+)?meu\s+(?:saldo|valor|patrim[oô]nio)\s+total"
     r"|how\s+much\s+(?:do\s+i\s+have|am\s+i\s+worth|(?:money|crypto)\s+do\s+i\s+have)"
     r"(?:\s+(?:in\s+total|overall|altogether|on[\s-]?chain))?"
     r"|what(?:'s|\s+is)\s+my\s+total\s+(?:balance|value|holdings)"

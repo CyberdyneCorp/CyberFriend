@@ -16,6 +16,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import discord
+import httpx
+
+from chatmemory.adapters.chain import abi
 from chatmemory.adapters.chain.deployments import DEPLOYMENTS
 from chatmemory.adapters.discord.bot import PLATFORM
 from chatmemory.domain.identity import PersonRef, Viewer
@@ -26,6 +30,7 @@ from tests.e2e.harness.conversation import E2EBot
 
 BASE_HOST = "base-mainnet.infura.io"
 WALLET = "0xdd8ac30cb0a219af4963eab5e30ed065b5e63d68"
+TYPED = "0xb26b9a0d4fa4f2a1b7f6dd1c3b9a1e2f5c3d75e0"
 
 ETH_USD = Decimal("2672.57")
 USDC_USD = Decimal("0.99997645")
@@ -60,8 +65,8 @@ def pt_usd(value: Decimal) -> str:
     return "US$ " + f"{value:,.2f}".translate(str.maketrans(",.", ".,"))
 
 
-async def save_wallet(bot: E2EBot, who: object) -> None:
-    person = PersonRef(PLATFORM, who.id)  # type: ignore[attr-defined]
+async def save_wallet(bot: E2EBot, who: discord.Member) -> None:
+    person = PersonRef(PLATFORM, who.id)
     await bot.process.facts.remember(Viewer(person, frozenset()), FactKind.ETH_WALLET, WALLET)
 
 
@@ -130,3 +135,43 @@ async def test_e_no_total_after_a_balance_question_sums_that_wallet(bot: E2EBot)
     assert follow_up.edge() == "CHAIN"
     assert not follow_up.searched
     assert f"**Total ≈ {pt_usd(WALLET_USD + AAVE_NET_USD)}**" in follow_up.text
+
+
+async def test_in_a_channel_no_full_address_is_posted(bot: E2EBot) -> None:
+    """The citation footer quotes the tool's header; it once named every
+    wallet in full, the saved one included, to the whole channel."""
+    leo = bot.person("Leo")
+    await save_wallet(bot, leo)
+    bot.web.script(BASE_HOST, base_chain().handle)
+
+    turn = await bot.channel("general", leo).say(f"what is my portfolio worth with {TYPED}?")
+
+    assert turn.edge() == "CHAIN" and not turn.searched
+    assert "…3d68" in turn.text and "…75e0" in turn.text
+    for address in (WALLET, TYPED):
+        assert address[2:].lower() not in turn.text.lower()
+
+
+async def test_ether_is_priced_by_coingecko_when_the_oracle_is_down(bot: E2EBot) -> None:
+    """The production wiring hands the positions provider a price lookup;
+    without it, ether in a portfolio goes unpriced whenever the oracle fails."""
+    leo = bot.person("Leo")
+    await save_wallet(bot, leo)
+    chain = base_chain()
+    oracle = abi.AAVE_ASSET_PRICE.removeprefix("0x").encode()
+
+    def oracle_down(request: httpx.Request) -> httpx.Response:
+        chain.failing_selectors = {abi.AGGREGATE3} if oracle in request.content else set()
+        return chain.handle(request)
+
+    bot.web.script(BASE_HOST, oracle_down)
+    bot.web.script(
+        "api.coingecko.com",
+        lambda _: httpx.Response(200, json={"ethereum": {"usd": float(ETH_USD)}}),
+    )
+
+    turn = await bot.dm(leo).say("what is my portfolio worth?")
+
+    assert turn.edge() == "CHAIN" and not turn.searched
+    assert "ETH from CoinGecko" in turn.text
+    assert any(r.url.host == "api.coingecko.com" for r in bot.web.calls)

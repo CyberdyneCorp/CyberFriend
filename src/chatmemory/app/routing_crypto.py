@@ -20,7 +20,7 @@ Precedence, and why:
 A label is decided from the words alone. Whether there is an address to read
 -- typed, carried from the asker's earlier question, or saved -- is the
 service's to settle, because only it holds the asker's saved values; with
-none, the answer is a request for one (`ASK_ADDRESS`).
+none, the answer is a request for one (decision `wallet_address_missing`).
 """
 
 from __future__ import annotations
@@ -43,9 +43,6 @@ class CryptoRoute(StrEnum):
     DEFI_LENDING = "DEFI_LENDING"
     DEFI_BOTH = "DEFI_BOTH"
     WALLET_BALANCE = "WALLET_BALANCE"
-    ASK_ADDRESS = "ASK_ADDRESS"
-    """Never returned by `crypto_route`: what any other label becomes when
-    there is no address to read."""
 
 
 DEFI_ROUTES = {

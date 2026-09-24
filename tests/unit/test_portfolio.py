@@ -46,9 +46,11 @@ from chatmemory.adapters.chain.positions_provider import PORTFOLIO_TOOL, Positio
 from chatmemory.adapters.chain.provider import PricedAsset
 from chatmemory.adapters.chain.rpc import ChainReader
 from chatmemory.adapters.chain.tokens import ARBITRUM, BASE, ETHEREUM, Chain, tokens_for
+from chatmemory.adapters.mcp_client.session import ToolResult
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
 from chatmemory.app.egress import (
     DEFI_POSITIONS_PROVIDER,
+    AuthorizedQuery,
     EgressGuard,
     EgressRefused,
     EgressRequest,
@@ -360,7 +362,9 @@ async def test_only_underlying_tokens_are_read_never_an_atoken_or_debt_token() -
     # Position NFTs are counted with `balanceOf` too, on their managers.
     base = DEPLOYMENTS[1]
     managers = {base.v3_position_manager, base.v4_position_manager}
-    assert recording.balance_reads() - managers <= named | set(recording.chain.reserves)
+    reads = recording.balance_reads()
+    assert CBBTC.lower() in reads, "a reserve's underlying token is read"
+    assert reads - managers <= named | set(recording.chain.reserves)
 
 
 async def test_a_section_that_fails_twice_is_named_and_the_rest_still_counted() -> None:
@@ -375,7 +379,9 @@ async def test_a_section_that_fails_twice_is_named_and_the_rest_still_counted() 
     assert len(tries) == 2
 
 
-async def test_a_section_that_fails_once_is_read_on_the_retry() -> None:
+async def test_a_section_that_fails_once_is_read_on_the_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chain = base_chain()
     chain.failing_selectors.add(abi.AAVE_ACCOUNT_DATA)
     recording = Recording(chain)
@@ -387,7 +393,7 @@ async def test_a_section_that_fails_once_is_read_on_the_retry() -> None:
             chain.failing_selectors.clear()
         return response
 
-    chain.handle = recover  # type: ignore[method-assign]
+    monkeypatch.setattr(chain, "handle", recover)
 
     text = await _base(recording)
 
@@ -407,7 +413,9 @@ async def test_two_wallets_share_one_node_and_one_contract_lookup_per_chain() ->
     assert len(pool_lookups) == 1
 
 
-async def test_ether_is_priced_by_coingecko_only_when_the_oracle_does_not_answer() -> None:
+async def test_ether_is_priced_by_coingecko_only_when_the_oracle_does_not_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chain = base_chain()
     chain.failing_selectors.add(abi.AGGREGATE3)
     prices = FixedPrice()
@@ -421,7 +429,7 @@ async def test_ether_is_priced_by_coingecko_only_when_the_oracle_does_not_answer
         chain.failing_selectors = {abi.AGGREGATE3} if failing else set()
         return original(request)
 
-    chain.handle = oracle_down  # type: ignore[method-assign]
+    monkeypatch.setattr(chain, "handle", oracle_down)
 
     text = await _base(recording, prices=prices)
 
@@ -455,7 +463,7 @@ def test_a_cached_reserve_list_expires() -> None:
 # --- the clearance ---------------------------------------------------------------------
 
 
-def _clearance(text: str, question: str) -> object:
+def _clearance(text: str, question: str) -> AuthorizedQuery:
     return EgressGuard().authorize(
         EgressRequest(
             asker=ASKER,
@@ -465,8 +473,8 @@ def _clearance(text: str, question: str) -> object:
     )
 
 
-async def _clear(text: str, question: str) -> object:
-    with authorized(_clearance(text, question)):  # type: ignore[arg-type]
+async def _clear(text: str, question: str) -> Cleared | ToolResult:
+    with authorized(_clearance(text, question)):
         return await clear_addresses(
             DEFI_POSITIONS_PROVIDER, PORTFOLIO_TOOL, CallBudget(3), RateLimiter(0)
         )
@@ -481,14 +489,15 @@ async def test_every_address_the_asker_wrote_is_cleared() -> None:
 
 async def test_an_address_beside_a_word_is_refused_not_trimmed() -> None:
     refused = await _clear(f"{WALLET} portfolio", f"my portfolio {WALLET}")
-    assert not isinstance(refused, Cleared)
-    assert "not_an_address" in refused.text  # type: ignore[attr-defined]
+    assert isinstance(refused, ToolResult)
+    assert "not_an_address" in refused.text
 
 
 async def test_more_wallets_than_a_person_has_is_refused() -> None:
     many = [f"0x{i:040x}" for i in range(1, MAX_ADDRESSES + 2)]
     refused = await _clear(" ".join(many), "portfolio " + " ".join(many))
-    assert "too_many_addresses" in refused.text  # type: ignore[attr-defined]
+    assert isinstance(refused, ToolResult)
+    assert "too_many_addresses" in refused.text
 
 
 def test_an_address_the_asker_did_not_write_never_gets_a_clearance() -> None:

@@ -89,3 +89,11 @@ are spelled as the planned single router spells them.
 The answer is rendered by the adapter, verbatim, so the language comes from
 the asker's own question as the clearance carries it: `detect`, and for a
 question it cannot place, the portfolio's own Portuguese words.
+
+"quanto" and "tenho" are also added to `detect`'s Portuguese words, for every
+route. The reply to "quanto eu tenho no total?" with no saved wallet is the
+fixed "Which wallet?" refusal, which `AskService` localises with `detect`, not
+the renderer; with neither word known the question is UNKNOWN and the refusal
+went out in English. The side effect is that other short questions built on
+them ("quanto custa o ETH?", "quanto tempo tenho?") are now Portuguese rather
+than UNKNOWN on every route -- which is what they are.

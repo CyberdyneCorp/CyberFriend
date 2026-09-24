@@ -385,7 +385,9 @@ their own money ("my portfolio with 0x…"), at most three per question. A typed
 address in a question about that address ("what is 0x… worth in total?") is
 read alone. The tool's `addresses` argument is cleared piece by piece like the
 single-address tools: each rooted in the question or the saved wallet, the
-whole call refused if any piece is not an address.
+whole call refused if any piece is not an address. No address is written out
+in full, citation included: the answer can be given in a channel, so each
+wallet is named by its last four characters.
 
 **Prices.** Each chain's Aave oracle, for ether (as WETH) and every reserve; a
 dollar stablecoin the oracle does not list is $1; if the oracle does not

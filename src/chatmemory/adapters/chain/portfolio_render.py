@@ -161,7 +161,9 @@ def _swap(figure: str) -> str:
 
 def render_portfolio(wallets: Sequence[WalletPortfolio], language: Language) -> str:
     words = _Words(language)
-    who = ", ".join(f"`{w.address}`" for w in wallets)
+    # The header is dropped from the body but quoted by the citation footer,
+    # which is posted too: it names wallets the same way the body does.
+    who = ", ".join(f"…{w.address[-4:]}" for w in wallets)
     lines = [words("header", who=who)]
     for wallet in wallets:
         lines.append("")
