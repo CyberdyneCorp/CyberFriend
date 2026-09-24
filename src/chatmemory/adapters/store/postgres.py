@@ -233,7 +233,7 @@ class PostgresStore:
             rows = await conn.execute(
                 sql.UNNAMED_PEOPLE, {"platform": PLATFORM, "cap": limit}
             )
-            return [PersonRef(PLATFORM, int(user_id)) for user_id in rows.scalars()]
+            return [PersonRef(PLATFORM, int(r["platform_user_id"])) for r in rows.mappings()]
 
     # --- window maintenance --------------------------------------------
 
