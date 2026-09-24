@@ -105,3 +105,32 @@ async def test_the_channel_message_is_withheld_from_the_corpus(bot: E2EBot) -> N
     assert to_message(stated) is None
     assert not is_ingestable(stated)
     assert to_message(ordinary) is not None
+
+
+async def test_forget_my_wallet_with_two_saved_asks_which_before_deleting(bot: E2EBot) -> None:
+    leo = bot.person("Leo")
+    dm = bot.dm(leo)
+    other = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
+    await dm.say(f"minha carteira é {WALLET}")
+    await dm.say(f"minha carteira é {other}")
+
+    asked = await dm.say("esqueça minha carteira")
+
+    assert "`…75e0`" in asked.text and "`…6045`" in asked.text
+    assert [v for k, v in await bot.fact_rows(leo) if k == "eth_wallet"] == [WALLET, other]
+
+    await dm.say("esqueça minha carteira …6045")
+
+    assert [v for k, v in await bot.fact_rows(leo) if k == "eth_wallet"] == [WALLET]
+
+
+async def test_an_age_before_an_email_in_a_channel_is_withheld_from_the_corpus(
+    bot: E2EBot,
+) -> None:
+    leo = bot.person("Leo")
+    general = bot.discord.channel("general")
+
+    said = "I'm 45, my email is a@b.com"
+    stated = cast(RawMessage, bot.discord.channel_message(leo, general, said))
+
+    assert to_message(stated) is None

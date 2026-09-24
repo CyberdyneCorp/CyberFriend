@@ -14,6 +14,26 @@ refuse an impossible, pre-1900 or future birth date.
 - WHEN someone writes "nasci em 21/06/1981" or "I was born on June 21 1981"
 - THEN 1981-06-21 SHALL be stored as their birth date
 
+#### Scenario: A birthplace is not a birth date
+- WHEN someone writes "nasci em São Paulo" or "I was born in London"
+- THEN no birth date SHALL be stored, and in an introduction the reply SHALL name
+  where they are from as not kept
+
+#### Scenario: Loose phrases are not facts
+- WHEN someone writes "I live in fear of liquidation", "subi o morro no domingo"
+  or "I'm 100% sure"
+- THEN no home address SHALL be stored and no age SHALL be named
+
+#### Scenario: A value asked as a question
+- WHEN someone writes "minha carteira 0x…?" or "my email x@y.com?" without "é"/"is"
+- THEN nothing SHALL be stored and the message SHALL be answered as a question
+
+#### Scenario: "My address" alone
+- WHEN someone asks "what is my address?" or "qual é o meu endereço?"
+- THEN it SHALL be answered as a question, which in a DM may use both the home
+  address and the wallets; "my home address" / "meu endereço residencial" SHALL
+  show the home address
+
 #### Scenario: A future birth date
 - WHEN someone gives a birth date after today
 - THEN it SHALL NOT be stored and the reply SHALL say it is not a date it can read
@@ -56,6 +76,16 @@ SHALL let one wallet be forgotten by its address or all of them at once.
 - WHEN someone writes "esqueça minha carteira 0x…" naming one of their wallets
 - THEN only that wallet and the alerts that relied on it being saved SHALL be deleted
 
+#### Scenario: Forgetting "my wallet" with several saved
+- WHEN someone with two saved wallets writes "esqueça minha carteira" without naming one
+- THEN nothing SHALL be deleted and the reply SHALL ask which, listing each wallet's
+  last four characters
+- AND "esqueça minha carteira …45e0" SHALL then delete only the wallet ending in 45e0
+
+#### Scenario: Forgetting every wallet
+- WHEN someone writes "forget my wallets" or "esqueça minhas carteiras"
+- THEN every saved Ethereum and Bitcoin wallet SHALL be deleted
+
 ### Requirement: A lookup that reads one wallet asks which of several
 
 The system SHALL sum every saved wallet for a portfolio question, and for a
@@ -79,3 +109,7 @@ their own home address or birth date.
 - THEN every fact SHALL be stored, and the reply SHALL confirm the address,
   birth date, phone, email and wallet without their values
 - AND the message SHALL NOT be stored in the corpus
+
+#### Scenario: A short age before a contact detail
+- WHEN a channel message reads "I'm 45, my email is a@b.com"
+- THEN the message SHALL NOT be stored in the corpus

@@ -68,17 +68,22 @@ SUFFIX_CHARS = 4
 """How many trailing characters name a saved wallet in a reply."""
 
 
+def suffixes_named(text: str) -> frozenset[str]:
+    """The wallet suffixes `text` names, lowercased: "…45e0" gives "45e0"."""
+    return frozenset(
+        match.group(2).lower()
+        for match in _SUFFIX.finditer(text)
+        if match.group(1) or any(c.isdigit() for c in match.group(2))
+    )
+
+
 def named_by_suffix(text: str, saved: tuple[str, ...]) -> tuple[str, ...]:
     """The saved addresses `text` names by their last characters.
 
     Only ever matched against the asker's own saved wallets, so a suffix can
     select among them and never introduces an address.
     """
-    tokens = {
-        match.group(2).lower()
-        for match in _SUFFIX.finditer(text)
-        if match.group(1) or any(c.isdigit() for c in match.group(2))
-    }
+    tokens = suffixes_named(text)
     return tuple(w for w in saved if any(w.lower().endswith(t) for t in tokens))
 
 

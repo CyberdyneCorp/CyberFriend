@@ -242,3 +242,34 @@ async def test_with_alerts_off_a_request_is_told_so_and_never_searched(bot: E2EB
 
     listed = await bot.dm(leo).slash("alert list")
     assert "isn't switched on" in listed.text
+
+
+async def test_with_two_saved_wallets_the_request_asks_which_then_uses_the_one_named(
+    alerts_bot: E2EBot,
+) -> None:
+    bot = alerts_bot
+    chains(bot)
+    leo = bot.person("Leo")
+    await save_wallet(bot, leo)
+    person = PersonRef(PLATFORM, leo.id)
+    other = "0xb26b933a075fbb3d4e8b0925cad4f2bc345475e0"
+    await bot.process.facts.remember(Viewer(person, frozenset()), FactKind.ETH_WALLET, other)
+    dm = bot.dm(leo)
+    calls = len(bot.chat.calls)
+
+    asked = await dm.say("alert me if my health factor drops below 1.3")
+
+    quiet(bot, asked, calls)
+    [which] = asked.sent
+    assert not which.buttons, "nothing is offered until the wallet is chosen"
+    assert which.content.startswith("You have several wallets saved (`…75e0`, `…63d6`)")
+    assert await alert_rows(bot) == []
+
+    named = await dm.say("alert me if my health factor drops below 1.3 on …63d6")
+
+    quiet(bot, named, calls)
+    offer = prompt(named)
+    assert WALLET in offer.content and other not in offer.content
+    await dm.press(offer, "Confirm")
+    [row] = await alert_rows(bot)
+    assert (row.kind, row.address, row.address_source) == ("aave_health", WALLET, "saved")

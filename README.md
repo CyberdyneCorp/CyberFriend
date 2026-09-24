@@ -189,8 +189,9 @@ understood.
 deletes one. Replies come in the language you wrote in.
 
 Saving another wallet adds it rather than replacing the first. `forget my
-wallet 0x…` / `esqueça minha carteira 0x…` removes that one, `forget my
-wallets` / `esqueça minhas carteiras` removes them all. `what's my portfolio?`
+wallet 0x…` (or `…45e0`) / `esqueça minha carteira 0x…` removes that one;
+with several saved, `forget my wallet` alone asks which. `forget my wallets` /
+`esqueça minhas carteiras` removes them all, Ethereum and Bitcoin. `what's my portfolio?`
 sums every saved wallet; a balance, DeFi or alert question reads one, so with
 several saved it asks which (by their last four characters) unless you name it —
 `what's my wallet balance …45e0?`.

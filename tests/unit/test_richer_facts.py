@@ -516,3 +516,151 @@ async def test_a_stored_fact_result_for_a_new_wallet_is_stored() -> None:
     result = await service.remember(viewer(LEO), FactKind.ETH_WALLET, WALLET_TYPED)
     assert result.outcome is FactOutcome.STORED
     assert result.fact is not None and result.fact.value == WALLET
+
+
+# --- review findings: regressions --------------------------------------------------
+
+BTC = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm 45, my email is a@b.com",
+        "I'm 45 my email is a@b.com",
+        "I'm 45, my phone is +55 21 98070-3795",
+        "i am 30, my phone is +55 21 98070-3795",
+    ],
+)
+def test_a_short_age_does_not_hide_the_contact_after_it(text: str) -> None:
+    """"I'm 45, " is 8 characters, and a starter that close to the previous one
+    was once dropped: the email clause merged into the age and the message was
+    archived."""
+    assert states_own_contact(text)
+
+
+@pytest.mark.parametrize("text", ["nasci em São Paulo", "I was born in London"])
+def test_a_birthplace_alone_is_not_a_birth_date(text: str) -> None:
+    assert fact_intent(text) is None
+
+
+def test_a_birthplace_in_an_introduction_is_named_as_not_kept() -> None:
+    intent = fact_intent("Me chamo Leo, nasci em São Paulo e moro no Rio")
+    assert intent is not None and intent.action is FactAction.SET_MANY
+    assert dict(intent.sets) == {FactKind.PREFERRED_NAME: "Leo", FactKind.HOME_ADDRESS: "Rio"}
+    assert intent.not_kept == (WHERE_YOURE_FROM,)
+
+
+@pytest.mark.parametrize("text", ["what is my address?", "qual é o meu endereço?"])
+def test_a_bare_my_address_question_is_answered_not_read_as_the_home_address(
+    text: str,
+) -> None:
+    """A crypto user's "my address" is as often a wallet; the DM answer path has both."""
+    assert fact_intent(text) is None
+
+
+@pytest.mark.parametrize(
+    "text", ["what's my home address?", "qual é o meu endereço residencial?", "onde eu moro?"]
+)
+def test_the_home_address_is_still_shown_when_asked_for_by_name(text: str) -> None:
+    intent = fact_intent(text)
+    assert intent is not None and intent.action is FactAction.SHOW
+    assert intent.kind is FactKind.HOME_ADDRESS
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"minha carteira {WALLET_TYPED}?",
+        f"my wallet {WALLET_TYPED}?",
+        "my email x@y.com?",
+        "meu telefone 21980703795?",
+    ],
+)
+def test_a_verbless_value_asked_as_a_question_is_not_saved(text: str) -> None:
+    intent = fact_intent(text)
+    assert intent is None or intent.action is not FactAction.SET, intent
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I live in fear of liquidation",
+        "Subi o morro no domingo, meu email é a@b.com",
+        f"I'm 100% sure my wallet is {WALLET_TYPED}",
+        "I'm 5 minutes away, my email is a@b.com",
+    ],
+)
+def test_loose_phrases_are_not_an_address_or_an_age(text: str) -> None:
+    intent = fact_intent(text)
+    kinds = {intent.kind} if intent is not None else set()
+    if intent is not None and intent.action is FactAction.SET_MANY:
+        kinds = {kind for kind, _ in intent.sets}
+    assert FactKind.HOME_ADDRESS not in kinds
+    assert intent is None or AGE not in intent.not_kept
+
+
+def test_a_contact_after_a_hill_is_still_withheld() -> None:
+    assert states_own_contact("Subi o morro no domingo, meu email é a@b.com")
+
+
+@pytest.mark.parametrize("text", ["forget my wallet", "esqueça minha carteira"])
+async def test_forgetting_the_wallet_with_several_saved_asks_which(text: str) -> None:
+    service, store, _ = build()
+    await reply(service, in_dm(f"minha carteira é {WALLET_TYPED}"))
+    await reply(service, in_dm(f"my wallet is {OTHER}"))
+
+    asked = await reply(service, in_dm(text))
+
+    assert store.wallets[(LEO, FactKind.ETH_WALLET)] == [WALLET, OTHER], "nothing deleted"
+    assert "`…75e0`" in asked and "`…6045`" in asked
+    assert WALLET not in asked.lower() and OTHER not in asked
+
+
+async def test_forgetting_one_of_several_wallets_by_its_last_characters() -> None:
+    service, store, _ = build()
+    await reply(service, in_dm(f"minha carteira é {WALLET_TYPED}"))
+    await reply(service, in_dm(f"my wallet is {OTHER}"))
+
+    text = await reply(service, in_dm("esqueça minha carteira …75e0"))
+
+    assert store.wallets[(LEO, FactKind.ETH_WALLET)] == [OTHER]
+    assert text == "Pronto. Se essa carteira Ethereum estava salva, não está mais."
+
+
+async def test_a_suffix_that_matches_no_saved_wallet_forgets_nothing() -> None:
+    service, store, _ = build()
+    await reply(service, in_dm(f"my wallet is {WALLET_TYPED}"))
+
+    await reply(service, in_dm("forget my wallet …1a2b"))
+
+    assert store.wallets[(LEO, FactKind.ETH_WALLET)] == [WALLET]
+
+
+async def test_forgetting_the_only_wallet_needs_no_choice() -> None:
+    service, store, _ = build()
+    await reply(service, in_dm(f"my wallet is {WALLET_TYPED}"))
+
+    await reply(service, in_dm("forget my wallet"))
+
+    assert (LEO, FactKind.ETH_WALLET) not in store.wallets
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("forget my wallets", "Done. I don't have any of your wallets any more."),
+        ("esqueça todas as minhas carteiras", "Pronto. Não tenho mais nenhuma das suas carteiras."),
+    ],
+)
+async def test_forgetting_the_wallets_covers_bitcoin_too(text: str, expected: str) -> None:
+    service, store, _ = build()
+    await reply(service, in_dm(f"my wallet is {WALLET_TYPED}"))
+    await reply(service, in_dm(f"my btc wallet is {BTC}"))
+    assert store.wallets.get((LEO, FactKind.BTC_WALLET)), "the bitcoin wallet was saved"
+
+    said = await reply(service, in_dm(text))
+
+    assert (LEO, FactKind.ETH_WALLET) not in store.wallets
+    assert (LEO, FactKind.BTC_WALLET) not in store.wallets
+    assert said == expected

@@ -67,6 +67,7 @@ import asyncio
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
+from enum import Enum
 
 import structlog
 
@@ -99,7 +100,7 @@ from chatmemory.app.facts import (
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.domain.audience import Audience
-from chatmemory.domain.chain import is_address, named_by_suffix
+from chatmemory.domain.chain import is_address, named_by_suffix, suffixes_named
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.acl import AclResolver, AudienceResolver
 from chatmemory.ports.answers import (
@@ -110,6 +111,7 @@ from chatmemory.ports.answers import (
     Question,
 )
 from chatmemory.ports.facts import (
+    MULTI_VALUED_KINDS,
     FactKind,
 )
 from chatmemory.ports.memory import ConversationLocation, MemoryPurge, Recollection
@@ -144,6 +146,7 @@ from chatmemory.app.fact_replies import (  # noqa: E402
     fact_set_reply,
     facts_set_reply,
     facts_shown_reply,
+    forget_which_reply,
     rememberable,
     unsupported,
 )
@@ -599,19 +602,41 @@ class AskService:
             facts = await self._facts.facts_for(viewer, request.location)
             return facts_shown_reply(facts, direct, language, intent.kind)
         if intent.action is FactAction.FORGET:
-            if intent.kind is None:
-                await self._facts.forget_all(viewer)
-            else:
-                await self._facts.forget(viewer, intent.kind, intent.value)
-            return fact_forgotten_reply(
-                intent.kind, language, one_value=intent.value is not None
-            )
+            return await self._forget_fact(viewer, request, intent, language)
         if intent.action is FactAction.SET_MANY:
             results = [await self._facts.remember(viewer, k, v) for k, v in intent.sets]
             return facts_set_reply(results, intent.not_kept, direct, language)
         assert intent.kind is not None and intent.value is not None
         result = await self._facts.remember(viewer, intent.kind, intent.value)
         return fact_set_reply(result, direct, language)
+
+    async def _forget_fact(
+        self, viewer: Viewer, request: AskRequest, intent: FactIntent, language: Language
+    ) -> str:
+        assert self._facts is not None
+        if intent.kind is None:
+            await self._facts.forget_all(viewer)
+            return fact_forgotten_reply(None, language)
+        if intent.all_wallets:
+            for kind in self.OUTBOUND_KINDS:
+                await self._facts.forget(viewer, kind)
+            return fact_forgotten_reply(intent.kind, language, all_wallets=True)
+        value = intent.value
+        if value is None and intent.kind in MULTI_VALUED_KINDS:
+            # "Forget my wallet" with several saved is asked, not guessed:
+            # forgetting all of them would also delete their alerts.
+            stored = await self._facts.facts_for(
+                viewer, ConversationLocation(viewer.person.platform, 0, direct=True)
+            )
+            saved = tuple(sorted(stored.values(intent.kind)))
+            chosen = _wallet_to_forget(request.text, saved)
+            if chosen is _Pick.WHICH:
+                return forget_which_reply(saved, language)
+            if chosen is _Pick.NONE:
+                return fact_forgotten_reply(intent.kind, language, one_value=True)
+            value = None if chosen is _Pick.ALL else chosen
+        await self._facts.forget(viewer, intent.kind, value)
+        return fact_forgotten_reply(intent.kind, language, one_value=value is not None)
 
     #: Facts whose value may become an outbound argument for their owner.
     #: Only the chain addresses: a name or a language is not something any
@@ -827,3 +852,26 @@ class StubAnswerService:
             ),
             abstained=True,
         )
+
+
+
+class _Pick(Enum):
+    """What "forget my wallet" means when it names no full address."""
+
+    ALL = "all"  # zero or one saved: forgetting the kind is unambiguous
+    WHICH = "which"  # several could be meant: ask
+    NONE = "none"  # a typed suffix that no saved wallet ends with
+
+
+def _wallet_to_forget(text: str, saved: tuple[str, ...]) -> str | _Pick:
+    """The one saved wallet "forget my wallet ..." means, or how to proceed.
+
+    A typed suffix ("…45e0") picks among the saved wallets, and one that
+    matches none deletes nothing.
+    """
+    if suffixes_named(text):
+        named = named_by_suffix(text, saved)
+        if not named:
+            return _Pick.NONE
+        return named[0] if len(named) == 1 else _Pick.WHICH
+    return _Pick.WHICH if len(saved) > 1 else _Pick.ALL

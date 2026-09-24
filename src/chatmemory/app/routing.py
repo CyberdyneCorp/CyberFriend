@@ -1141,6 +1141,8 @@ class FactIntent:
     #: SET_MANY only: what was stated but is not a fact kept (`AGE`,
     #: `WHERE_YOURE_FROM`).
     not_kept: tuple[str, ...] = ()
+    #: FORGET only: "forget my wallets" -- every saved wallet, of both chains.
+    all_wallets: bool = False
 
 
 _POLITE = (
@@ -1179,6 +1181,9 @@ _BTC_WALLET_WORD = (
     rf"(?:carteiras?|{_WALLET})\s+(?:btc|bitcoin))"
 )
 _HOME_ADDRESS_WORD = r"(?:(?:home\s+)?address|endere[cç]o(?:\s+residencial)?)"
+_HOME_ADDRESS_ASKED = (
+    r"(?:home\s+address|endere[cç]o\s+(?:residencial|de\s+casa)|residential\s+address)"
+)
 _BIRTH_DATE_WORD = (
     r"(?:birth\s*date|date\s+of\s+birth|birthday|data\s+de\s+nascimento|"
     r"anivers[aá]rio)"
@@ -1190,9 +1195,11 @@ def _is_or_shaped(shape: str) -> str:
 
     "meu email leo@example.com" states an email as plainly as "meu email é
     ...", and was answered as a question. Without the verb the value must look
-    like its kind, so "my email bounced" is not a statement.
+    like its kind, so "my email bounced" is not a statement -- and must not be
+    a question: "minha carteira 0x...?" asks about the wallet, it does not save
+    it.
     """
-    return rf"(?:\s*:?\s+{_IS}|\s*:|(?=\s+{shape}))"
+    return rf"(?:\s*:?\s+{_IS}|\s*:|(?=\s+{shape}(?!.*\?)))"
 
 
 _EMAIL_SHAPE = r"[^\s@]+@"
@@ -1274,13 +1281,17 @@ _SET_PATTERNS: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
             # "morro" is the production typo of "moro"; it is also Portuguese
             # for "hill", so it needs the preposition "moro" takes.
             r"(?:eu\s+)?(?:moro|morro|resido)\s+(?:n[oa]s?|em)|"
-            r"i\s+live\s+(?:in|at|on))"
+            # English "live in" is also "I live in fear of liquidation": a
+            # place is capitalised or starts with a number.
+            r"i\s+live\s+(?:in|at|on)(?=\s+(?-i:[A-Z0-9\u00c0-\u00dd])))"
             r"\s+(?P<value>.+?)",
         ),
         (
             FactKind.BIRTH_DATE,
             rf"(?:{_MY}\s+{_BIRTH_DATE_WORD}\s+{_IS}|"
-            r"(?:(?:eu\s+)?nasci|nascid[oa])(?:\s+(?:em|no\s+dia|dia|a))?|"
+            # A date, as for "born": "nasci em São Paulo" is a birthplace.
+            r"(?:(?:eu\s+)?nasci|nascid[oa])(?:\s+(?:em|no\s+dia|dia|a))?"
+            rf"(?=\s+{_DATE_SHAPE})|"
             rf"(?:i\s+was\s+)?born(?:\s+on(?:\s+the)?|\s+in)?(?=\s+{_DATE_SHAPE}))"
             r"\s+(?P<value>.+?)",
         ),
@@ -1301,6 +1312,11 @@ _NOT_A_NAME_START = frozenset({
     "depois", "amanhã", "amanha", "mais", "hoje", "agora",
 })
 _QUOTES = "\"'`“”‘’"
+
+def _wallet_named(shape: str) -> str:
+    """The address itself as the value, or a suffix such as "…45e0"."""
+    return rf"(?:\s+(?P<value>{shape}\S*?)|\s+(?:…|\.{{2,3}})?[0-9a-f]{{4,8}})?"
+
 
 _FORGET_VERB = (
     r"(?:forget|delete|remove|clear|erase|drop|esque[çc]a|esquece|apague|apaga|remova)"
@@ -1327,12 +1343,22 @@ _FORGET_ONE: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
         (FactKind.PHONE, _PHONE_WORD),
         (FactKind.HOME_ADDRESS, _HOME_ADDRESS_WORD),
         (FactKind.BIRTH_DATE, _BIRTH_DATE_WORD),
-        # A wallet may be named by its address, to forget that one of several.
-        (FactKind.BTC_WALLET, _BTC_WALLET_WORD + rf"(?:\s+(?P<value>{_BTC_SHAPE}\S*?))?"),
-        (FactKind.ETH_WALLET, _ETH_WALLET_WORD + rf"(?:\s+(?P<value>{_ETH_SHAPE}\S*?))?"),
+        # A wallet may be named by its address, or by its last characters
+        # (resolved against the saved ones), to forget that one of several.
+        (FactKind.BTC_WALLET, _BTC_WALLET_WORD + _wallet_named(_BTC_SHAPE)),
+        (FactKind.ETH_WALLET, _ETH_WALLET_WORD + _wallet_named(_ETH_SHAPE)),
     )
 )
 """One kind, or one wallet. Bitcoin before Ethereum, as for setting."""
+
+_FORGET_WALLETS = re.compile(
+    _LEAD + _FORGET_VERB
+    + r"(?:all\s+(?:of\s+)?|todas\s+(?:as\s+)?)?"
+    + r"(?:my|minhas)\s+(?:wall?ets|carteiras|wallet\s+addresses)" + _TRAIL,
+    re.IGNORECASE,
+)
+"""Every wallet, Ethereum and Bitcoin: "forget my wallets" left the Bitcoin
+ones behind."""
 
 _SHOW_PATTERN = re.compile(
     _LEAD
@@ -1363,7 +1389,9 @@ _SHOW_ONE: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
         (FactKind.FULL_NAME, r"(?:full\s+name|nome\s+completo|name|nome)"),
         (FactKind.PREFERRED_NAME, r"(?:preferred\s+name|nome\s+preferido|apelido)"),
         (FactKind.PREFERRED_LANGUAGE, _LANGUAGE_WORD),
-        (FactKind.HOME_ADDRESS, _HOME_ADDRESS_WORD),
+        # Not the bare word: "what's my address?" is as often a wallet, and
+        # the answer path has both in a DM prompt.
+        (FactKind.HOME_ADDRESS, _HOME_ADDRESS_ASKED),
         (FactKind.BIRTH_DATE, _BIRTH_DATE_WORD),
         (FactKind.BTC_WALLET, _BTC_WALLET_WORD + r"(?:\s+address)?"),
         # Last: "wallet" alone is the Ethereum one, and "my btc wallet" also
@@ -1535,6 +1563,8 @@ def _cut(kind: FactKind, value: str) -> str:
 def _forget_intent(text: str) -> FactIntent | None:
     if _FORGET_PATTERN.match(text):
         return FactIntent(FactAction.FORGET)
+    if _FORGET_WALLETS.match(text):
+        return FactIntent(FactAction.FORGET, FactKind.ETH_WALLET, all_wallets=True)
     for kind, pattern in _FORGET_ONE:
         match = pattern.match(text)
         if match is not None:
@@ -1615,7 +1645,10 @@ def states_own_contact(text: str) -> bool:
 _CLAUSE_START = re.compile(
     r"\b(?:my|meu|minha|call\s+me|(?:you\s+can\s+)?call\s+me|pode\s+me\s+chamar|"
     r"(?:eu\s+)?me\s+chamo|me\s+cham[ae]|"
-    r"(?:eu\s+)?moro|morro(?=\s+(?:n[oa]s?|em)\b)|resido|i\s+live|"
+    # "morro" (a typo of "moro") only where a clause can start: after "o" or
+    # "do" it is the hill in "subi o morro no domingo".
+    r"(?:eu\s+)?moro|(?<!\b[oa]\s)(?<!\b[dn][oa]\s)(?<!\bum\s)morro(?=\s+(?:n[oa]s?|em)\b)|"
+    r"resido|i\s+live|"
     r"sou\s+de|i'?m\s+from|i\s+am\s+from|"
     r"(?:eu\s+)?tenho(?=\s+\d)|i'?m(?=\s+\d)|i\s+am(?=\s+\d)|"
     r"(?:eu\s+)?nasci|nascid[oa]|i\s+was\s+born|born\s+on)\b",
@@ -1630,12 +1663,19 @@ AGE = "age"
 WHERE_YOURE_FROM = "where you're from"
 _NOT_KEPT = (
     # An age goes stale on the next birthday, and follows from the birth date.
+    # English "I'm 45" only as the whole clause or before "years"/"and": "I'm
+    # 100% sure" and "I'm 5 minutes away" are not ages.
     (AGE, re.compile(
-        r"^(?:(?:eu\s+)?tenho\s+\d{1,3}\s+anos|i'?m\s+\d{1,3}|i\s+am\s+\d{1,3})\b",
+        r"^(?:(?:eu\s+)?tenho\s+\d{1,3}\s+anos\b|"
+        r"(?:i'?m|i\s+am)\s+\d{1,3}(?:$|\s+(?:years?|y/?o|and)\b))",
         re.IGNORECASE,
     )),
-    # Where somebody is from is not where they live.
-    (WHERE_YOURE_FROM, re.compile(r"^(?:sou\s+de|i'?m\s+from|i\s+am\s+from)\b", re.IGNORECASE)),
+    # Where somebody is from, or was born, is not where they live.
+    (WHERE_YOURE_FROM, re.compile(
+        r"^(?:sou\s+de|i'?m\s+from|i\s+am\s+from|(?:eu\s+)?nasci\s+(?:em|n[oa]s?)|"
+        r"i\s+was\s+born\s+in)\b",
+        re.IGNORECASE,
+    )),
 )
 
 
@@ -1644,11 +1684,11 @@ def _clauses(text: str) -> list[str]:
 
     Whatever precedes the first fact ("Oi", "Hello there") is dropped.
     """
+    # Matches never overlap, so "you can call me" starts once, not twice, and
+    # a short clause ("I'm 45, my email is ...") keeps the one after it.
     starts = [m.start() for m in _CLAUSE_START.finditer(text)]
     if not starts:
         return []
-    # "call me" inside "you can call me" starts once, not twice.
-    starts = [s for i, s in enumerate(starts) if i == 0 or s - starts[i - 1] > 8]
     bounds = zip(starts, [*starts[1:], len(text)], strict=True)
     return [_CLAUSE_TAIL.sub("", text[a:b]).strip() for a, b in bounds]
 

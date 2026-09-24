@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from chatmemory.app.facts import DIRECT_ONLY_KINDS, FactOutcome, FactResult
 from chatmemory.app.language import Language
 from chatmemory.app.routing import AGE, WHERE_YOURE_FROM
+from chatmemory.domain.chain import suffix_list
 from chatmemory.ports.facts import (
     MAX_FULL_NAME_CHARS,
     MAX_HOME_ADDRESS_CHARS,
@@ -232,6 +233,20 @@ _TEXT: dict[str, dict[Language, str]] = {
     "forgot_that": {
         EN: "Done. If that {l} was saved, it isn't any more.",
         PT: "Pronto. Se essa {l} estava salva, não está mais.",
+    },
+    "forgot_wallets": {
+        EN: "Done. I don't have any of your wallets any more.",
+        PT: "Pronto. Não tenho mais nenhuma das suas carteiras.",
+    },
+    "forget_which": {
+        EN: (
+            "You have several wallets saved ({wallets}). Which one should I forget? "
+            "Say it again with its last four characters, or with the address."
+        ),
+        PT: (
+            "Você tem várias carteiras salvas ({wallets}). Qual delas devo esquecer? "
+            "Diga de novo com os quatro últimos caracteres dela, ou com o endereço."
+        ),
     },
 }
 
@@ -490,8 +505,18 @@ def _one_fact(
     return text("one_missing", language, p=possessive(kind, language))
 
 
+def forget_which_reply(saved: tuple[str, ...], language: Language = EN) -> str:
+    """Asked, not guessed, when "forget my wallet" could mean any of several:
+    each one forgotten also deletes the alerts that rely on it."""
+    return text("forget_which", language, wallets=suffix_list(saved))
+
+
 def fact_forgotten_reply(
-    kind: FactKind | None, language: Language = EN, *, one_value: bool = False
+    kind: FactKind | None,
+    language: Language = EN,
+    *,
+    one_value: bool = False,
+    all_wallets: bool = False,
 ) -> str:
     """The same words whether or not there was anything to delete.
 
@@ -501,6 +526,8 @@ def fact_forgotten_reply(
     """
     if kind is None:
         return text("forgot_all", language)
+    if all_wallets:
+        return text("forgot_wallets", language)
     if kind in MULTI_VALUED_KINDS and one_value:
         return text("forgot_that", language, l=label(kind, language))
     if kind in MULTI_VALUED_KINDS:
