@@ -22,13 +22,15 @@ from chatmemory.adapters.web.limits import CallBudget, RateLimiter
 from chatmemory.adapters.web.query import check_query
 from chatmemory.app.egress import EgressRefused, current_authorization
 from chatmemory.domain.chain import is_address, normalise
+from chatmemory.ports.facts import MAX_WALLETS_PER_KIND
 
 log = structlog.get_logger()
 
 
-MAX_ADDRESSES = 3
-"""Wallets one portfolio call may cover: a person's saved wallet and a couple
-they typed. More than that is a sweep, not a question about one's own money."""
+MAX_ADDRESSES = MAX_WALLETS_PER_KIND
+"""Wallets one portfolio call may cover: every wallet a person may save. More
+than that is a sweep, not a question about one's own money -- and five
+addresses is also what the 256-character query bound holds."""
 
 _SEPARATORS = re.compile(r"[\s,;]+")
 

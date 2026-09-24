@@ -257,7 +257,7 @@ async def test_an_opted_out_person_is_told_nothing_was_stored() -> None:
 
 async def test_a_fact_outside_the_set_is_refused_naming_what_can_be_remembered() -> None:
     service, store, answers = build()
-    text = await reply(service, in_channel("remember that my birthday is 3 May"))
+    text = await reply(service, in_channel("remember that my time zone is UTC-3"))
     assert store.rows == {}
     assert answers.seen == []
     for named in ("name", "email", "language"):

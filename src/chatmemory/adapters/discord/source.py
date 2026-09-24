@@ -145,7 +145,8 @@ def _display_name(author: RawUser) -> str:
 
 
 def withholds_personal_fact(raw: RawMessage) -> bool:
-    """A message giving the author's own email or phone, which is never indexed.
+    """A message giving the author's own email, phone, address or birth date,
+    which is never indexed.
 
     Checked here, in the one conversion every path shares -- live messages,
     edits and history backfill -- so no path can store what another withholds.

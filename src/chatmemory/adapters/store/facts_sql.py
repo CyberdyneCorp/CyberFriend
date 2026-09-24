@@ -22,14 +22,27 @@ person_id = (
 )
 """
 
-# One row per (person, kind); setting again replaces. RETURNING tells "stored"
-# from "dropped by the opt-out trigger": a BEFORE INSERT trigger returning NULL
-# skips the row before conflict handling, and RETURNING then yields nothing.
+# One row per (person, kind) for every kind but a wallet; setting again
+# replaces. RETURNING tells "stored" from "dropped by the opt-out trigger": a
+# BEFORE INSERT trigger returning NULL skips the row before conflict handling,
+# and RETURNING then yields nothing. The WHERE clause names the partial index
+# of migration 0022, and must match its predicate.
 UPSERT_FACT = text("""
 INSERT INTO person_fact (person_id, kind, value)
 VALUES (:person_id, :kind, :value)
-ON CONFLICT (person_id, kind)
+ON CONFLICT (person_id, kind) WHERE kind NOT IN ('eth_wallet', 'btc_wallet')
 DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+RETURNING id
+""")
+
+# A wallet is one row per (person, kind, value): saving another adds it, and
+# saving one already held only refreshes it. `value` is never updated, so the
+# alert-purge trigger of 0020 (on UPDATE OF value) cannot fire from here.
+ADD_WALLET = text("""
+INSERT INTO person_fact (person_id, kind, value)
+VALUES (:person_id, :kind, :value)
+ON CONFLICT (person_id, kind, value) WHERE kind IN ('eth_wallet', 'btc_wallet')
+DO UPDATE SET updated_at = now()
 RETURNING id
 """)
 
@@ -40,11 +53,15 @@ SELECT f.kind, f.value, f.updated_at
 FROM person_fact f
 WHERE f.{_REQUESTER.strip()}
   AND NOT EXISTS (SELECT 1 FROM person_opt_out o WHERE o.person_id = f.person_id)
-ORDER BY f.kind
+ORDER BY f.kind, f.updated_at, f.id
 """)
 
 FORGET_FACT = text(f"""
 DELETE FROM person_fact WHERE {_REQUESTER} AND kind = :kind
+""")
+
+FORGET_FACT_VALUE = text(f"""
+DELETE FROM person_fact WHERE {_REQUESTER} AND kind = :kind AND value = :value
 """)
 
 FORGET_ALL_FACTS = text(f"""

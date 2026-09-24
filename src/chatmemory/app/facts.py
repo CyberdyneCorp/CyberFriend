@@ -29,6 +29,8 @@ import structlog
 
 from chatmemory.domain.identity import Viewer
 from chatmemory.ports.facts import (
+    MAX_WALLETS_PER_KIND,
+    MULTI_VALUED_KINDS,
     FactKind,
     FactRejection,
     FactStore,
@@ -46,12 +48,16 @@ DIRECT_ONLY_KINDS = frozenset({
     FactKind.PHONE,
     FactKind.ETH_WALLET,
     FactKind.BTC_WALLET,
+    FactKind.HOME_ADDRESS,
+    FactKind.BIRTH_DATE,
 })
-"""Every way of reaching a person, and every address that ties them to money.
+"""Every way of reaching a person, every address that ties them to money, and
+where they live and when they were born.
 
 A wallet is public on its chain; what is private is that it is *theirs*, and a
 channel reply naming it makes that link for everyone present. Same reasoning as
-the email it joins."""
+the email it joins. A home address and a birth date are the two facts most
+used to impersonate somebody, so they are never repeated in a room either."""
 
 
 class FactOutcome(StrEnum):
@@ -114,6 +120,14 @@ class PersonalFactsService:
                 reason=refused.reason.value,
             )
             return FactResult(FactOutcome.REJECTED, refused.kind, rejection=refused.reason)
+        if await self._at_cap(asker, fact):
+            log.info(
+                "facts.rejected",
+                person=str(asker.person),
+                kind=fact.kind.value,
+                reason=FactRejection.TOO_MANY.value,
+            )
+            return FactResult(FactOutcome.REJECTED, fact.kind, rejection=FactRejection.TOO_MANY)
         stored = await self._store.set_fact(asker.person, fact)
         log.info(
             "facts.set" if stored else "facts.not_stored",
@@ -124,13 +138,39 @@ class PersonalFactsService:
             return FactResult(FactOutcome.NOT_STORED, fact.kind)
         return FactResult(FactOutcome.STORED, fact.kind, fact=fact)
 
+    async def _at_cap(self, asker: Viewer, fact: PersonalFact) -> bool:
+        """Whether a new wallet would exceed the cap. Saving one already held
+        is never refused: it is idempotent."""
+        if fact.kind not in MULTI_VALUED_KINDS:
+            return False
+        held = (await self._store.facts_of(asker)).values(fact.kind)
+        return fact.value not in held and len(held) >= MAX_WALLETS_PER_KIND
+
     async def facts_for(self, asker: Viewer, location: ConversationLocation) -> PersonalFacts:
         """The asker's own facts, as they may be shown where they asked."""
         return visible_facts(await self._store.facts_of(asker), location)
 
-    async def forget(self, asker: Viewer, kind: FactKind) -> bool:
-        forgotten = await self._store.forget_fact(asker.person, FactKind(kind))
-        log.info("facts.forgotten", person=str(asker.person), kind=kind, existed=forgotten)
+    async def forget(self, asker: Viewer, kind: FactKind, value: str | None = None) -> bool:
+        """Forget one kind, or with `value` one wallet of it.
+
+        `value` is normalised first, so "0xABC..." forgets the "0xabc..." that
+        was stored. A value that is not a valid one of its kind forgets
+        nothing: there is no stored row it could be.
+        """
+        stored_form: str | None = None
+        if value is not None:
+            try:
+                stored_form = PersonalFact(kind, value).value
+            except InvalidFact:
+                return False
+        forgotten = await self._store.forget_fact(asker.person, FactKind(kind), stored_form)
+        log.info(
+            "facts.forgotten",
+            person=str(asker.person),
+            kind=kind,
+            one_value=value is not None,
+            existed=forgotten,
+        )
         return forgotten
 
     async def forget_all(self, asker: Viewer) -> int:

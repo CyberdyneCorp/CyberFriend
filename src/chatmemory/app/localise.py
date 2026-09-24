@@ -24,6 +24,7 @@ from chatmemory.app.reasoning.service import (
     NO_ADVICE,
     WALLET_ADDRESS_MISSING,
     WALLET_UNAVAILABLE,
+    WHICH_SAVED_WALLET,
 )
 from chatmemory.ports.answers import Answer
 
@@ -66,6 +67,11 @@ PORTUGUESE: dict[str, str] = {
 }
 
 PREFIXES_PORTUGUESE: dict[str, str] = {
+    WHICH_SAVED_WALLET: (
+        "Você tem várias carteiras salvas, e isto lê uma. Qual? Pergunte de novo "
+        "com os quatro últimos caracteres dela (como `qual o saldo da minha "
+        "carteira …1a2b?`), ou com o endereço:"
+    ),
     NO_ADVICE: (
         "Não dou recomendações de compra, venda ou manter. Aqui está o valor "
         "atual, para você decidir:"

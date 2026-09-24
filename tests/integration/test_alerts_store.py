@@ -326,7 +326,9 @@ async def test_forgetting_the_saved_wallet_deletes_the_alerts_that_watch_it(
     assert [a.id for a in await store.for_person(LEO)] == [typed.id]
 
 
-async def test_saving_a_different_wallet_forgets_the_old_ones_alerts(clean: AsyncEngine) -> None:
+async def test_saving_another_wallet_keeps_the_first_ones_alerts(clean: AsyncEngine) -> None:
+    """Regression: with one wallet per person, saving a second replaced the
+    first -- and the trigger deleted every alert that watched it."""
     await seed_person(clean, LEO, "Leo")
     facts = PostgresFactStore(clean)
     await facts.set_fact(LEO, PersonalFact(FactKind.ETH_WALLET, WALLET))
@@ -337,7 +339,23 @@ async def test_saving_a_different_wallet_forgets_the_old_ones_alerts(clean: Asyn
     assert await count(clean) == 1, "saving the same wallet again changes nothing"
     await facts.set_fact(LEO, PersonalFact(FactKind.ETH_WALLET, TYPED))
 
-    assert await count(clean) == 0
+    assert await count(clean) == 1
+
+
+async def test_forgetting_one_of_several_wallets_deletes_only_its_alerts(
+    clean: AsyncEngine,
+) -> None:
+    await seed_person(clean, LEO, "Leo")
+    facts = PostgresFactStore(clean)
+    await facts.set_fact(LEO, PersonalFact(FactKind.ETH_WALLET, WALLET))
+    await facts.set_fact(LEO, PersonalFact(FactKind.ETH_WALLET, TYPED))
+    store = PostgresAlertStore(clean)
+    await created(store, health())
+    other = await created(store, health(address=TYPED))
+
+    assert await facts.forget_fact(LEO, FactKind.ETH_WALLET, WALLET)
+
+    assert [a.id for a in await store.for_person(LEO)] == [other.id]
 
 
 async def test_forgetting_everything_deletes_the_saved_wallets_alerts(clean: AsyncEngine) -> None:

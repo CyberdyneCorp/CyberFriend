@@ -99,7 +99,7 @@ from chatmemory.app.facts import (
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.domain.audience import Audience
-from chatmemory.domain.chain import is_address
+from chatmemory.domain.chain import is_address, named_by_suffix
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.acl import AclResolver, AudienceResolver
 from chatmemory.ports.answers import (
@@ -505,8 +505,8 @@ class AskService:
     ) -> AskOutcome:
         """What would be watched, for the asker to confirm; nothing is stored.
 
-        The saved wallet comes from `values` -- the exact stored strings -- and
-        only an Ethereum address among them, as for the positions route.
+        The saved wallets come from `values` -- the exact stored strings -- and
+        only the Ethereum addresses among them, as for the positions route.
         """
         language = alert_language(request.text, facts.preferred_language if facts else None)
         direct = request.destination is None
@@ -521,9 +521,15 @@ class AskService:
         if self._alerts is None:
             reply = alerts_unavailable(language)
             return AskOutcome(ScopedAnswer(Answer(text=reply), frozenset()))
-        saved = next((v for v in sorted(values) if is_address(v)), None)
+        saved = tuple(sorted(v for v in values if is_address(v)))
+        # Several saved: the one the request names by its last characters.
+        named = named_by_suffix(request.text, saved) if len(saved) > 1 else ()
         proposed = await self._alerts.propose(
-            request.asker, intent, saved_wallet=saved, language=language, direct=direct
+            request.asker,
+            intent,
+            saved_wallets=named if len(named) == 1 else saved,
+            language=language,
+            direct=direct,
         )
         answer = Answer(text=proposed.text, consulted_channels=frozenset())
         return AskOutcome(ScopedAnswer(answer, frozenset()), alert=proposed.proposal)
@@ -596,8 +602,10 @@ class AskService:
             if intent.kind is None:
                 await self._facts.forget_all(viewer)
             else:
-                await self._facts.forget(viewer, intent.kind)
-            return fact_forgotten_reply(intent.kind, language)
+                await self._facts.forget(viewer, intent.kind, intent.value)
+            return fact_forgotten_reply(
+                intent.kind, language, one_value=intent.value is not None
+            )
         if intent.action is FactAction.SET_MANY:
             results = [await self._facts.remember(viewer, k, v) for k, v in intent.sets]
             return facts_set_reply(results, intent.not_kept, direct, language)
@@ -629,9 +637,9 @@ class AskService:
             # No values is never a failure: the lookup then asks for an address.
             log.exception("ask.values_failed", asker=str(viewer.person))
             return frozenset()
-        return frozenset(
-            value for kind in self.OUTBOUND_KINDS if (value := stored.get(kind))
-        )
+        # Every saved wallet, not the first of each kind: a person with two
+        # must be able to ask about either.
+        return frozenset(value for kind in self.OUTBOUND_KINDS for value in stored.values(kind))
 
     async def reply_language(self, asker: PersonRef) -> Language:
         """The language to answer a message with no words in, such as a bare mention.
@@ -683,8 +691,10 @@ class AskService:
             preferred_language=stored.get(FactKind.PREFERRED_LANGUAGE),
             email=stored.get(FactKind.EMAIL),
             phone=stored.get(FactKind.PHONE),
-            eth_wallet=stored.get(FactKind.ETH_WALLET),
-            btc_wallet=stored.get(FactKind.BTC_WALLET),
+            home_address=stored.get(FactKind.HOME_ADDRESS),
+            birth_date=stored.get(FactKind.BIRTH_DATE),
+            eth_wallets=stored.values(FactKind.ETH_WALLET),
+            btc_wallets=stored.values(FactKind.BTC_WALLET),
         )
 
     async def _profile(self, asker: PersonRef) -> AskerProfile | None:

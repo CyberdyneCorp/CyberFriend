@@ -175,7 +175,10 @@ async def propose(
     language: AlertLanguage = EN,
     direct: bool = True,
 ) -> Any:
-    return await flow.propose(LEO, intent, saved_wallet=saved, language=language, direct=direct)
+    wallets = () if saved is None else (saved,)
+    return await flow.propose(
+        LEO, intent, saved_wallets=wallets, language=language, direct=direct
+    )
 
 
 # --- the address ----------------------------------------------------------------

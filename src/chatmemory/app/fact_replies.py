@@ -15,9 +15,13 @@ from collections.abc import Sequence
 
 from chatmemory.app.facts import DIRECT_ONLY_KINDS, FactOutcome, FactResult
 from chatmemory.app.language import Language
+from chatmemory.app.routing import AGE, WHERE_YOURE_FROM
 from chatmemory.ports.facts import (
     MAX_FULL_NAME_CHARS,
+    MAX_HOME_ADDRESS_CHARS,
     MAX_PREFERRED_NAME_CHARS,
+    MAX_WALLETS_PER_KIND,
+    MULTI_VALUED_KINDS,
     FactKind,
     FactRejection,
     PersonalFacts,
@@ -39,6 +43,8 @@ LABELS: dict[Language, dict[FactKind, str]] = {
         FactKind.ETH_WALLET: "Ethereum wallet",
         FactKind.BTC_WALLET: "Bitcoin wallet",
         FactKind.FULL_NAME: "full name",
+        FactKind.HOME_ADDRESS: "home address",
+        FactKind.BIRTH_DATE: "birth date",
     },
     PT: {
         FactKind.PREFERRED_NAME: "nome preferido",
@@ -48,18 +54,31 @@ LABELS: dict[Language, dict[FactKind, str]] = {
         FactKind.ETH_WALLET: "carteira Ethereum",
         FactKind.BTC_WALLET: "carteira Bitcoin",
         FactKind.FULL_NAME: "nome completo",
+        FactKind.HOME_ADDRESS: "endereço",
+        FactKind.BIRTH_DATE: "data de nascimento",
     },
 }
 FACT_LABELS = LABELS[EN]
 
-_FEMININE_PT = frozenset({FactKind.ETH_WALLET, FactKind.BTC_WALLET})
+PLURAL_LABELS: dict[Language, dict[FactKind, str]] = {
+    EN: {FactKind.ETH_WALLET: "Ethereum wallets", FactKind.BTC_WALLET: "Bitcoin wallets"},
+    PT: {FactKind.ETH_WALLET: "carteiras Ethereum", FactKind.BTC_WALLET: "carteiras Bitcoin"},
+}
+"""The kinds a person may hold several of, named in the plural."""
+
+_FEMININE_PT = frozenset({FactKind.ETH_WALLET, FactKind.BTC_WALLET, FactKind.BIRTH_DATE})
 
 
-def possessive(kind: FactKind, language: Language) -> str:
-    """"your phone number" / "seu telefone" / "sua carteira Ethereum"."""
-    if _lang(language) is PT:
-        return ("sua " if kind in _FEMININE_PT else "seu ") + LABELS[PT][kind]
-    return "your " + LABELS[EN][kind]
+def possessive(kind: FactKind, language: Language, *, plural: bool = False) -> str:
+    """"your phone number" / "seu endereço" / "sua data de nascimento" /
+    "suas carteiras Ethereum"."""
+    lang = _lang(language)
+    plurals = PLURAL_LABELS[lang]
+    name = plurals[kind] if plural and kind in plurals else label(kind, lang)
+    if lang is PT:
+        feminine = kind in _FEMININE_PT
+        return ("sua" if feminine else "seu") + ("s " if plural else " ") + name
+    return "your " + name
 
 REMEMBERABLE_TEXT = {
     EN: (
@@ -68,13 +87,17 @@ REMEMBERABLE_TEXT = {
         "- the name you'd like me to call you (`call me Leo`)\n"
         "- your email address (`my email is ...`)\n"
         "- your phone number (`my phone is ...`)\n"
+        "- your home address (`I live in ...`)\n"
+        "- your birth date (`I was born on 21/06/1981`)\n"
         "- the language you'd like answers in (`reply to me in Portuguese`)\n"
-        "- your Ethereum wallet (`my wallet is 0x...`) and your Bitcoin wallet "
-        "(`my btc wallet is ...`)\n"
+        "- your Ethereum wallets, up to 5 (`my wallet is 0x...`), and your Bitcoin "
+        "wallets (`my btc wallet is ...`)\n"
         "You can tell me several at once. "
-        "Ask `what do you know about me?` to see them, or `forget my email` to "
-        "delete one. Once I have your wallet, `what's my balance?` uses it.\n"
-        "Your email, phone and wallets I only ever show you, in a direct message."
+        "Ask `what do you know about me?` to see them, `forget my email` to "
+        "delete one, or `forget my wallet 0x...` to delete one wallet. Once I "
+        "have your wallets, `what's my portfolio?` sums them.\n"
+        "Your email, phone, address, birth date and wallets I only ever show you, "
+        "in a direct message."
     ),
     PT: (
         "Posso guardar estas informações sobre você, se você mesmo me disser:\n"
@@ -82,14 +105,17 @@ REMEMBERABLE_TEXT = {
         "- como quer ser chamado (`pode me chamar de Leo`)\n"
         "- seu e-mail (`meu email é ...`)\n"
         "- seu telefone (`meu telefone é ...`)\n"
+        "- seu endereço (`moro em ...`)\n"
+        "- sua data de nascimento (`nasci em 21/06/1981`)\n"
         "- o idioma das respostas (`responda em português`)\n"
-        "- sua carteira Ethereum (`minha carteira é 0x...`) e sua carteira "
-        "Bitcoin (`minha carteira btc é ...`)\n"
+        "- suas carteiras Ethereum, até 5 (`minha carteira é 0x...`), e suas "
+        "carteiras Bitcoin (`minha carteira btc é ...`)\n"
         "Pode me dizer várias de uma vez. "
-        "Pergunte `o que você sabe sobre mim?` para vê-las, ou `esqueça meu email` "
-        "para apagar uma. Com sua carteira salva, `qual o saldo da minha carteira?` "
-        "usa ela.\n"
-        "Seu e-mail, telefone e carteiras eu só mostro para você, em mensagem direta."
+        "Pergunte `o que você sabe sobre mim?` para vê-las, `esqueça meu email` "
+        "para apagar uma, ou `esqueça minha carteira 0x...` para apagar uma "
+        "carteira. Com suas carteiras salvas, `qual o meu portfólio?` soma todas.\n"
+        "Seu e-mail, telefone, endereço, data de nascimento e carteiras eu só "
+        "mostro para você, em mensagem direta."
     ),
 }
 REMEMBERABLE = REMEMBERABLE_TEXT[EN]
@@ -163,6 +189,10 @@ _TEXT: dict[str, dict[Language, str]] = {
     },
     "not_saved_line": {EN: "✗ {l}: not saved, {r}", PT: "✗ {l}: não salvo, {r}"},
     "not_kept_line": {EN: "✗ {l}: I don't keep that", PT: "✗ {l}: não guardo isso"},
+    "age_derived_line": {
+        EN: "✗ {l}: not kept, it follows from your birth date",
+        PT: "✗ {l}: não guardo, ela vem da sua data de nascimento",
+    },
     "nothing_direct": {
         EN: "You haven't asked me to remember anything about you.\n\n",
         PT: "Você ainda não me pediu para guardar nada sobre você.\n\n",
@@ -188,18 +218,26 @@ _TEXT: dict[str, dict[Language, str]] = {
         PT: "Só mostro {p} em mensagem direta. Me pergunte lá.",
     },
     "forgot_all": {
-        EN: "Done. I don't have a preferred name, email address or preferred language "
-        "for you any more.",
+        EN: "Done. I don't have any personal details saved for you any more.",
         PT: "Pronto. Não tenho mais nenhum dado pessoal seu guardado.",
     },
     "forgot_one": {
         EN: "Done. I don't have a {l} for you any more.",
         PT: "Pronto. Não tenho mais {p}.",
     },
+    "forgot_every": {
+        EN: "Done. I don't have {p} any more.",
+        PT: "Pronto. Não tenho mais {p}.",
+    },
+    "forgot_that": {
+        EN: "Done. If that {l} was saved, it isn't any more.",
+        PT: "Pronto. Se essa {l} estava salva, não está mais.",
+    },
 }
 
 NOT_KEPT_LABELS = {
-    "where you live": {EN: "Where you live", PT: "Onde você mora"},
+    AGE: {EN: "Age", PT: "Idade"},
+    WHERE_YOURE_FROM: {EN: "Where you're from", PT: "De onde você é"},
 }
 
 REJECTIONS: dict[Language, dict[FactRejection, str]] = {
@@ -210,6 +248,9 @@ REJECTIONS: dict[Language, dict[FactRejection, str]] = {
         FactRejection.DISALLOWED_CHARACTERS: (
             "it can only use letters, numbers, spaces and simple punctuation"
         ),
+        FactRejection.TOO_MANY: (
+            "you already have {n} saved - forget one first (`forget my wallet 0x...`)"
+        ),
     },
     PT: {
         FactRejection.EMPTY: "estava vazio",
@@ -217,6 +258,9 @@ REJECTIONS: dict[Language, dict[FactRejection, str]] = {
         FactRejection.MALFORMED: "não está no formato certo",
         FactRejection.DISALLOWED_CHARACTERS: (
             "só pode ter letras, números, espaços e pontuação simples"
+        ),
+        FactRejection.TOO_MANY: (
+            "você já tem {n} salvas - esqueça uma antes (`esqueça minha carteira 0x...`)"
         ),
     },
 }
@@ -233,6 +277,9 @@ MALFORMED: dict[Language, dict[FactKind, str]] = {
             "it isn't a well-formed Bitcoin address - I expect one starting `1`, "
             "`3` or `bc1`"
         ),
+        FactKind.BIRTH_DATE: (
+            "it isn't a past date I can read - try `21/06/1981` or `1981-06-21`"
+        ),
     },
     PT: {
         FactKind.EMAIL: "não é um e-mail válido",
@@ -243,6 +290,9 @@ MALFORMED: dict[Language, dict[FactKind, str]] = {
         FactKind.BTC_WALLET: (
             "não é um endereço Bitcoin válido - espero um começando com `1`, "
             "`3` ou `bc1`"
+        ),
+        FactKind.BIRTH_DATE: (
+            "não é uma data passada que eu consiga ler - tente `21/06/1981` ou `1981-06-21`"
         ),
     },
 }
@@ -258,6 +308,11 @@ FACT_NOT_STORED = _TEXT["not_stored"][EN]
 
 def text(key: str, language: Language, **values: object) -> str:
     return _TEXT[key][_lang(language)].format(**values)
+
+
+def _capital(name: str) -> str:
+    # Not `str.capitalize`, which lowers the rest: "Carteira ethereum".
+    return name[:1].upper() + name[1:]
 
 
 def label(kind: FactKind, language: Language) -> str:
@@ -313,20 +368,43 @@ def rejection_reason(result: FactResult, language: Language = EN) -> str:
         if rejection is FactRejection.MALFORMED
         else REJECTIONS[lang].get(rejection, "")
     )
+    if rejection is FactRejection.TOO_MANY:
+        return reason.format(n=MAX_WALLETS_PER_KIND)
     limits = {
         FactKind.PREFERRED_NAME: MAX_PREFERRED_NAME_CHARS,
         FactKind.FULL_NAME: MAX_FULL_NAME_CHARS,
+        FactKind.HOME_ADDRESS: MAX_HOME_ADDRESS_CHARS,
     }
     if result.rejection is FactRejection.TOO_LONG and result.kind in limits:
         reason += text("at_most", language, n=limits[result.kind])
     return reason
 
 
+_MONTH_NAMES = {
+    EN: ("January", "February", "March", "April", "May", "June", "July", "August",
+         "September", "October", "November", "December"),
+    PT: ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+         "setembro", "outubro", "novembro", "dezembro"),
+}
+
+
+def shown_value(kind: FactKind, value: str, language: Language = EN) -> str:
+    """A stored value as it reads to its owner: a birth date spelled out, since
+    "1981-06-21" and "06/21" both read wrongly to somebody."""
+    if kind is not FactKind.BIRTH_DATE:
+        return value
+    year, month, day = (int(part) for part in value.split("-"))
+    month_name = _MONTH_NAMES[_lang(language)][month - 1]
+    if _lang(language) is PT:
+        return f"{day} de {month_name} de {year}"
+    return f"{day} {month_name} {year}"
+
+
 def shown_line(kind: FactKind, value: str, language: Language = EN) -> str:
     # Values were validated to carry no markdown, so they are safe to embolden;
     # an email goes in code so its underscores are not read as emphasis.
-    shown = f"`{value}`" if kind is FactKind.EMAIL else f"**{value}**"
-    return f"• {label(kind, language).capitalize()}: {shown}"
+    shown = f"`{value}`" if kind is FactKind.EMAIL else f"**{shown_value(kind, value, language)}**"
+    return f"• {_capital(label(kind, language))}: {shown}"
 
 
 def facts_set_reply(
@@ -341,26 +419,32 @@ def facts_set_reply(
     message, withheld in a channel for the kinds only ever shown to their
     owner, and never repeated when refused.
     """
-    lines: list[str] = []
-    for result in results:
-        name = label(result.kind, language).capitalize()
-        if result.outcome is FactOutcome.NOT_STORED:
-            return text("not_stored", language)
-        if result.outcome is FactOutcome.REJECTED:
-            lines.append(
-                text("not_saved_line", language, l=name, r=rejection_reason(result, language))
-            )
-            continue
-        assert result.fact is not None
-        if not direct and result.kind in DIRECT_ONLY_KINDS:
-            lines.append(text("saved_hidden", language, l=name))
-        else:
-            line = shown_line(result.kind, result.fact.value, language)
-            lines.append("✓ " + line.removeprefix("• "))
-    for kept in not_kept:
-        shown = NOT_KEPT_LABELS.get(kept, {}).get(_lang(language), kept.capitalize())
-        lines.append(text("not_kept_line", language, l=shown))
+    if any(r.outcome is FactOutcome.NOT_STORED for r in results):
+        return text("not_stored", language)
+    lines = [_result_line(result, direct, language) for result in results]
+    born = any(
+        r.kind is FactKind.BIRTH_DATE and r.outcome is FactOutcome.STORED for r in results
+    )
+    lines += [_not_kept_line(kept, born, language) for kept in not_kept]
     return "\n".join([text("saved_head", language), *lines])
+
+
+def _result_line(result: FactResult, direct: bool, language: Language) -> str:
+    name = _capital(label(result.kind, language))
+    if result.outcome is FactOutcome.REJECTED:
+        return text("not_saved_line", language, l=name, r=rejection_reason(result, language))
+    assert result.fact is not None
+    if not direct and result.kind in DIRECT_ONLY_KINDS:
+        return text("saved_hidden", language, l=name)
+    return "✓ " + shown_line(result.kind, result.fact.value, language).removeprefix("• ")
+
+
+def _not_kept_line(kept: str, born: bool, language: Language) -> str:
+    """What was said but not kept. An age said alongside a birth date is
+    explained by it: keeping both would let them disagree next birthday."""
+    shown = NOT_KEPT_LABELS.get(kept, {}).get(_lang(language), kept.capitalize())
+    key = "age_derived_line" if kept == AGE and born else "not_kept_line"
+    return text(key, language, l=shown)
 
 
 def facts_shown_reply(
@@ -396,8 +480,9 @@ def _one_fact(
     if not direct and kind in DIRECT_ONLY_KINDS:
         return text("one_direct_only", language, p=possessive(kind, language))
     by_kind = {stored.fact.kind: stored.fact.value for stored in facts.facts}
-    if kind in by_kind:
-        return shown_line(kind, by_kind[kind], language)
+    held = facts.values(kind)
+    if held:
+        return "\n".join(shown_line(kind, value, language) for value in held)
     # "What's my name?" with no full name saved: the name they gave is the
     # answer, not "you haven't told me".
     if kind is FactKind.FULL_NAME and FactKind.PREFERRED_NAME in by_kind:
@@ -405,12 +490,19 @@ def _one_fact(
     return text("one_missing", language, p=possessive(kind, language))
 
 
-def fact_forgotten_reply(kind: FactKind | None, language: Language = EN) -> str:
+def fact_forgotten_reply(
+    kind: FactKind | None, language: Language = EN, *, one_value: bool = False
+) -> str:
     """The same words whether or not there was anything to delete.
 
     In a channel, "you had no email saved" would tell the room something; and
-    the person's goal -- that it is gone -- holds either way.
+    the person's goal -- that it is gone -- holds either way. A wallet named by
+    its address is not repeated back: the reply may be in a channel.
     """
     if kind is None:
         return text("forgot_all", language)
+    if kind in MULTI_VALUED_KINDS and one_value:
+        return text("forgot_that", language, l=label(kind, language))
+    if kind in MULTI_VALUED_KINDS:
+        return text("forgot_every", language, p=possessive(kind, language, plural=True))
     return text("forgot_one", language, l=label(kind, language), p=possessive(kind, language))

@@ -26,6 +26,7 @@ from chatmemory.app.memory import ConversationMemory
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.facts import (
     MAX_PREFERRED_NAME_CHARS,
+    MULTI_VALUED_KINDS,
     FactKind,
     FactRejection,
     FactStore,
@@ -54,40 +55,67 @@ def stored(kind: FactKind, value: str) -> StoredFact:
 
 
 class FakeFactStore:
+    """One value per (person, kind) in `rows`; wallet kinds, several per
+    (person, kind) in save order, in `wallets` -- as the table's two unique
+    indexes keep them."""
+
     def __init__(self, *, opted_out: frozenset[PersonRef] = frozenset()) -> None:
         self.rows: dict[tuple[PersonRef, FactKind], str] = {}
+        self.wallets: dict[tuple[PersonRef, FactKind], list[str]] = {}
         self.opted_out = opted_out
 
     async def set_fact(self, person: PersonRef, fact: PersonalFact) -> bool:
         if person in self.opted_out:
             return False
+        if fact.kind in MULTI_VALUED_KINDS:
+            held = self.wallets.setdefault((person, fact.kind), [])
+            if fact.value not in held:
+                held.append(fact.value)
+            return True
         self.rows[(person, fact.kind)] = fact.value
         return True
 
     async def facts_of(self, viewer: Viewer) -> PersonalFacts:
-        return PersonalFacts(
-            tuple(
-                stored(kind, value)
-                for (person, kind), value in sorted(self.rows.items())
-                if person == viewer.person
-            )
-        )
+        singles = [
+            stored(kind, value)
+            for (person, kind), value in sorted(self.rows.items())
+            if person == viewer.person
+        ]
+        several = [
+            stored(kind, value)
+            for (person, kind), values in sorted(self.wallets.items())
+            if person == viewer.person
+            for value in values
+        ]
+        return PersonalFacts(tuple(singles + several))
 
-    async def forget_fact(self, person: PersonRef, kind: FactKind) -> bool:
-        return self.rows.pop((person, kind), None) is not None
+    async def forget_fact(
+        self, person: PersonRef, kind: FactKind, value: str | None = None
+    ) -> bool:
+        if kind not in MULTI_VALUED_KINDS:
+            return self.rows.pop((person, kind), None) is not None
+        held = self.wallets.get((person, kind), [])
+        if value is None:
+            return self.wallets.pop((person, kind), None) is not None
+        if value not in held:
+            return False
+        held.remove(value)
+        return True
 
     async def forget_all_facts(self, person: PersonRef) -> int:
         doomed = [key for key in self.rows if key[0] == person]
         for key in doomed:
             del self.rows[key]
-        return len(doomed)
+        wallets = [key for key in self.wallets if key[0] == person]
+        count = sum(len(self.wallets.pop(key)) for key in wallets)
+        return len(doomed) + count
 
 
 def _conforms(store: FakeFactStore) -> FactStore:
     return store
 
 
-def _migration(name: str = "0019_full_name.py") -> ModuleType:
+def _migration(name: str = "0022_richer_facts.py") -> ModuleType:
     """The migration that currently defines which kinds the table accepts.
 
     Points at the latest one to widen the constraint, not at the first: 0014
@@ -114,6 +142,8 @@ def test_the_set_of_facts_is_closed() -> None:
         "eth_wallet",
         "btc_wallet",
         "full_name",
+        "home_address",
+        "birth_date",
     }
 
 

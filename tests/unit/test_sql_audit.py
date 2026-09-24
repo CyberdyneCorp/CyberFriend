@@ -380,6 +380,10 @@ UNSCOPED: dict[str, str] = {
         "adapter resolved from the asker's platform identity. Returns the id "
         "only, which is how a row dropped by the opt-out trigger is told apart"
     ),
+    "facts_sql.ADD_WALLET": (
+        "write; adds one of the asker's own wallets against the person id the "
+        "adapter resolved, as UPSERT_FACT. Returns the id only"
+    ),
     "facts_sql.FACTS_OF_REQUESTER": (
         "returns facts, but only the requester's own: the person is bound from "
         "the viewer's platform identity in the WHERE clause, so no argument "
@@ -390,6 +394,11 @@ UNSCOPED: dict[str, str] = {
     "facts_sql.FORGET_FACT": (
         "write; deletes one kind of the requester's own facts, keyed on their "
         "platform identity. Returns no row"
+    ),
+    "facts_sql.FORGET_FACT_VALUE": (
+        "write; deletes one value of one kind (a wallet among several) of the "
+        "requester's own facts, keyed on their platform identity as "
+        "FORGET_FACT. Returns no row"
     ),
     "facts_sql.FORGET_ALL_FACTS": (
         "write; /forget everywhere, keyed on the requester's own platform "

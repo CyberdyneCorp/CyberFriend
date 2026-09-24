@@ -3,8 +3,8 @@
 Three properties are fixed by the shape of this interface rather than left to
 an implementation to remember:
 
-*   **The set of facts is closed.** `FactKind` has three members and the table
-    has a CHECK constraint naming the same three. A free-form "remember this"
+*   **The set of facts is closed.** `FactKind` lists every kind and the table
+    has a CHECK constraint naming the same ones. A free-form "remember this"
     would be text that reaches every later prompt -- a durable injection point
     -- so there is no kind for it to be stored under.
 
@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Protocol
 
@@ -44,6 +44,19 @@ class FactKind(StrEnum):
     ETH_WALLET = "eth_wallet"
     BTC_WALLET = "btc_wallet"
     FULL_NAME = "full_name"
+    HOME_ADDRESS = "home_address"
+    BIRTH_DATE = "birth_date"
+
+
+MULTI_VALUED_KINDS = frozenset({FactKind.ETH_WALLET, FactKind.BTC_WALLET})
+"""Kinds a person may hold several of: one row per value, not per kind.
+
+Somebody with a hardware wallet and a hot wallet has two, and saving the second
+used to replace the first -- and delete the alerts that watched it."""
+
+MAX_WALLETS_PER_KIND = 5
+"""The most addresses of one chain a person may save. Also the most a
+portfolio sums, so every saved wallet fits in one question."""
 
 
 class FactRejection(StrEnum):
@@ -53,6 +66,8 @@ class FactRejection(StrEnum):
     TOO_LONG = "too_long"
     MALFORMED = "malformed"
     DISALLOWED_CHARACTERS = "disallowed_characters"
+    # A multi-valued kind already holding `MAX_WALLETS_PER_KIND` values.
+    TOO_MANY = "too_many"
 
 
 class InvalidFact(ValueError):
@@ -191,6 +206,96 @@ def _normalise_phone(value: str) -> str:
     return phone
 
 
+# A street address, typed as the person types it. Free text is the one shape
+# every country's address fits, so it is bounded and its characters are held
+# to what addresses use: no markdown, no mention syntax, no brackets.
+MAX_HOME_ADDRESS_CHARS = 200
+_ADDRESS_PUNCTUATION = frozenset(",.-'’/()ºª°&")
+
+
+def _normalise_home_address(value: str) -> str:
+    address = _collapse(value).strip(" ,.;")
+    if not address:
+        raise InvalidFact(FactKind.HOME_ADDRESS, FactRejection.EMPTY)
+    if len(address) > MAX_HOME_ADDRESS_CHARS:
+        raise InvalidFact(FactKind.HOME_ADDRESS, FactRejection.TOO_LONG)
+    if not _only(address, _ADDRESS_PUNCTUATION, digits=True):
+        raise InvalidFact(FactKind.HOME_ADDRESS, FactRejection.DISALLOWED_CHARACTERS)
+    return address
+
+
+_MONTHS = {
+    name: number
+    for number, names in enumerate(
+        (
+            ("january", "jan", "janeiro"),
+            ("february", "feb", "fevereiro", "fev"),
+            ("march", "mar", "março", "marco"),
+            ("april", "apr", "abril", "abr"),
+            ("may", "maio", "mai"),
+            ("june", "jun", "junho"),
+            ("july", "jul", "julho"),
+            ("august", "aug", "agosto", "ago"),
+            ("september", "sep", "sept", "setembro", "set"),
+            ("october", "oct", "outubro", "out"),
+            ("november", "nov", "novembro"),
+            ("december", "dec", "dezembro", "dez"),
+        ),
+        start=1,
+    )
+    for name in names
+}
+_NUMERIC_DATE = re.compile(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})")
+_ISO_DATE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
+# "21 de junho de 1981", "21 June 1981", "June 21 1981", "June 21st, 1981".
+_DAY_MONTH_YEAR = re.compile(
+    r"(\d{1,2})(?:st|nd|rd|th|º)?\s+(?:de\s+|of\s+)?([a-zç]+)\.?,?\s+(?:de\s+)?(\d{4})"
+)
+_MONTH_DAY_YEAR = re.compile(r"([a-zç]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})")
+_EARLIEST_BIRTH_YEAR = 1900
+
+
+def _date_parts(text: str) -> tuple[int, int, int] | None:
+    """(year, month, day) candidates as written, before any calendar check."""
+    if match := _ISO_DATE.fullmatch(text):
+        return int(match[1]), int(match[2]), int(match[3])
+    if match := _NUMERIC_DATE.fullmatch(text):
+        return int(match[3]), int(match[2]), int(match[1])
+    if (match := _DAY_MONTH_YEAR.fullmatch(text)) and match[2] in _MONTHS:
+        return int(match[3]), _MONTHS[match[2]], int(match[1])
+    if (match := _MONTH_DAY_YEAR.fullmatch(text)) and match[1] in _MONTHS:
+        return int(match[3]), _MONTHS[match[1]], int(match[2])
+    return None
+
+
+def _normalise_birth_date(value: str) -> str:
+    """An ISO date (`1981-06-21`) from the ways people write one.
+
+    Day first for `21/06/1981`, as Brazil and most of the world write it; the
+    month-first reading is tried only when day-first is impossible
+    (`06/21/1981`). A date in the future, or before 1900, is refused: it is a
+    typo, not a birthday.
+    """
+    text = _collapse(value).lower()
+    if not text:
+        raise InvalidFact(FactKind.BIRTH_DATE, FactRejection.EMPTY)
+    parts = _date_parts(text)
+    if parts is None:
+        raise InvalidFact(FactKind.BIRTH_DATE, FactRejection.MALFORMED)
+    year, month, day = parts
+    born = _calendar_date(year, month, day) or _calendar_date(year, day, month)
+    if born is None or born.year < _EARLIEST_BIRTH_YEAR or born > date.today():
+        raise InvalidFact(FactKind.BIRTH_DATE, FactRejection.MALFORMED)
+    return born.isoformat()
+
+
+def _calendar_date(year: int, month: int, day: int) -> date | None:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
 def _normalise_eth_wallet(value: str) -> str:
     """A 20-byte hex address, stored lowercase.
 
@@ -228,6 +333,8 @@ _NORMALISERS = {
     FactKind.ETH_WALLET: _normalise_eth_wallet,
     FactKind.BTC_WALLET: _normalise_btc_wallet,
     FactKind.FULL_NAME: _normalise_full_name,
+    FactKind.HOME_ADDRESS: _normalise_home_address,
+    FactKind.BIRTH_DATE: _normalise_birth_date,
 }
 
 
@@ -264,15 +371,20 @@ class StoredFact:
 
 @dataclass(frozen=True, slots=True)
 class PersonalFacts:
-    """Everything one person has set, at most one per kind."""
+    """Everything one person has set: one per kind, or several of a wallet kind."""
 
     facts: tuple[StoredFact, ...] = ()
 
     def get(self, kind: FactKind) -> str | None:
+        """The value of a single-valued kind; for a wallet kind, the oldest."""
         for stored in self.facts:
             if stored.fact.kind is kind:
                 return stored.fact.value
         return None
+
+    def values(self, kind: FactKind) -> tuple[str, ...]:
+        """Every value of `kind`, oldest first."""
+        return tuple(s.fact.value for s in self.facts if s.fact.kind is kind)
 
     @property
     def empty(self) -> bool:
@@ -291,6 +403,10 @@ class FactStore(PersonFactEraser, Protocol):
     async def set_fact(self, person: PersonRef, fact: PersonalFact) -> bool:
         """Store or replace this person's fact of `fact.kind`.
 
+        A multi-valued kind (`MULTI_VALUED_KINDS`) is added to rather than
+        replaced, and saving a value already held only refreshes it. The cap
+        is the service's to apply before calling this.
+
         Returns False when nothing was stored -- the person has opted out, and
         the database dropped the row.
         """
@@ -300,6 +416,12 @@ class FactStore(PersonFactEraser, Protocol):
         """The viewer's own facts. There is no way to name another person."""
         ...
 
-    async def forget_fact(self, person: PersonRef, kind: FactKind) -> bool:
-        """Delete one kind, keeping the others. Returns whether one existed."""
+    async def forget_fact(
+        self, person: PersonRef, kind: FactKind, value: str | None = None
+    ) -> bool:
+        """Delete one kind, keeping the others. Returns whether one existed.
+
+        With `value`, only that value of the kind: one wallet among several.
+        `value` is the stored (normalised) form.
+        """
         ...

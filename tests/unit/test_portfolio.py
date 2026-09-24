@@ -60,6 +60,7 @@ from chatmemory.app.egress import (
 )
 from chatmemory.app.language import Language
 from chatmemory.domain.identity import PersonRef
+from chatmemory.ports.facts import MAX_WALLETS_PER_KIND
 from tests.e2e.harness.chain import (
     AAVE_POOL,
     CBBTC,
@@ -473,10 +474,10 @@ def _clearance(text: str, question: str) -> AuthorizedQuery:
     )
 
 
-async def _clear(text: str, question: str) -> Cleared | ToolResult:
+async def _clear(text: str, question: str, limit: int = MAX_ADDRESSES) -> Cleared | ToolResult:
     with authorized(_clearance(text, question)):
         return await clear_addresses(
-            DEFI_POSITIONS_PROVIDER, PORTFOLIO_TOOL, CallBudget(3), RateLimiter(0)
+            DEFI_POSITIONS_PROVIDER, PORTFOLIO_TOOL, CallBudget(3), RateLimiter(0), limit=limit
         )
 
 
@@ -494,10 +495,20 @@ async def test_an_address_beside_a_word_is_refused_not_trimmed() -> None:
 
 
 async def test_more_wallets_than_a_person_has_is_refused() -> None:
-    many = [f"0x{i:040x}" for i in range(1, MAX_ADDRESSES + 2)]
-    refused = await _clear(" ".join(many), "portfolio " + " ".join(many))
+    # A lower limit, because past five addresses the 256-character query
+    # bound refuses first.
+    many = [f"0x{i:040x}" for i in range(1, 4)]
+    refused = await _clear(" ".join(many), "portfolio " + " ".join(many), limit=2)
     assert isinstance(refused, ToolResult)
     assert "too_many_addresses" in refused.text
+
+
+async def test_every_wallet_a_person_may_save_fits_one_portfolio_call() -> None:
+    assert MAX_ADDRESSES == MAX_WALLETS_PER_KIND
+    five = [f"0x{i:040x}" for i in range(1, MAX_ADDRESSES + 1)]
+    cleared = await _clear(" ".join(five), "my portfolio " + " ".join(five))
+    assert isinstance(cleared, Cleared)
+    assert len(cleared.addresses) == MAX_ADDRESSES
 
 
 def test_an_address_the_asker_did_not_write_never_gets_a_clearance() -> None:

@@ -58,3 +58,30 @@ def find_addresses(text: str) -> tuple[str, ...]:
     for match in re.finditer(r"0x[0-9a-fA-F]{40}", text):
         seen.setdefault(normalise(match.group()), None)
     return tuple(seen)
+
+
+# "…45e0", "...45e0", or a bare "45e0": how somebody names one of their saved
+# wallets without typing it. A bare token must hold a digit, so "cafe" or
+# "beef" in a sentence is never read as the end of an address.
+_SUFFIX = re.compile(r"(…|\.{2,3})?\b([0-9a-fA-F]{4,8})\b")
+SUFFIX_CHARS = 4
+"""How many trailing characters name a saved wallet in a reply."""
+
+
+def named_by_suffix(text: str, saved: tuple[str, ...]) -> tuple[str, ...]:
+    """The saved addresses `text` names by their last characters.
+
+    Only ever matched against the asker's own saved wallets, so a suffix can
+    select among them and never introduces an address.
+    """
+    tokens = {
+        match.group(2).lower()
+        for match in _SUFFIX.finditer(text)
+        if match.group(1) or any(c.isdigit() for c in match.group(2))
+    }
+    return tuple(w for w in saved if any(w.lower().endswith(t) for t in tokens))
+
+
+def suffix_list(saved: tuple[str, ...]) -> str:
+    """`…45e0`, `…1a2b`: the saved wallets as they are offered to choose from."""
+    return ", ".join(f"`…{w[-SUFFIX_CHARS:]}`" for w in saved)

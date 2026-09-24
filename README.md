@@ -170,27 +170,39 @@ Tell it yourself, in your own message. It never learns these from a channel.
 | Preferred name | `call me Leo` |
 | Email | `my email is leo@example.com` |
 | Phone | `my phone is +55 11 99999 1234` |
+| Home address | `I live in …` / `moro em …` |
+| Birth date | `I was born on 21/06/1981` / `nasci em 21 de junho de 1981` |
 | Preferred language | `reply to me in Portuguese` |
-| Ethereum wallet | `my wallet is 0x…` |
-| Bitcoin wallet | `my btc wallet is bc1…` |
+| Ethereum wallets (up to 5) | `my wallet is 0x…` |
+| Bitcoin wallets (up to 5) | `my btc wallet is bc1…` |
 
-You can give several at once — *"meu nome é Leonardo Araujo, pode me chamar de
-Leo, meu email é …, meu telefone é …"* — and the reply lists what was saved and
-what was not (where you live, for example, is not kept). "My name is" with one
-word is the name you're called by; with more, it is your full name.
+You can give several at once — *"me chamo Leonardo Araujo dos Santos, pode me
+chamar de Leo, nasci em 21/06/1981, meu telefone é …, moro em …, minha carteira
+é 0x…, meu email …"* — and the reply lists what was saved and what was not. An
+age is not kept: it follows from the birth date. "My name is" with one word is
+the name you're called by; with more, it is your full name. Common typos
+("walet", "morro") and a missing "é"/"is" before an email, phone or wallet are
+understood.
 
 `what do you know about me?` (or `o que você sabe sobre mim?`) shows them,
 `what's my phone?` / `qual o meu telefone?` shows one, and `forget my email`
 deletes one. Replies come in the language you wrote in.
 
-In a direct message the assistant can also use your email, phone and wallets
-when answering you; in a channel it never sees them.
+Saving another wallet adds it rather than replacing the first. `forget my
+wallet 0x…` / `esqueça minha carteira 0x…` removes that one, `forget my
+wallets` / `esqueça minhas carteiras` removes them all. `what's my portfolio?`
+sums every saved wallet; a balance, DeFi or alert question reads one, so with
+several saved it asks which (by their last four characters) unless you name it —
+`what's my wallet balance …45e0?`.
 
-**Your email, phone and wallets are only ever shown to you, in a direct
-message.** A wallet is public on its chain — what is private is that it is
-*yours*, and naming it in a channel makes that link for everyone present.
-A channel message giving your own email or phone is never archived, even when
-it says other things too.
+In a direct message the assistant can also use your email, phone, address,
+birth date and wallets when answering you; in a channel it never sees them.
+
+**Your email, phone, address, birth date and wallets are only ever shown to
+you, in a direct message.** A wallet is public on its chain — what is private
+is that it is *yours*, and naming it in a channel makes that link for everyone
+present. A channel message giving your own email, phone, address or birth date
+is never archived, even when it says other things too.
 
 Once a wallet is saved, `what's my balance?` or `what's my wallet balance?` uses
 it instead of asking for an address, and `quanto eu tenho no total?` adds up
