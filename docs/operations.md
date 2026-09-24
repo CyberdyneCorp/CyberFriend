@@ -501,13 +501,17 @@ answered that alerts are not available here — never searched for — and
 
 "tell me when my LP goes out of range", "avise quando minha posição sair da
 faixa", "me avisa se o health factor do aave cair abaixo de 1,3", "alert me if
-my health factor drops below 1.25 on base". The request is recognised before
+my health factor drops below 1.25 on base", "warn me when my LP is within 5% of
+the range edge", "avisa quando o BTC passar de 100k", "alert me when ETH goes
+above $3,000". The request is recognised before
 retrieval and before the positions route (route label `ALERT_CREATE`), with no
 model call. The wallet is one the person typed — in this message or one of
 their last few questions — or their saved wallet; nothing read from a channel
 is ever a candidate. A question about alerting — "does Uniswap notify me
 when…", "which app can warn me when…", "como criar um alerta…" — is not a
-request and is answered as any question; "can you alert me when…" is.
+request and is answered as any question; "can you alert me when…" is. So is
+a price asked outright — "what is the BTC price?", "quanto está o ETH?" —
+which the market tools answer.
 A scheduled task is never an alert request: nobody is there to press Confirm,
 so its question is answered as any other.
 
@@ -521,6 +525,19 @@ stored until the person presses Confirm**; Cancel, five minutes of silence, or
 a press by anybody else creates nothing (the other person is told privately
 the prompt is not theirs).
 
+A **price alert** needs no wallet and reads no chain. The assets are the market
+tools' closed vocabulary, BTC and ETH; the level is read as either notation
+writes it ("100k", "2.500", "2,500", "$3,000", "120 mil"), and a level with no
+direction ("when BTC hits 100k") is taken as the side the price is not on yet.
+The confirmation shows the price now from CoinGecko with its quote time, and
+says so when the price is already past the level.
+
+A **near-edge alert** is a range alert with a distance, 1–50% ("near the edge"
+alone means 5%). The confirmation shows how far each position is from its
+nearer edge now — "3.4% from the upper edge" — measured on the price as the
+range is quoted. Asked on a position already watched, it adds the distance to
+that alert rather than making a second one.
+
 Where the prompt appears follows where it was asked: a reply in a DM, a reply
 in the channel for a mention, ephemeral for `/ask`. The wallet address is shown
 only in a DM, as for saved wallets.
@@ -532,16 +549,22 @@ Both are private and work in the server and in a DM. Every alert message ends
 with `/alert list` and `/alert delete <id>`.
 
 An alert watches one Uniswap v3 or v4 position that was open when it was made
-(in range, out of range, closed) or one chain's Aave health factor against a
-limit between 1.05 and 5.0. Each person may keep ten, separately from scheduled
-tasks.
+(in range, near the edge if a distance was asked for, out of range, closed),
+one chain's Aave health factor against a limit between 1.05 and 5.0, or the
+BTC or ETH price against a level. Each person may keep ten, of all kinds
+together, separately from scheduled tasks.
 
 ### It messages on a change
 
 A range change counts after two consecutive agreeing checks; a health factor
 fires on the first check below the limit and re-arms only at the limit plus
 0.05. So an alert says "out of range" once, and "back in range" once, and
-nothing in between. A closed position (no liquidity, burned or transferred
+nothing in between. A near-edge alert warns once on the way from in range to
+within its distance, and re-arms, silently, one percentage point further back;
+leaving the range and coming back are still told. A price alert fires on the
+first check at or past its level in the direction asked, and re-arms, silently,
+once the price is 0.5% back on the other side, so a price wobbling on the line
+is one message. A closed position (no liquidity, burned or transferred
 NFT) is told once and the alert is stopped with the reason kept. A check that
 cannot read the chain says nothing and changes nothing; it is counted against
 the alert. Messages are in the language the alert was made in, and the health
@@ -560,6 +583,16 @@ addresses to Infura. The per-question guard has no question to root them in,
 so the address is checked once, when the alert is made — the person's saved
 wallet or an address they typed — and stored. That is declared in the
 `position-alerts` spec and is why the feature is off unless switched on.
+
+Price alerts add one more request per sweep, whatever their number: the
+constant CoinGecko request the market tools and the portfolio's ether pricing
+already make (`ids=bitcoin,ethereum`), through `Edges.http_transport`, with the
+market provider's fresh-only cache and its own rate limiter. It carries nothing
+about anybody — not the asset watched, not the level — so it needs no
+clearance, and it goes out whether or not `MARKET_TOOLS_ENABLED` is on. That is
+declared in the `alert-kinds` change. A sweep with no due price alert sends it
+not at all; one that cannot get a fresh price counts a failed check and says
+nothing.
 
 Creation reads more than a sweep does: a range request runs the full positions
 discovery (two to twenty-five requests per chain, several seconds on Arbitrum

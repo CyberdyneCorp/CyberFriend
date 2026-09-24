@@ -1223,7 +1223,7 @@ class CyberFriendClient(discord.Client):
         return group
 
     def _build_alert_group(self) -> app_commands.Group:
-        """`/alert list|delete`: a person's own position alerts.
+        """`/alert list|delete`: a person's own alerts, of every kind.
 
         No `create`: an alert is asked for in words and confirmed with a
         button, which shows exactly what will be watched before anything is.
@@ -1231,10 +1231,11 @@ class CyberFriendClient(discord.Client):
         and every reply is private, in the language of the person's client.
         """
         alert_group = app_commands.Group(
-            name="alert", description="Your position alerts (range and health factor)"
+            name="alert",
+            description="Your alerts (LP range and edge, health factor, BTC/ETH price)",
         )
 
-        @alert_group.command(name="list", description="Show your position alerts")
+        @alert_group.command(name="list", description="Show your alerts")
         async def listing(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
             language = locale_language(interaction.locale)
@@ -1250,7 +1251,7 @@ class CyberFriendClient(discord.Client):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        @alert_group.command(name="delete", description="Stop one of your position alerts")
+        @alert_group.command(name="delete", description="Stop one of your alerts")
         @app_commands.describe(alert="The number shown by `/alert list`")
         async def delete(interaction: discord.Interaction, alert: int) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)

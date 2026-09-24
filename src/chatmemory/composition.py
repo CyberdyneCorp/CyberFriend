@@ -80,6 +80,8 @@ from chatmemory.adapters.llm.asks_extraction import (
 )
 from chatmemory.adapters.llm.chat import OpenAICompatibleChat
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
+from chatmemory.adapters.market.alert_prices import AlertPrices
+from chatmemory.adapters.market.coingecko import CoinGeckoProvider
 from chatmemory.adapters.market.registration import MarketToolsConfig, build_market_tools
 from chatmemory.adapters.mcp_client import (
     AllowedTool,
@@ -108,6 +110,7 @@ from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
 from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseTracer
+from chatmemory.adapters.web.limits import CallBudget
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
@@ -966,6 +969,25 @@ def alerts_available(settings: Settings) -> bool:
     return settings.alerts_enabled and bool(_infura_key(settings))
 
 
+def build_alert_prices(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> AlertPrices:
+    """BTC and ETH for price alerts: the market tools' CoinGecko provider.
+
+    Its own instance, on its own cache and rate limit, but the same class,
+    endpoint and constant request, so a price alert reaches no host the
+    portfolio's ether pricing does not already reach, whether or not the
+    market tools are switched on. The budget is never spent: `latest` is
+    not a tool call.
+    """
+    provider = CoinGeckoProvider(
+        CallBudget(settings.market_max_calls_per_run),
+        timeout_seconds=settings.market_timeout_seconds,
+        transport=transport,
+    )
+    return AlertPrices(provider)
+
+
 def build_alert_requests(
     settings: Settings,
     engine: AsyncEngine,
@@ -984,6 +1006,7 @@ def build_alert_requests(
     return AlertRequests(
         AlertService(PostgresAlertStore(engine), sweep_seconds=settings.alert_sweep_seconds),
         ChainTargets(_infura_key(settings), transport=transport),
+        prices=build_alert_prices(settings, transport),
         sweep_seconds=settings.alert_sweep_seconds,
         clock=clock,
     )
@@ -1046,6 +1069,7 @@ def build_alert_runner(
         PostgresAlertStore(engine),
         ChainWatcher(key, transport=transport),
         messenger,
+        prices=build_alert_prices(settings, transport),
         sweep_seconds=settings.alert_sweep_seconds,
     )
 

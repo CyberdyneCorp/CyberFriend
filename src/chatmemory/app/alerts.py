@@ -18,16 +18,25 @@ turning into noise:
     the one that is urgent.
 *   **Hysteresis.** A health factor that fell below the limit re-arms only at
     the limit plus `REARM_MARGIN`, so a factor hovering on the line is one
-    message, not one per sweep.
+    message, not one per sweep. A price alert re-arms only `PRICE_REARM` back
+    past its level, and a near-edge warning only `EDGE_REARM_POINTS` further
+    from the edge than it fired at, for the same reason.
 *   **A failed read is not a reading.** It never changes the state and never
     sends anything; it is counted, so a listing can show that an alert has
     stopped being able to see its position.
+
+A range alert with an edge distance has one more state between in range and
+out of range, `NEAR_EDGE`, and says so once on the way in; leaving the range
+and coming back are told as they are without one. A price alert fires when
+the price crosses its level in the direction asked, and re-arms, silently,
+when it crosses back.
 
 A closed position -- no liquidity, or the NFT no longer in the watched wallet
 -- is told once and the alert disabled, rather than watched in silence for
 ever.
 
-`AlertRunner` claims due alerts, reads them all in one batch, evaluates each,
+`AlertRunner` claims due alerts, reads them all in one batch -- the chain for
+positions, one price request for every price alert -- evaluates each,
 and sends what fired through the same direct-message path scheduled tasks use.
 No model is called anywhere on this path, and neither is `AskService`.
 """
@@ -48,11 +57,17 @@ from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.alerts import (
     CHAIN_NAMES,
     DIRECT_MESSAGES_CLOSED,
+    EDGE_REARM_POINTS,
     HEALTH_CONFIRMATIONS,
     LP_CONFIRMATIONS,
+    MAX_EDGE_PERCENT,
     MAX_THRESHOLD,
+    MIN_EDGE_PERCENT,
     MIN_THRESHOLD,
     POSITION_CLOSED,
+    PRICE_ASSETS,
+    PRICE_CONFIRMATIONS,
+    PRICE_REARM,
     REARM_MARGIN,
     AlertKind,
     AlertLanguage,
@@ -60,13 +75,18 @@ from chatmemory.ports.alerts import (
     AlertState,
     AlertStore,
     AlertUpdate,
+    Edge,
     HealthObservation,
     LpObservation,
     NewAlert,
     Observation,
     PositionAlert,
     PositionObserver,
+    PriceDirection,
+    PriceObservation,
+    PriceTarget,
     ReadFailure,
+    edge_distance,
 )
 from chatmemory.ports.notifications import DeliveryResult
 
@@ -101,15 +121,38 @@ class CreateResult:
 
 def refusal_for(alert: NewAlert) -> AlertRefusal | None:
     """Why this alert may not be stored, or None. Checked before the store is asked."""
-    if alert.chain not in CHAIN_NAMES or not is_address(alert.address):
+    if alert.kind is AlertKind.PRICE:
+        return _price_refusal(alert)
+    wallet = alert.address is not None and is_address(alert.address)
+    if alert.chain not in CHAIN_NAMES or not wallet or alert.price is not None:
         return AlertRefusal.INVALID_TARGET
     if alert.kind is AlertKind.LP_RANGE:
-        ok = alert.lp is not None and alert.threshold is None
-        return None if ok else AlertRefusal.INVALID_TARGET
-    if alert.lp is not None or alert.threshold is None:
+        return _lp_refusal(alert)
+    if alert.lp is not None or alert.threshold is None or alert.edge_percent is not None:
         return AlertRefusal.INVALID_TARGET
     if not MIN_THRESHOLD <= alert.threshold <= MAX_THRESHOLD:
         return AlertRefusal.THRESHOLD_OUT_OF_RANGE
+    return None
+
+
+def _lp_refusal(alert: NewAlert) -> AlertRefusal | None:
+    if alert.lp is None or alert.threshold is not None:
+        return AlertRefusal.INVALID_TARGET
+    edge = alert.edge_percent
+    if edge is not None and not MIN_EDGE_PERCENT <= edge <= MAX_EDGE_PERCENT:
+        return AlertRefusal.EDGE_OUT_OF_RANGE
+    return None
+
+
+def _price_refusal(alert: NewAlert) -> AlertRefusal | None:
+    """A price level on a known asset, and nothing of a wallet at all."""
+    price = alert.price
+    if price is None or price.asset not in PRICE_ASSETS or price.level <= 0:
+        return AlertRefusal.INVALID_TARGET
+    wallet = (alert.chain, alert.address, alert.address_source, alert.lp)
+    extras = (alert.threshold, alert.edge_percent)
+    if any(v is not None for v in (*wallet, *extras)):
+        return AlertRefusal.INVALID_TARGET
     return None
 
 
@@ -124,7 +167,7 @@ class AlertService:
         refused = refusal_for(alert)
         if refused is not None:
             return CreateResult(refusal=refused)
-        cleaned = replace(alert, address=normalise(alert.address))
+        cleaned = replace(alert, address=normalise(alert.address)) if alert.address else alert
         # The first check is one sweep away: the baseline was read at creation,
         # and reading it again at once would only repeat it.
         first = (now or datetime.now(UTC)) + self._sweep
@@ -144,11 +187,13 @@ class AlertService:
 
 
 class FiringKind(StrEnum):
+    NEAR_EDGE = "near_edge"
     OUT_OF_RANGE = "out_of_range"
     BACK_IN_RANGE = "back_in_range"
     CLOSED = "closed"
     HEALTH_BELOW = "health_below"
     HEALTH_RECOVERED = "health_recovered"
+    PRICE_CROSSED = "price_crossed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +202,7 @@ class Firing:
 
     kind: FiringKind
     alert: PositionAlert
-    observation: LpObservation | HealthObservation
+    observation: LpObservation | HealthObservation | PriceObservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +217,8 @@ def evaluate(alert: PositionAlert, observation: Observation, now: datetime) -> E
         return _evaluate_lp(alert, observation, now)
     if isinstance(observation, HealthObservation) and alert.kind is AlertKind.AAVE_HEALTH:
         return _evaluate_health(alert, observation, now)
+    if isinstance(observation, PriceObservation) and alert.price is not None:
+        return _evaluate_price(alert, alert.price, observation, now)
     # A failure, or a reading of the wrong shape for this alert: either way
     # nothing is known, so nothing changes.
     return Evaluation(_unchanged(alert, failed=True))
@@ -208,21 +255,50 @@ def _advance(
     return AlertUpdate(observed, now, None, 0, value), True
 
 
-def _evaluate_lp(alert: PositionAlert, reading: LpObservation, now: datetime) -> Evaluation:
+def lp_state(alert: PositionAlert, reading: LpObservation) -> AlertState:
+    """The range state, with the near-edge band when the alert has one.
+
+    A fired near-edge warning stays fired until the position is
+    `EDGE_REARM_POINTS` further from the edge than asked, so a price
+    wobbling on the line is one warning.
+    """
     observed = reading.state
+    edge = alert.edge_percent
+    if observed is not AlertState.IN_RANGE or edge is None:
+        return observed
+    distance = edge_distance(reading.price, reading.price_lower, reading.price_upper).percent
+    if distance <= edge:
+        return AlertState.NEAR_EDGE
+    if alert.state is AlertState.NEAR_EDGE and distance < edge + EDGE_REARM_POINTS:
+        return AlertState.NEAR_EDGE
+    return AlertState.IN_RANGE
+
+
+def _evaluate_lp(alert: PositionAlert, reading: LpObservation, now: datetime) -> Evaluation:
+    observed = lp_state(alert, reading)
     value = Decimal(reading.tick) if observed is not AlertState.CLOSED else alert.last_value
     update, changed = _advance(alert, observed, value, now, LP_CONFIRMATIONS)
     if observed is AlertState.CLOSED and update.state is AlertState.CLOSED:
         # Told once, then stopped: a closed position has nothing left to watch.
         closing = _with(update, fired=True, disable_reason=POSITION_CLOSED)
         return Evaluation(closing, Firing(FiringKind.CLOSED, alert, reading))
-    if not changed:
+    firing = _lp_firing(alert, observed) if changed else None
+    if firing is None:
         return Evaluation(update)
+    return _fire(update, firing, alert, reading)
+
+
+def _lp_firing(alert: PositionAlert, observed: AlertState) -> FiringKind | None:
+    """What a confirmed change of range state is worth saying, if anything."""
     if observed is AlertState.OUT_OF_RANGE:
-        return _fire(update, FiringKind.OUT_OF_RANGE, alert, reading)
-    if alert.notify_return:
-        return _fire(update, FiringKind.BACK_IN_RANGE, alert, reading)
-    return Evaluation(update)
+        return FiringKind.OUT_OF_RANGE
+    if alert.state is AlertState.OUT_OF_RANGE:
+        # Back in, near an edge or not: the news is that it earns again.
+        return FiringKind.BACK_IN_RANGE if alert.notify_return else None
+    if observed is AlertState.NEAR_EDGE:
+        return FiringKind.NEAR_EDGE
+    # Near the edge back to comfortably in range: re-armed, silently.
+    return None
 
 
 def health_state(alert: PositionAlert, health: Decimal | None) -> AlertState:
@@ -253,11 +329,44 @@ def _evaluate_health(
     return Evaluation(update)
 
 
+def price_state(alert: PositionAlert, target: PriceTarget, price: Decimal) -> AlertState:
+    """Which side of the level the price is on, with the re-arm band applied.
+
+    Reaching the level counts at once; leaving the side the alert fires on
+    takes `PRICE_REARM` of the level more, so a fired alert stays fired while
+    the price wobbles on the line.
+    """
+    fired = target.direction.state
+    band = target.level * PRICE_REARM
+    if target.direction is PriceDirection.ABOVE:
+        crossed = price >= target.level
+        holding = alert.state is fired and price > target.level - band
+        other = AlertState.BELOW
+    else:
+        crossed = price <= target.level
+        holding = alert.state is fired and price < target.level + band
+        other = AlertState.ABOVE
+    return fired if crossed or holding else other
+
+
+def _evaluate_price(
+    alert: PositionAlert, target: PriceTarget, reading: PriceObservation, now: datetime
+) -> Evaluation:
+    if reading.asset != target.asset:
+        return Evaluation(_unchanged(alert, failed=True))
+    observed = price_state(alert, target, reading.price)
+    update, changed = _advance(alert, observed, reading.price, now, PRICE_CONFIRMATIONS)
+    if changed and observed is target.direction.state:
+        return _fire(update, FiringKind.PRICE_CROSSED, alert, reading)
+    # Crossing back is the re-arm, and not news.
+    return Evaluation(update)
+
+
 def _fire(
     update: AlertUpdate,
     kind: FiringKind,
     alert: PositionAlert,
-    reading: LpObservation | HealthObservation,
+    reading: LpObservation | HealthObservation | PriceObservation,
 ) -> Evaluation:
     return Evaluation(_with(update, fired=True), Firing(kind, alert, reading))
 
@@ -280,6 +389,10 @@ PREFIX = {AlertLanguage.ENGLISH: "🔔 **Alert**", AlertLanguage.PORTUGUESE: "�
 
 _LP = {
     AlertLanguage.ENGLISH: {
+        FiringKind.NEAR_EDGE: (
+            "your {position} on {chain} is **{distance} from the {edge} edge** of its "
+            "range: price {price} {quote} per {base}, range {low} – {high}."
+        ),
         FiringKind.OUT_OF_RANGE: (
             "your {position} on {chain} is **out of range**: price {price} {quote} per "
             "{base}, range {low} – {high}. It earns no fees until the price returns."
@@ -293,6 +406,10 @@ _LP = {
         ),
     },
     AlertLanguage.PORTUGUESE: {
+        FiringKind.NEAR_EDGE: (
+            "sua posição {position} na {chain} está **a {distance} da borda {edge}** da "
+            "faixa: preço {price} {quote} por {base}, faixa {low} – {high}."
+        ),
         FiringKind.OUT_OF_RANGE: (
             "sua posição {position} na {chain} **saiu da faixa**: preço {price} {quote} por "
             "{base}, faixa {low} – {high}. Ela não rende taxas até o preço voltar."
@@ -336,6 +453,25 @@ _HEALTH = {
 }
 
 
+EDGE_NAMES = {
+    AlertLanguage.ENGLISH: {Edge.LOWER: "lower", Edge.UPPER: "upper"},
+    AlertLanguage.PORTUGUESE: {Edge.LOWER: "inferior", Edge.UPPER: "superior"},
+}
+
+_PRICE = {
+    AlertLanguage.ENGLISH: {
+        PriceDirection.ABOVE: "{asset} went **above {level}**: now {price} ({source}, {time}).",
+        PriceDirection.BELOW: "{asset} fell **below {level}**: now {price} ({source}, {time}).",
+    },
+    AlertLanguage.PORTUGUESE: {
+        PriceDirection.ABOVE: "o {asset} **passou de {level}**: agora {price} ({source}, {time}).",
+        PriceDirection.BELOW: (
+            "o {asset} **caiu abaixo de {level}**: agora {price} ({source}, {time})."
+        ),
+    },
+}
+
+
 def number(value: Decimal, language: AlertLanguage, places: int = 2) -> str:
     """A figure in the reader's notation: 3,160.20 or 3.160,20."""
     text = f"{value:.6g}" if value and abs(value) < 1 else f"{value:,.{places}f}"
@@ -347,6 +483,23 @@ def number(value: Decimal, language: AlertLanguage, places: int = 2) -> str:
 def dollars(value: Decimal, language: AlertLanguage) -> str:
     sign = "US$ " if language is AlertLanguage.PORTUGUESE else "$"
     return sign + number(value, language)
+
+
+def level(value: Decimal, language: AlertLanguage) -> str:
+    """A price level as it was asked for: $100,000, not $100,000.00."""
+    whole_number = value == value.to_integral_value()
+    sign = "US$ " if language is AlertLanguage.PORTUGUESE else "$"
+    return sign + number(value, language, 0 if whole_number else 2)
+
+
+def percent(value: Decimal, language: AlertLanguage) -> str:
+    """3.4%, or 3,4% for a Portuguese reader; 5% rather than 5.0%."""
+    text = number(value.quantize(Decimal("0.1")), language, 1)
+    return text.removesuffix(".0").removesuffix(",0") + "%"
+
+
+def quoted_at(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def fee_tier(fee: int, language: AlertLanguage) -> str:
@@ -371,7 +524,10 @@ def _position(alert: PositionAlert, language: AlertLanguage) -> str:
 
 def _render_lp(firing: Firing, reading: LpObservation) -> str:
     alert, lang = firing.alert, firing.alert.language
+    near = edge_distance(reading.price, reading.price_lower, reading.price_upper)
     return _LP[lang][firing.kind].format(
+        distance=percent(near.percent, lang),
+        edge=EDGE_NAMES[lang][near.edge],
         position=_position(alert, lang),
         chain=alert.chain_name,
         price=number(reading.price, lang),
@@ -398,6 +554,20 @@ def _render_health(firing: Firing, reading: HealthObservation, minutes: int) -> 
     )
 
 
+def _render_price(firing: Firing, reading: PriceObservation) -> str:
+    alert, lang = firing.alert, firing.alert.language
+    target = alert.price
+    if target is None:  # pragma: no cover - a price firing is made from a price alert
+        return ""
+    return _PRICE[lang][target.direction].format(
+        asset=target.asset,
+        level=level(target.level, lang),
+        price=dollars(reading.price, lang),
+        source=reading.source,
+        time=quoted_at(reading.as_of),
+    )
+
+
 def render_alert(firing: Firing, sweep_seconds: float = DEFAULT_SWEEP_SECONDS) -> str:
     """The direct message, in the language fixed when the alert was made.
 
@@ -407,6 +577,8 @@ def render_alert(firing: Firing, sweep_seconds: float = DEFAULT_SWEEP_SECONDS) -
     reading = firing.observation
     if isinstance(reading, LpObservation):
         body = _render_lp(firing, reading)
+    elif isinstance(reading, PriceObservation):
+        body = _render_price(firing, reading)
     else:
         body = _render_health(firing, reading, max(1, round(sweep_seconds / 60)))
     commands = f"-# `/alert list` · `/alert delete {firing.alert.id}`"
@@ -417,7 +589,12 @@ def render_alert(firing: Firing, sweep_seconds: float = DEFAULT_SWEEP_SECONDS) -
 
 
 class AlertRunner:
-    """Claims due alerts, reads them in one batch, and sends what changed."""
+    """Claims due alerts, reads them in one batch, and sends what changed.
+
+    `observer` reads positions from the chain; `prices` reads every due price
+    alert from one price request. Without `prices` a price alert is a failed
+    read, never a state.
+    """
 
     def __init__(
         self,
@@ -425,11 +602,13 @@ class AlertRunner:
         observer: PositionObserver,
         messenger: TaskMessenger,
         *,
+        prices: PositionObserver | None = None,
         sweep_seconds: float = DEFAULT_SWEEP_SECONDS,
         batch: int = DEFAULT_BATCH,
     ) -> None:
         self._store = store
         self._observer = observer
+        self._prices = prices
         self._messenger = messenger
         self._sweep = sweep_seconds
         self._batch = batch
@@ -453,11 +632,14 @@ class AlertRunner:
         return sent
 
     async def _read(self, due: Sequence[PositionAlert]) -> Mapping[int, Observation]:
-        try:
-            return await self._observer.observe(due)
-        except Exception as exc:  # noqa: BLE001 - a failed read is a failure per alert
-            log.warning("alerts.read_failed", alerts=len(due), error=str(exc)[:200])
-            return {}
+        priced = [a for a in due if a.kind is AlertKind.PRICE]
+        held = [a for a in due if a.kind is not AlertKind.PRICE]
+        readings: dict[int, Observation] = {}
+        if held:
+            readings.update(await _observe(self._observer, held))
+        if priced and self._prices is not None:
+            readings.update(await _observe(self._prices, priced))
+        return readings
 
     async def _check_one(
         self, alert: PositionAlert, reading: Observation, now: datetime, closed: set[PersonRef]
@@ -487,3 +669,13 @@ class AlertRunner:
         closed.add(alert.person)
         log.info("alerts.disabled", person=str(alert.person), alerts=stopped)
         return False
+
+
+async def _observe(
+    observer: PositionObserver, alerts: Sequence[PositionAlert]
+) -> Mapping[int, Observation]:
+    try:
+        return await observer.observe(alerts)
+    except Exception as exc:  # noqa: BLE001 - a failed read is a failure per alert
+        log.warning("alerts.read_failed", alerts=len(alerts), error=str(exc)[:200])
+        return {}

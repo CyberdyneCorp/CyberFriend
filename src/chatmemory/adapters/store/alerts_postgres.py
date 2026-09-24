@@ -26,6 +26,8 @@ from chatmemory.ports.alerts import (
     LpTarget,
     NewAlert,
     PositionAlert,
+    PriceDirection,
+    PriceTarget,
 )
 
 log = structlog.get_logger()
@@ -48,15 +50,26 @@ def _lp(row: RowMapping) -> LpTarget | None:
     )
 
 
+def _price(row: RowMapping) -> PriceTarget | None:
+    if row["asset"] is None:
+        return None
+    return PriceTarget(
+        asset=row["asset"],
+        direction=PriceDirection(row["direction"]),
+        level=row["price_level"],
+    )
+
+
 def _alert(row: RowMapping, person: PersonRef) -> PositionAlert:
     pending = row["pending_state"]
+    source = row["address_source"]
     return PositionAlert(
         id=row["id"],
         person=person,
         kind=AlertKind(row["kind"]),
         chain=row["chain"],
         address=row["address"],
-        address_source=AddressSource(row["address_source"]),
+        address_source=AddressSource(source) if source else None,
         language=AlertLanguage(row["language"]),
         state=AlertState(row["state"]),
         state_since=row["state_since"],
@@ -64,6 +77,8 @@ def _alert(row: RowMapping, person: PersonRef) -> PositionAlert:
         next_check_at=row["next_check_at"],
         lp=_lp(row),
         threshold=row["threshold"],
+        price=_price(row),
+        edge_percent=row["edge_percent"],
         notify_return=bool(row["notify_return"]),
         pending_state=AlertState(pending) if pending else None,
         pending_count=int(row["pending_count"]),
@@ -76,22 +91,46 @@ def _alert(row: RowMapping, person: PersonRef) -> PositionAlert:
     )
 
 
+_NO_LP: dict[str, Any] = dict.fromkeys(
+    (
+        "protocol", "token_id", "pool_ref", "token0_symbol", "token1_symbol",
+        "token0_decimals", "token1_decimals", "fee",
+    )
+)
+_NO_PRICE: dict[str, Any] = dict.fromkeys(("asset", "direction", "price_level"))
+
+
+def _lp_params(lp: LpTarget | None) -> dict[str, Any]:
+    if lp is None:
+        return _NO_LP
+    return {
+        "protocol": str(lp.protocol),
+        "token_id": Decimal(lp.token_id),
+        "pool_ref": lp.pool_ref.lower(),
+        "token0_symbol": lp.token0_symbol,
+        "token1_symbol": lp.token1_symbol,
+        "token0_decimals": lp.token0_decimals,
+        "token1_decimals": lp.token1_decimals,
+        "fee": lp.fee,
+    }
+
+
+def _price_params(price: PriceTarget | None) -> dict[str, Any]:
+    if price is None:
+        return _NO_PRICE
+    return {"asset": price.asset, "direction": str(price.direction), "price_level": price.level}
+
+
 def _insert_params(alert: NewAlert) -> dict[str, Any]:
-    lp = alert.lp
     return {
         "kind": str(alert.kind),
         "chain": alert.chain,
-        "address": alert.address.lower(),
-        "address_source": str(alert.address_source),
-        "protocol": str(lp.protocol) if lp else None,
-        "token_id": Decimal(lp.token_id) if lp else None,
-        "pool_ref": lp.pool_ref.lower() if lp else None,
-        "token0_symbol": lp.token0_symbol if lp else None,
-        "token1_symbol": lp.token1_symbol if lp else None,
-        "token0_decimals": lp.token0_decimals if lp else None,
-        "token1_decimals": lp.token1_decimals if lp else None,
-        "fee": lp.fee if lp else None,
+        "address": alert.address.lower() if alert.address else None,
+        "address_source": str(alert.address_source) if alert.address_source else None,
+        **_lp_params(alert.lp),
+        **_price_params(alert.price),
         "threshold": alert.threshold,
+        "edge_percent": alert.edge_percent,
         "notify_return": alert.notify_return,
         "language": str(alert.language),
         "state": str(alert.state),

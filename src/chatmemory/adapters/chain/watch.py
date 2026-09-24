@@ -99,7 +99,9 @@ class ChainWatcher:
     async def observe(self, alerts: Sequence[PositionAlert]) -> Mapping[int, Observation]:
         by_chain: dict[str, list[PositionAlert]] = defaultdict(list)
         for alert in alerts:
-            by_chain[alert.chain].append(alert)
+            # A price alert has no chain, and is never handed here; if one
+            # were, "" is a chain with no deployment, so a failed read.
+            by_chain[alert.chain or ""].append(alert)
         out: dict[int, Observation] = {}
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             # One chain after another, as the positions reader does: bursts
@@ -176,6 +178,8 @@ def _failed(alerts: Sequence[PositionAlert], reason: str) -> dict[int, Observati
 
 def calls_for(alert: PositionAlert, deployment: Deployment, aave_pool: str) -> list[Call]:
     """The fixed calls one alert needs, in the order `decode` reads them."""
+    if alert.address is None:
+        return []
     if alert.kind is AlertKind.AAVE_HEALTH:
         return [Call(aave_pool, abi.call(abi.AAVE_ACCOUNT_DATA, abi.address(alert.address)))]
     lp = alert.lp
@@ -211,9 +215,11 @@ def decode(alert: PositionAlert, results: Sequence[bytes | None]) -> Observation
     return _v4(alert, alert.lp, results)
 
 
-def _owned_by(raw: bytes | None, address: str) -> bool:
+def _owned_by(raw: bytes | None, address: str | None) -> bool:
     """A reverted `ownerOf` is a burned NFT: not owned by anybody."""
-    return raw is not None and abi.as_address(abi.words(raw)[0]) == address.lower()
+    if raw is None or address is None:
+        return False
+    return abi.as_address(abi.words(raw)[0]) == address.lower()
 
 
 def _v3(alert: PositionAlert, lp: LpTarget, results: Sequence[bytes | None]) -> Observation:

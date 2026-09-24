@@ -27,7 +27,7 @@ internet said.
 | **Wallet balances** | What a `0x` address holds on Ethereum, Base and Arbitrum, with USD values. An address you typed, or the one you saved |
 | **DeFi positions** | Open Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
 | **Portfolio total** | *quanto eu tenho no total?*, *what's my portfolio worth?* — balances, pools with uncollected fees and the Aave net, per chain and per wallet, summed in USD. Your saved wallet plus any you type; "at least" when a chain could not be read |
-| **Position alerts** | Ask *tell me when my LP goes out of range* or *me avisa se o health factor cair abaixo de 1,3*. A Confirm button shows exactly what will be watched, and a DM arrives once when it changes. `/alert list`, `/alert delete`. Off by default |
+| **Alerts** | Ask *tell me when my LP goes out of range*, *warn me when my LP is within 5% of the range edge*, *me avisa se o health factor cair abaixo de 1,3* or *avisa quando o BTC passar de 100k*. A Confirm button shows exactly what will be watched and where it is now, and a DM arrives once when it changes. `/alert list`, `/alert delete`. Off by default |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
@@ -74,7 +74,8 @@ mindmap
       Aave supplies, borrows, health factor
       Portfolio total per chain and wallet
       quanto eu tenho no total
-      Alerts: LP out of range, health factor below a limit
+      Alerts: LP out of range or near its edge
+      Alerts: health factor below a limit, BTC or ETH past a price
       Asked in words, created with a Confirm button
     Commands
       /ask /channels /forget
@@ -151,7 +152,7 @@ moment: scheduled questions and position alerts.
 | `/resolve` | Close something I said was asked of you |
 | `/notifications` | Turn DMs about obligations on or off |
 | `/schedule create`, `list`, `delete` | Questions asked on a rhythm |
-| `/alert list`, `delete` | Your position alerts, and stopping one. An alert is created by asking in words and pressing Confirm |
+| `/alert list`, `delete` | Your alerts (range, range edge, health factor, BTC/ETH price), and stopping one. An alert is created by asking in words and pressing Confirm |
 
 Every command except `/index` and `/unindex` works in the server **and in a
 direct message with the bot**; those two act on a channel, so they live in the
@@ -408,7 +409,7 @@ lists the common ones. The settings worth knowing:
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
-| `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Position alerts (range and health factor), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
+| `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Alerts (range, range edge, health factor, BTC/ETH price), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 

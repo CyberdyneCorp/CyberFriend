@@ -170,13 +170,13 @@ and then unable to will reasonably conclude the assistant is broken."""
 
 ALERT_LIST = Command(
     "alert list",
-    "Show your position alerts (LP range, Aave health factor) and their state",
-    "Mostrar seus alertas de posição (faixa de LP, health factor do Aave) e o estado",
+    "Show your alerts (LP range and range edge, Aave health factor, BTC/ETH price)",
+    "Mostrar seus alertas (faixa e borda de LP, health factor do Aave, preço de BTC/ETH)",
 )
 ALERT_DELETE = Command(
     "alert delete",
-    "Stop one of your position alerts",
-    "Parar um dos seus alertas de posição",
+    "Stop one of your alerts",
+    "Parar um dos seus alertas",
 )
 
 ALERTS = (ALERT_LIST, ALERT_DELETE)

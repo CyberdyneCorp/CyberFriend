@@ -87,6 +87,8 @@ class Store:
             address_source=alert.address_source,
             lp=alert.lp,
             threshold=alert.threshold,
+            price=alert.price,
+            edge_percent=alert.edge_percent,
             last_value=alert.last_value,
         )
         self.rows.append(row)
@@ -112,8 +114,8 @@ class Store:
 
 def _same(row: PositionAlert, alert: NewAlert) -> bool:
     token = (row.lp.token_id if row.lp else -1, alert.lp.token_id if alert.lp else -1)
-    return (row.kind, row.chain, row.address, row.threshold) == (
-        alert.kind, alert.chain, alert.address, alert.threshold
+    return (row.kind, row.chain, row.address, row.threshold, row.price) == (
+        alert.kind, alert.chain, alert.address, alert.threshold, alert.price
     ) and token[0] == token[1]
 
 

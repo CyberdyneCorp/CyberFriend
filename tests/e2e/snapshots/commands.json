@@ -210,7 +210,7 @@
         1
       ],
       "default_member_permissions": null,
-      "description": "Your position alerts (range and health factor)",
+      "description": "Your alerts (LP range and edge, health factor, BTC/ETH price)",
       "dm_permission": true,
       "integration_types": [
         0
@@ -219,13 +219,13 @@
       "nsfw": false,
       "options": [
         {
-          "description": "Show your position alerts",
+          "description": "Show your alerts",
           "name": "list",
           "options": [],
           "type": 1
         },
         {
-          "description": "Stop one of your position alerts",
+          "description": "Stop one of your alerts",
           "name": "delete",
           "options": [
             {

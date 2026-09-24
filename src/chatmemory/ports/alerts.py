@@ -10,6 +10,10 @@ position's identity and pool, the token symbols and decimals, the language the
 message is written in. So a sweep never discovers anything and never runs a
 model; it reads a handful of words per alert and compares them.
 
+A price alert is the one kind with no wallet behind it: it watches the BTC or
+ETH price against a level, so it has no chain and no address, and what a sweep
+reads for it is one constant request to the price source.
+
 The address is stored already cleared. The per-call egress guard roots an
 address in the asker's own words; a sweep has no asker and no words, so the
 check is made once, at creation, and the stored address is the result of it.
@@ -43,8 +47,33 @@ HEALTH_CONFIRMATIONS = 1
 """Aave fires on the first read below the limit: near liquidation, five
 minutes is the difference that matters."""
 
+PRICE_CONFIRMATIONS = 1
+"""A price alert fires on the first read past its level: the hysteresis band,
+not a second read, is what keeps a price hovering on the line quiet."""
+
+PRICE_REARM = Decimal("0.005")
+"""How far back past its level, as a fraction of it, a price must go before a
+fired price alert re-arms: 0.5%, so BTC wobbling on 100k is one message."""
+
+MIN_EDGE_PERCENT = Decimal(1)
+MAX_EDGE_PERCENT = Decimal(50)
+"""How near a range edge a person may ask to be warned. Under 1% the warning
+and the exit are one sweep apart; over 50% every range is always near an edge."""
+
+DEFAULT_EDGE_PERCENT = Decimal(5)
+"""The distance "near the edge" means when no number was given."""
+
+EDGE_REARM_POINTS = Decimal(1)
+"""Percentage points past the edge distance a position must move back towards
+the middle before a fired near-edge alert re-arms."""
+
+PRICE_ASSETS = frozenset({"BTC", "ETH"})
+"""What a price alert may watch: the market tools' closed crypto vocabulary
+(`app.egress.CRYPTO_ASSETS`), restated here because a port imports no app."""
+
 DEFAULT_ALERTS_PER_PERSON = 10
-"""Active alerts one person may keep, separate from their scheduled tasks."""
+"""Active alerts one person may keep, of every kind together, separate from
+their scheduled tasks."""
 
 POSITION_CLOSED = "position closed"
 DIRECT_MESSAGES_CLOSED = "direct messages are closed"
@@ -60,6 +89,7 @@ CHAIN_NAMES: Mapping[str, str] = {
 class AlertKind(StrEnum):
     LP_RANGE = "lp_range"
     AAVE_HEALTH = "aave_health"
+    PRICE = "price"
 
 
 class AlertState(StrEnum):
@@ -67,11 +97,28 @@ class AlertState(StrEnum):
 
     UNKNOWN = "unknown"
     IN_RANGE = "in_range"
+    #: In range, but within the alert's edge distance of one bound.
+    NEAR_EDGE = "near_edge"
     OUT_OF_RANGE = "out_of_range"
     CLOSED = "closed"
     OK = "ok"
+    #: Under the limit (a health factor) or on the low side of a price level.
     BELOW = "below"
     NO_DEBT = "no_debt"
+    #: On the high side of a price level.
+    ABOVE = "above"
+
+
+class PriceDirection(StrEnum):
+    """Which crossing of the level a price alert tells."""
+
+    ABOVE = "above"
+    BELOW = "below"
+
+    @property
+    def state(self) -> AlertState:
+        """The side of the level this direction fires on."""
+        return AlertState.ABOVE if self is PriceDirection.ABOVE else AlertState.BELOW
 
 
 class LpProtocol(StrEnum):
@@ -99,6 +146,7 @@ class AlertRefusal(StrEnum):
     """Why an alert was not created. Each maps to a sentence the person is shown."""
 
     THRESHOLD_OUT_OF_RANGE = "threshold_out_of_range"
+    EDGE_OUT_OF_RANGE = "edge_out_of_range"
     INVALID_TARGET = "invalid_target"
     AT_CAP = "at_cap"
     DUPLICATE = "duplicate"
@@ -125,18 +173,31 @@ class LpTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class PriceTarget:
+    """A price level: tell me when `asset` goes `direction` `level` US dollars."""
+
+    asset: str
+    direction: PriceDirection
+    level: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class NewAlert:
     """An alert as creation hands it over: target, owner and baseline."""
 
     person: PersonRef
     kind: AlertKind
-    chain: str
-    #: Already cleared: see the module docstring.
-    address: str
-    address_source: AddressSource
+    #: None for a price alert, which watches no wallet.
+    chain: str | None
+    #: Already cleared: see the module docstring. None for a price alert.
+    address: str | None
+    address_source: AddressSource | None
     language: AlertLanguage
     lp: LpTarget | None = None
     threshold: Decimal | None = None
+    price: PriceTarget | None = None
+    #: A range alert that also warns this many percent from an edge.
+    edge_percent: Decimal | None = None
     #: "Back in range" and "recovered" messages. On unless turned off.
     notify_return: bool = True
     #: The reading taken at creation; nothing is sent until it changes.
@@ -151,16 +212,18 @@ class PositionAlert:
     id: int
     person: PersonRef
     kind: AlertKind
-    chain: str
-    address: str
+    chain: str | None
+    address: str | None
     language: AlertLanguage
     state: AlertState
     state_since: datetime
     created_at: datetime
     next_check_at: datetime
-    address_source: AddressSource = AddressSource.TYPED
+    address_source: AddressSource | None = AddressSource.TYPED
     lp: LpTarget | None = None
     threshold: Decimal | None = None
+    price: PriceTarget | None = None
+    edge_percent: Decimal | None = None
     notify_return: bool = True
     pending_state: AlertState | None = None
     pending_count: int = 0
@@ -177,7 +240,7 @@ class PositionAlert:
 
     @property
     def chain_name(self) -> str:
-        return CHAIN_NAMES.get(self.chain, self.chain)
+        return CHAIN_NAMES.get(self.chain or "", self.chain or "")
 
 
 # --- what a sweep reads ---------------------------------------------------
@@ -212,6 +275,33 @@ class LpObservation:
         return AlertState.OUT_OF_RANGE
 
 
+class Edge(StrEnum):
+    LOWER = "lower"
+    UPPER = "upper"
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeDistance:
+    """How far the price must move to reach the nearer bound, in percent of it."""
+
+    percent: Decimal
+    edge: Edge
+
+
+def edge_distance(price: Decimal, low: Decimal, high: Decimal) -> EdgeDistance:
+    """The nearer range bound, and the move to it as a percentage of the price.
+
+    Measured on the prices as people read them (`orient`ed, quote per base),
+    so "3.4% from the upper edge" is the rise in the price the range shows.
+    Zero once the price is at or past a bound.
+    """
+    if not price:
+        return EdgeDistance(Decimal(0), Edge.LOWER)
+    up = max(Decimal(0), (high / price - 1) * 100)
+    down = max(Decimal(0), (1 - low / price) * 100)
+    return EdgeDistance(up, Edge.UPPER) if up <= down else EdgeDistance(down, Edge.LOWER)
+
+
 @dataclass(frozen=True, slots=True)
 class HealthObservation:
     """An Aave account now. `health_factor` is None when there is no debt."""
@@ -228,7 +318,18 @@ class ReadFailure:
     reason: str
 
 
-Observation = LpObservation | HealthObservation | ReadFailure
+@dataclass(frozen=True, slots=True)
+class PriceObservation:
+    """One asset's US dollar price, and when the source says it was quoted."""
+
+    asset: str
+    price: Decimal
+    as_of: datetime
+    #: The source's name, as the message credits it.
+    source: str = ""
+
+
+Observation = LpObservation | HealthObservation | PriceObservation | ReadFailure
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +397,16 @@ class AlertTargets(Protocol):
 
         `chain` None reads every chain. Never raises for a chain: a chain that
         fails is named in `unreachable`.
+        """
+        ...
+
+
+class PriceFeed(Protocol):
+    async def latest(self) -> Mapping[str, PriceObservation]:
+        """Every `PRICE_ASSETS` price now, by ticker, from one constant request.
+
+        Raises when there is no fresh figure: a stale price must never be
+        shown as a baseline or decide a crossing.
         """
         ...
 

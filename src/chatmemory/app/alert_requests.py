@@ -14,6 +14,12 @@ through `asker_values`). Nothing retrieved, and nothing somebody else said, is
 ever a candidate. The source is stored with the alert, so forgetting the saved
 wallet removes exactly the alerts that relied on it.
 
+A price alert has no wallet and reads no chain: its proposal is the price now,
+from the same source the sweep will read (`PriceFeed`), and the direction when
+the request gave only a level ("when BTC hits 100k") is the side the price is
+not on yet. A range alert with an edge distance shows how far the position is
+from its nearer edge now, in the orientation the range is quoted in.
+
 Every reply is fixed text in the asker's language, English or Portuguese, and
 the wallet address appears only where the asker alone reads it -- a direct
 message -- as a saved wallet does.
@@ -29,14 +35,25 @@ from decimal import Decimal
 import structlog
 
 from chatmemory.app.alert_intent import AlertIntent
-from chatmemory.app.alerts import AlertService, fee_tier, number
+from chatmemory.app.alerts import (
+    EDGE_NAMES,
+    AlertService,
+    dollars,
+    fee_tier,
+    level,
+    number,
+    percent,
+    quoted_at,
+)
 from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.language import Language, detect
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.alerts import (
     CHAIN_NAMES,
     DEFAULT_ALERTS_PER_PERSON,
+    MAX_EDGE_PERCENT,
     MAX_THRESHOLD,
+    MIN_EDGE_PERCENT,
     MIN_THRESHOLD,
     AddressSource,
     AlertKind,
@@ -49,7 +66,12 @@ from chatmemory.ports.alerts import (
     LpTarget,
     NewAlert,
     PositionAlert,
+    PriceDirection,
+    PriceFeed,
+    PriceObservation,
+    PriceTarget,
     TargetsRead,
+    edge_distance,
 )
 
 log = structlog.get_logger()
@@ -121,6 +143,40 @@ _TEXT: dict[AlertLanguage, dict[str, str]] = {
         ),
         "health_label": "Aave health factor on {chain} below {limit}",
         "lp_label": "{position} on {chain}",
+        "edge_label": "{position} on {chain}, warning within {within} of an edge",
+        "price_label": "{asset} {direction} {level}",
+        "above": "above",
+        "below": "below",
+        "edge_out_of_bounds": (
+            "I can warn you between {low} and {high} from a range edge, and {value} is "
+            "outside that."
+        ),
+        "lp_edge": " · **{distance} from the {edge} edge**; I'll warn you within {within}",
+        "lp_edge_now": " (already that near: I'll warn you after it moves away and back)",
+        "price_unavailable": (
+            "Price alerts aren't available on this deployment, so I can't watch that for you."
+        ),
+        "need_level": (
+            "At what price? For example: `alert me when BTC goes above 100k` or "
+            "`me avisa se o ETH cair abaixo de 2500`."
+        ),
+        "price_unreadable": (
+            "I couldn't read the {asset} price just now, so I can't show where it is. "
+            "Try again in a moment."
+        ),
+        "price_heading": "Here's what I'll watch:",
+        "price_line": (
+            "• **{asset}** {direction} **{level}** · now **{price}** ({source}, {time})"
+        ),
+        "price_there": (
+            ", already there: I'll message you the next time it crosses, after it has "
+            "come back"
+        ),
+        "price_footer": (
+            "I check every {minutes} minutes and message you once when the price "
+            "crosses the level, and again only after it has crossed back. Press "
+            "**Confirm** to start, or **Cancel**."
+        ),
     },
     PT: {
         "unavailable": (
@@ -193,6 +249,40 @@ _TEXT: dict[AlertLanguage, dict[str, str]] = {
         ),
         "health_label": "health factor no Aave na {chain} abaixo de {limit}",
         "lp_label": "{position} na {chain}",
+        "edge_label": "{position} na {chain}, aviso a {within} de uma borda",
+        "price_label": "{asset} {direction} {level}",
+        "above": "acima de",
+        "below": "abaixo de",
+        "edge_out_of_bounds": (
+            "Consigo avisar entre {low} e {high} de uma borda da faixa, e {value} "
+            "está fora disso."
+        ),
+        "lp_edge": " · **a {distance} da borda {edge}**; te aviso a {within}",
+        "lp_edge_now": " (já está perto assim: te aviso depois que se afastar e voltar)",
+        "price_unavailable": (
+            "Alertas de preço não estão disponíveis nesta instalação, então não consigo "
+            "acompanhar isso para você."
+        ),
+        "need_level": (
+            "Em qual preço? Por exemplo: `me avisa quando o BTC passar de 100k` ou "
+            "`me avisa se o ETH cair abaixo de 2500`."
+        ),
+        "price_unreadable": (
+            "Não consegui ler o preço do {asset} agora, então não sei onde ele está. "
+            "Tente de novo em instantes."
+        ),
+        "price_heading": "Isto é o que vou acompanhar:",
+        "price_line": (
+            "• **{asset}** {direction} **{level}** · agora **{price}** ({source}, {time})"
+        ),
+        "price_there": (
+            ", já está lá: te aviso na próxima vez que cruzar, depois de voltar"
+        ),
+        "price_footer": (
+            "Eu verifico a cada {minutes} minutos e te mando uma mensagem quando o "
+            "preço cruzar o nível, e de novo só depois que ele voltar. Aperte "
+            "**Confirmar** para começar, ou **Cancelar**."
+        ),
     },
 }
 
@@ -202,8 +292,8 @@ def text(key: str, language: AlertLanguage, **values: object) -> str:
 
 
 _PORTUGUESE_REQUEST = re.compile(
-    r"\b(?:avis\w*|aviz\w*|quando|abaixo|cair|sair|faixa|posi[cç]\w*|minha|meu|"
-    r"carteira|alerta|notifique|notifica)\b",
+    r"\b(?:avis\w*|aviz\w*|quando|abaixo|acima|cair|sair|passar|faixa|borda|"
+    r"posi[cç]\w*|minha|meu|carteira|alerta|notifique|notifica)\b",
     re.IGNORECASE,
 )
 
@@ -241,17 +331,50 @@ def position_name(lp: LpTarget, language: AlertLanguage) -> str:
 
 def target_label(
     kind: AlertKind,
-    chain: str,
+    chain: str | None,
     lp: LpTarget | None,
     threshold: Decimal | None,
     language: AlertLanguage,
+    *,
+    price: PriceTarget | None = None,
+    edge_percent: Decimal | None = None,
 ) -> str:
     """What an alert watches, in one line, for a confirmation or a listing."""
-    name = CHAIN_NAMES.get(chain, chain)
+    if kind is AlertKind.PRICE and price is not None:
+        return price_label(price, language)
+    name = CHAIN_NAMES.get(chain or "", chain or "")
     if kind is AlertKind.LP_RANGE and lp is not None:
-        return text("lp_label", language, position=position_name(lp, language), chain=name)
+        position = position_name(lp, language)
+        if edge_percent is None:
+            return text("lp_label", language, position=position, chain=name)
+        within = percent(edge_percent, language)
+        return text("edge_label", language, position=position, chain=name, within=within)
     limit = number(threshold or Decimal(0), language)
     return text("health_label", language, chain=name, limit=limit)
+
+
+def alert_label(alert: NewAlert | PositionAlert, language: AlertLanguage) -> str:
+    """`target_label` for a whole alert, whatever its kind."""
+    return target_label(
+        alert.kind,
+        alert.chain,
+        alert.lp,
+        alert.threshold,
+        language,
+        price=alert.price,
+        edge_percent=alert.edge_percent,
+    )
+
+
+def price_label(price: PriceTarget, language: AlertLanguage) -> str:
+    """"BTC above $100,000", "ETH abaixo de US$ 2.500"."""
+    return text(
+        "price_label",
+        language,
+        asset=price.asset,
+        direction=text(str(price.direction), language),
+        level=level(price.level, language),
+    )
 
 
 # --- what a proposal holds ------------------------------------------------------
@@ -305,12 +428,14 @@ class AlertRequests:
         service: AlertService,
         targets: AlertTargets,
         *,
+        prices: PriceFeed | None = None,
         cap: int = DEFAULT_ALERTS_PER_PERSON,
         sweep_seconds: float = 300.0,
         clock: Clock = utc_now,
     ) -> None:
         self._service = service
         self._targets = targets
+        self._prices = prices
         self._cap = cap
         self._minutes = max(1, round(sweep_seconds / 60))
         self._clock = clock
@@ -327,6 +452,8 @@ class AlertRequests:
         direct: bool,
     ) -> AlertReply:
         """What would be watched, or why nothing can be. Stores nothing."""
+        if intent.kind is AlertKind.PRICE:
+            return await self._propose_price(person, intent, language)
         address = intent.address or saved_wallet
         if address is None:
             return AlertReply(text("no_address", language))
@@ -335,7 +462,8 @@ class AlertRequests:
             return AlertReply(refused)
         active = [a for a in await self._service.list_for(person) if a.active]
         room = self._cap - len(active)
-        if room <= 0:
+        # An edge distance on a position already watched needs no new slot.
+        if room <= 0 and intent.edge_percent is None:
             return AlertReply(text("at_cap", language, cap=self._cap))
         source = AddressSource.TYPED if intent.address else AddressSource.SAVED
         request = _Request(person, intent, address, source, language, direct)
@@ -359,16 +487,21 @@ class AlertRequests:
         found = _proposed(request, read)
         if not found:
             return AlertReply(_nothing_found(request, read))
-        taken = {_key(a) for a in active}
-        fresh = [p for p in found if _key(p.alert) not in taken]
+        fresh = [p for p in found if not _covered(p.alert, active)]
         if not fresh:
             return AlertReply(text("already", request.language))
-        kept = fresh[:room]
+        # Adding an edge distance to a watched position takes no slot.
+        watched = {_watch(a) for a in active}
+        new = [p for p in fresh if _watch(p.alert) not in watched]
+        admitted = new[: max(room, 0)]
+        kept = [p for p in fresh if _watch(p.alert) in watched or p in admitted]
+        if not kept:
+            return AlertReply(text("at_cap", request.language, cap=self._cap))
         notes = _notes(
             request,
             read,
             duplicates=len(found) - len(fresh),
-            cut=len(fresh) > len(kept),
+            cut=len(new) > len(admitted),
             kept=len(kept),
             cap=self._cap,
         )
@@ -390,6 +523,37 @@ class AlertRequests:
             lines += ["", *notes]
         lines += ["", text("footer", lang, minutes=self._minutes)]
         return "\n".join(lines)
+
+    async def _propose_price(
+        self, person: PersonRef, intent: AlertIntent, language: AlertLanguage
+    ) -> AlertReply:
+        """A price level: no wallet, no chain, and the price now as the baseline."""
+        if self._prices is None:
+            return AlertReply(text("price_unavailable", language))
+        if intent.level is None or intent.level <= 0 or intent.asset is None:
+            return AlertReply(text("need_level", language))
+        active = [a for a in await self._service.list_for(person) if a.active]
+        if len(active) >= self._cap:
+            return AlertReply(text("at_cap", language, cap=self._cap))
+        quote = await self._price_now(intent.asset)
+        if quote is None:
+            return AlertReply(text("price_unreadable", language, asset=intent.asset))
+        proposed = _price(person, intent.level, intent.direction, quote, language)
+        if _covered(proposed.alert, active):
+            return AlertReply(text("already", language))
+        lines = [text("price_heading", language), proposed.line, ""]
+        lines.append(text("price_footer", language, minutes=self._minutes))
+        body = "\n".join(lines)
+        return AlertReply(body, AlertProposal(person, language, (proposed.alert,), body))
+
+    async def _price_now(self, asset: str) -> PriceObservation | None:
+        if self._prices is None:
+            return None
+        try:
+            return (await self._prices.latest()).get(asset)
+        except Exception as exc:  # noqa: BLE001 - an unreadable price is said, not raised
+            log.warning("alerts.price_unreadable", error=str(exc)[:200])
+            return None
 
     # --- confirming ----------------------------------------------------------
 
@@ -424,6 +588,8 @@ class AlertRequests:
 
 
 def _limit_refusal(intent: AlertIntent, language: AlertLanguage) -> str | None:
+    if intent.kind is AlertKind.LP_RANGE:
+        return _edge_refusal(intent.edge_percent, language)
     if intent.kind is not AlertKind.AAVE_HEALTH:
         return None
     low, high = number(MIN_THRESHOLD, language), number(MAX_THRESHOLD, language)
@@ -435,10 +601,33 @@ def _limit_refusal(intent: AlertIntent, language: AlertLanguage) -> str | None:
     return None
 
 
-def _key(alert: NewAlert | PositionAlert) -> tuple[object, ...]:
+def _edge_refusal(edge: Decimal | None, language: AlertLanguage) -> str | None:
+    if edge is None or MIN_EDGE_PERCENT <= edge <= MAX_EDGE_PERCENT:
+        return None
+    low, high = percent(MIN_EDGE_PERCENT, language), percent(MAX_EDGE_PERCENT, language)
+    value = percent(edge, language)
+    return text("edge_out_of_bounds", language, low=low, high=high, value=value)
+
+
+def _watch(alert: NewAlert | PositionAlert) -> tuple[object, ...]:
     """What makes two alerts the same watch, as the store's unique index says."""
     token = alert.lp.token_id if alert.lp is not None else -1
-    return (alert.kind, alert.chain, alert.address.lower(), token, alert.threshold or 0)
+    address = (alert.address or "").lower()
+    return (alert.kind, alert.chain, address, token, alert.threshold or 0, alert.price)
+
+
+def _covered(alert: NewAlert, active: Sequence[PositionAlert]) -> bool:
+    """An active alert already does what this one would.
+
+    The edge distance counts only when this one has one: asking for a warning
+    near the edge of a position already watched is offered, and the store then
+    adds the distance to the existing alert; a plain range request for a
+    position with an edge warning is already covered by it.
+    """
+    same = [a for a in active if _watch(a) == _watch(alert)]
+    if alert.edge_percent is None:
+        return bool(same)
+    return any(a.edge_percent == alert.edge_percent for a in same)
 
 
 def _proposed(request: _Request, read: TargetsRead) -> list[_Proposed]:
@@ -456,6 +645,7 @@ def _new(
     last_value: Decimal,
     threshold: Decimal | None = None,
     lp: LpTarget | None = None,
+    edge_percent: Decimal | None = None,
 ) -> NewAlert:
     return NewAlert(
         person=request.person,
@@ -466,9 +656,56 @@ def _new(
         language=request.language,
         lp=lp,
         threshold=threshold,
+        edge_percent=edge_percent,
         state=state,
         last_value=last_value,
     )
+
+
+def _side(direction: PriceDirection, level_usd: Decimal, price: Decimal) -> AlertState:
+    """The side of the level the price is on, as `price_state` counts it."""
+    if direction is PriceDirection.ABOVE:
+        return AlertState.ABOVE if price >= level_usd else AlertState.BELOW
+    return AlertState.BELOW if price <= level_usd else AlertState.ABOVE
+
+
+def _price(
+    person: PersonRef,
+    level_usd: Decimal,
+    direction: PriceDirection | None,
+    quote: PriceObservation,
+    lang: AlertLanguage,
+) -> _Proposed:
+    # "When BTC hits 100k" names no side: it is the one the price is not on.
+    chosen = direction or (
+        PriceDirection.ABOVE if level_usd > quote.price else PriceDirection.BELOW
+    )
+    target = PriceTarget(quote.asset, chosen, level_usd)
+    state = _side(chosen, level_usd, quote.price)
+    line = text(
+        "price_line",
+        lang,
+        asset=quote.asset,
+        direction=text(str(chosen), lang),
+        level=level(level_usd, lang),
+        price=dollars(quote.price, lang),
+        source=quote.source,
+        time=quoted_at(quote.as_of),
+    )
+    if state is chosen.state:
+        line += text("price_there", lang)
+    alert = NewAlert(
+        person=person,
+        kind=AlertKind.PRICE,
+        chain=None,
+        address=None,
+        address_source=None,
+        language=lang,
+        price=target,
+        state=state,
+        last_value=quote.price,
+    )
+    return _Proposed(alert, line)
 
 
 def _health(request: _Request, found: HealthCandidate) -> _Proposed:
@@ -505,10 +742,35 @@ def _lp(request: _Request, found: LpCandidate) -> _Proposed:
     )
     if out:
         line += text("lp_out_note", lang)
+    edge = request.intent.edge_percent
+    state = found.state
+    if edge is not None and not out:
+        state, note = _edge_note(found, edge, lang)
+        line += note
     alert = _new(
-        request, found.chain, lp=found.target, state=found.state, last_value=Decimal(found.tick)
+        request,
+        found.chain,
+        lp=found.target,
+        state=state,
+        last_value=Decimal(found.tick),
+        edge_percent=edge,
     )
     return _Proposed(alert, line)
+
+
+def _edge_note(found: LpCandidate, edge: Decimal, lang: AlertLanguage) -> tuple[AlertState, str]:
+    """The baseline against the edge distance, and how far the nearer edge is now."""
+    near = edge_distance(found.price, found.price_lower, found.price_upper)
+    note = text(
+        "lp_edge",
+        lang,
+        distance=percent(near.percent, lang),
+        edge=EDGE_NAMES[lang][near.edge],
+        within=percent(edge, lang),
+    )
+    if near.percent <= edge:
+        return AlertState.NEAR_EDGE, note + text("lp_edge_now", lang)
+    return AlertState.IN_RANGE, note
 
 
 def _chains(keys: Sequence[str]) -> str:
@@ -555,7 +817,7 @@ def _created_text(
 ) -> str:
     lines = [text("created", lang)] if created else [text("created_none", lang)]
     for alert in created:
-        label = target_label(alert.kind, alert.chain, alert.lp, alert.threshold, lang)
+        label = alert_label(alert, lang)
         lines.append(text("created_line", lang, id=alert.id, label=label))
     counts = {
         "created_duplicates": sum(r is AlertRefusal.DUPLICATE for r in refusals),
