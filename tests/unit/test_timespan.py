@@ -255,7 +255,6 @@ def test_fold_strips_accents_and_collapses_space() -> None:
         ("anteontem", "day_before_yesterday"),
         ("the day before yesterday", "day_before_yesterday"),
         ("no dia 21/09", "2026-09-21"),
-        ("semana passada, não esta semana", "last_week"),
     ],
 )
 def test_longest_phrase_wins(text: str, label: str) -> None:
@@ -280,10 +279,55 @@ def test_longest_phrase_wins(text: str, label: str) -> None:
         # Not dates.
         "https://x.io/a/12/10/b",
         "versão 1.2.3",
+        # Fractions and scores: a year-less n/m needs a date cue.
+        "quanto custa 1/2 ETH",
+        "o que o João disse sobre 1/2 ETH",
+        "vote 3/4 of the quorum",
+        "score 10/10",
+        "the 1/1 meeting",
+        "em 1/2 ETH",
+        # Two spans, or a range: one end of it would search too narrowly.
+        "hoje e ontem",
+        "desde segunda até quarta",
+        "em 21/09 até 23/09",
+        "entre 21/09 e 23/09",
+        "21/09 to 23/09",
+        "o que ele disse até ontem",
     ],
 )
 def test_no_span(text: str) -> None:
     assert parse_span(text, NOW, SAO_PAULO) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "label"),
+    [
+        # After a date cue or as the first words, a year-less dd/mm is a day.
+        ("o que o João disse em 21/09?", "2026-09-21"),
+        ("what did Bea say on 21/09", "2026-09-21"),
+        ("since the 21/09", "since:2026-09-21"),
+        ("21/09, o que ela disse?", "2026-09-21"),
+        # With a year it is a day anywhere.
+        ("o que ela disse 21/09/2025", "2025-09-21"),
+    ],
+)
+def test_a_cued_date_still_reads(text: str, label: str) -> None:
+    assert bounds(text)[2] == label
+
+
+@pytest.mark.parametrize(
+    ("text", "label"),
+    [
+        # "a" after a span is often an article, not the start of a range.
+        ("o que ela disse ontem à tarde?", "yesterday"),
+        # The same span twice is still one span.
+        ("ontem, sim, ontem", "yesterday"),
+        # A span negated in passing is not a second span.
+        ("semana passada, não esta semana", "last_week"),
+    ],
+)
+def test_one_span_named_more_than_once_is_kept(text: str, label: str) -> None:
+    assert bounds(text)[2] == label
 
 
 def test_a_naive_now_is_refused() -> None:

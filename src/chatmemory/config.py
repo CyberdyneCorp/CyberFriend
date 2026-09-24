@@ -303,8 +303,10 @@ class Settings(BaseSettings):
 
     An IANA name. Where a day starts is a property of the deployment, not of
     UTC: cut at UTC midnight, "yesterday" asked at 22:00 in Sao Paulo is the
-    day before the one meant. Read by `app.timespan`; the prompt's clock
-    notice and the older period tables still speak UTC.
+    day before the one meant. Nothing reads it yet: the said-by route (PR 3)
+    will pass it into `app.timespan.parse_span`, which takes the zone as an
+    argument and never reads settings itself. The prompt's clock notice and
+    the older period tables still speak UTC.
     """
 
     # --- Windowing -----------------------------------------------------

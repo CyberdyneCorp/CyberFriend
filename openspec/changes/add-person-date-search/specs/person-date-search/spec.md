@@ -30,6 +30,14 @@ a model call.
 - WHEN a question names no span, or a day that does not exist such as "31/02"
 - THEN no span SHALL be read
 
+#### Scenario: A fraction is not a date
+- WHEN a question mentions "1/2 ETH" or "3/4 of the quorum" with no date cue
+- THEN no span SHALL be read
+
+#### Scenario: Two spans or a range
+- WHEN a question names "hoje e ontem" or "desde segunda até quarta"
+- THEN no span SHALL be read, rather than one end of what was asked
+
 ### Requirement: Context messages carry the author's platform id
 
 The system SHALL report each message's author in `thread_context` as the

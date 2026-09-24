@@ -36,6 +36,14 @@ longest match that names a real day wins, the earliest on a tie. So
   "may" is a verb and "o evento de setembro" is a topic.
 - Nothing that names no real day matches (31/02, "dia 0"), and a since-span
   that has not begun is None.
+- A year-less dd/mm is a date only after a date cue ("dia", "em", "no",
+  "on", "até", a since-word) or as the first words; "1/2 ETH", "3/4 of the
+  quorum" and "score 10/10" are fractions and scores, not days.
+- One span or none: a question naming two different spans ("hoje e ontem")
+  or a range ("desde segunda até quarta", "entre 21/09 e 23/09", "até
+  ontem") is None rather than one end of it, so it takes the ordinary path
+  instead of a quietly narrower search. A span negated in passing ("não esta
+  semana") is ignored.
 
 `now` comes from `Edges.clock`; the zone from `ANSWER_TIMEZONE`, validated as
 an IANA name at boot and defaulted to `America/Sao_Paulo` in the settings and

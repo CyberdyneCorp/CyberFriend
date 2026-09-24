@@ -204,10 +204,26 @@ def _one_day(day: date) -> _Range:
     return _Range(day, day + timedelta(days=1), day.isoformat())
 
 
+#: What may come right before a year-less dd/mm for it to be read as a date:
+#: "no dia 21/09", "em 21/09", "since 21/09", "até 23/09", or nothing at all.
+_DATE_CUE_BEFORE = re.compile(
+    rf"(?:^\W*|\b(?:dia|em|no|on|ate|until|till|from|entre|between|{_SINCE_WORDS})"
+    r" (?:(?:o|a|the) )?)$"
+)
+
+
 def _day_month(match: re.Match[str], today: date) -> _Range | None:
     """dd/mm or dd/mm/yyyy. Day first: the deployment reads dates the Brazilian
     way, and 09/10 is the ninth of October. Without a year, a date that has
-    not come yet this year is last year's."""
+    not come yet this year is last year's.
+
+    A year-less n/m in the middle of a sentence is as often a fraction or a
+    score ("1/2 ETH", "3/4 of the quorum", "score 10/10") as a day, so it is
+    only a date after a date cue or as the question's first words.
+    """
+    cued = match["dia"] or _DATE_CUE_BEFORE.search(match.string[: match.start()])
+    if not (match["year"] or cued):
+        return None
     day, month = int(match["day"]), int(match["month"])
     year = _full_year(match["year"]) if match["year"] else today.year
     try:
@@ -253,6 +269,8 @@ _WEEKDAY = rf"(?P<weekday>{_alternation(_WEEKDAYS)})(?:(?:-| )feira)?"
 _MONTH = rf"(?P<month>{_alternation(_MONTHS)})"
 #: Years a chat message plausibly means; also keeps date arithmetic in range.
 _YEAR = r"(?:19|20)\d{2}"
+#: A quantity after n/m makes it a fraction, never a day: "em 1/2 ETH".
+_UNITS = r"eth|weth|btc|sol|usdc|usdt|dai|tokens?"
 _N = rf"(?P<n>\d{{1,4}}|{_alternation(_NUMBER_WORDS)})"
 
 # Matched against folded text. Order does not matter: the longest match wins
@@ -282,8 +300,8 @@ _RULES: tuple[_Rule, ...] = (
         _month,
     ),
     _rule(
-        r"(?<![\d/])(?:\bdia )?\b(?P<day>\d{1,2})/(?P<month>\d{1,2})"
-        rf"(?:/(?P<year>{_YEAR}|\d{{2}}))?\b(?!/)",
+        r"(?<![\d/])(?P<dia>\bdia )?\b(?P<day>\d{1,2})/(?P<month>\d{1,2})"
+        rf"(?:/(?P<year>{_YEAR}|\d{{2}}))?\b(?!/)(?! ?(?:%|{_UNITS}\b))",
         _day_month,
     ),
     _rule(
@@ -299,17 +317,59 @@ class _Found(NamedTuple):
     range: _Range
 
 
+#: A span negated in passing ("semana passada, não esta semana") is not asked.
+_NEGATED_BEFORE = re.compile(r"\b(?:nao|not) $")
+#: A span that bounds a range ("até ontem", "entre 21/09 e 23/09") is only one
+#: end of what was asked.
+_RANGE_BEFORE = re.compile(
+    r"\b(?:ate|until|till|through|entre|between) (?:(?:o|a|the) )?$"
+)
+_RANGE_AFTER = re.compile(
+    r"^ (?:ate|until|till|through|thru)\b"
+    rf"|^ (?:to|a) (?:(?:o|a|the) )?(?:dia )?(?:\d|{_alternation(_WEEKDAYS)}\b)"
+)
+
+
 def _best(folded: str, today: date) -> _Found | None:
-    """The longest phrase that names a real span; the earliest on a tie."""
-    best: _Found | None = None
-    for rule in _RULES:
-        for match in rule.pattern.finditer(folded):
-            found = rule.resolve(match, today)
-            if found is None:
-                continue
-            if best is None or _longer(match, best.match):
-                best = _Found(match, found)
+    """The longest phrase that names a real span; the earliest on a tie.
+
+    None when the question names more than that one span: two different
+    spans ("hoje e ontem") or a range ("desde segunda até quarta"). Keeping
+    one of them would search a narrower span than was asked, and miss
+    evidence quietly; None leaves the question to the ordinary path.
+    """
+    found = [
+        _Found(match, span)
+        for rule in _RULES
+        for match in rule.pattern.finditer(folded)
+        if (span := rule.resolve(match, today)) is not None
+        and not _NEGATED_BEFORE.search(folded[: match.start()])
+    ]
+    if not found:
+        return None
+    best = found[0]
+    for candidate in found[1:]:
+        if _longer(candidate.match, best.match):
+            best = candidate
+    if any(_conflicts(other, best) for other in found):
+        return None
+    if _bounds_a_range(folded, best.match):
+        return None
     return best
+
+
+def _conflicts(other: _Found, best: _Found) -> bool:
+    """Whether `other` is a second span, not a piece of `best` or a repeat."""
+    start, end = best.match.span()
+    inside = start <= other.match.start() and other.match.end() <= end
+    return not inside and other.range != best.range
+
+
+def _bounds_a_range(folded: str, match: re.Match[str]) -> bool:
+    return bool(
+        _RANGE_BEFORE.search(folded[: match.start()])
+        or _RANGE_AFTER.search(folded[match.end() :])
+    )
 
 
 def _longer(match: re.Match[str], than: re.Match[str]) -> bool:
