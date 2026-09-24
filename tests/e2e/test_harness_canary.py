@@ -61,6 +61,7 @@ INTERNALS = [
 ROUTES = [
     (HTTPClient.send_message, "'/channels/{channel_id}/messages'"),
     (HTTPClient.edit_message, "'/channels/{channel_id}/messages/{message_id}'"),
+    (HTTPClient.delete_message, "'/channels/{channel_id}/messages/{message_id}'"),
     (HTTPClient.send_typing, "'/channels/{channel_id}/typing'"),
     (HTTPClient.start_private_message, "'/users/@me/channels'"),
     (HTTPClient.get_user, "'/users/{user_id}'"),
