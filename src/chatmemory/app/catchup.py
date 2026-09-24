@@ -318,10 +318,14 @@ make a quiet Tuesday busier."""
 
 SUMMARY_DIRECTIVE = (
     "Summarise, for someone who was away, what was said in one chat channel "
-    "{span}. Group what you say by topic rather than by message: what was "
-    "discussed, what was decided, and what was left open. Do not invent "
-    "activity and do not pad — if the evidence is thin, say only what it "
-    "supports. The person asked, in their own words: {asked}"
+    "{span}, as a digest with these sections, leaving out any section the "
+    "evidence gives nothing for: Decisions (what was agreed, and by whom); "
+    "Open questions (asked and not yet answered); Requests (who asked whom "
+    "for what); Other highlights (grouped by topic, not by message). Do not "
+    "invent activity and do not pad — if the evidence is thin, say only what "
+    "it supports. Write the whole digest, headings included, in the language "
+    "of the person's own words below, not the language of these "
+    "instructions. The person asked, in their own words: {asked}"
 )
 """The "question" a summary is an answer to.
 
