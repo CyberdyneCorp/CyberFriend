@@ -20,6 +20,23 @@ Portuguese, before retrieval, and SHALL answer it from the chain explorer.
   this week?"
 - THEN it SHALL be answered as it was before this capability
 
+#### Scenario: This wallet, after a balance question
+- WHEN someone asks about an address's balance and then "o que essa carteira
+  fez essa semana?"
+- THEN that address's activity SHALL be read, not the asker's saved wallet
+
+#### Scenario: A period follow-up
+- WHEN the asker's previous question was about a wallet's activity and they ask
+  "e ontem?"
+- THEN the same wallet's activity for that period SHALL be read
+- AND a follow-up that names anything besides a period ("and the gas today?"),
+  or follows a question that was not about activity, SHALL NOT be
+
+#### Scenario: Fees, throughput and alerts
+- WHEN someone asks about a transaction fee, a chain's transactions per second,
+  or an alert on their wallet
+- THEN it SHALL NOT be answered as the wallet's activity
+
 ### Requirement: The window is the asker's
 
 The window SHALL be read from the asker's question, SHALL default to the last
@@ -64,6 +81,12 @@ counterparty imitates a real one.
   last four characters of a real counterparty
 - THEN it SHALL NOT be listed
 - AND the answer SHALL count it and warn about address poisoning
+
+#### Scenario: An explorer-supplied name with markdown
+- WHEN a token symbol or method name from the explorer is not plain letters,
+  digits and a few symbols
+- THEN it SHALL NOT be written into the answer, and the token SHALL be called
+  an unlisted token
 
 ### Requirement: Counterparties follow the audience
 

@@ -32,8 +32,6 @@ MAX_DAYS = 30
 """The widest span one question reads. A month is what a person reviews; more
 is a statement export, and it multiplies the explorer pages spent on spam."""
 
-_FOLLOW_UP_TURNS = 3
-
 # --- the question ---------------------------------------------------------------
 
 _WALLET_WORDS = frozenset({"wallet", "wallets", "carteira", "carteiras"})
@@ -53,11 +51,43 @@ _CONTEXT_NOUNS = frozenset({"activity", "atividade", "history", "histórico", "h
 
 _DID_DO = re.compile(
     r"\bwhat\s+(?:did|has|have)\b.*\b(?:do|done)\b"
-    r"|\bo\s+que\b.*\b(?:fez|fizeram|movimentou|aconteceu)\b"
+    r"|\bo\s+que\b.*\b(?:fez|fizeram|movimentou)\b"
+    r"|\bo\s+que\s+aconteceu\s+(?:com|na|no)\s+(?:\w+\s+){0,2}(?:carteira|0x[0-9a-f])"
     r"|\bmovimentou\b",
     re.IGNORECASE,
 )
-""""What did this wallet do", "o que essa carteira fez", "o que 0x… movimentou"."""
+""""What did this wallet do", "o que essa carteira fez", "o que 0x… movimentou".
+"O que aconteceu" only with the wallet as its subject: "o que aconteceu com o
+alerta da minha carteira?" is about an alert."""
+
+_NOT_ACTIVITY = frozenset({
+    "gas", "fee", "fees", "taxa", "taxas", "tps",
+    "alert", "alerts", "alerta", "alertas", "avisa", "avise", "avisar",
+    "notify", "notificar", "notifique",
+})
+"""Words that make a history noun about something else: a fee, a chain's
+throughput, or an alert on the wallet ("alert me when my wallet makes a
+transaction" is a request to be told later, not a report now)."""
+
+_NOT_ACTIVITY_PHRASES = re.compile(
+    r"\bper\s+second\b|\bpor\s+segundo\b|\btell\s+me\s+when\b|\bme\s+(?:diga|fala)\s+quando\b"
+    r"|\bwhat\s+(?:did|have)\s+you\b|\bo\s+que\s+(?:voc[eê]|tu)\b",
+    re.IGNORECASE,
+)
+"""A rate, a request to be told later, or a question about what the bot did."""
+
+_DEICTIC_WALLET = re.compile(
+    r"\b(?:this|that|essa|esta|dessa|desta|nessa|nesta|aquela|daquela)\s+(?:wallet|carteira)\b",
+    re.IGNORECASE,
+)
+""""This wallet" / "essa carteira": the one just asked about, when there is one."""
+
+_CARRY_WORDS = frozenset({
+    "it", "its", "their", "dela", "dele", "desse", "dessa",
+    "deste", "desta", "nela", "nele", "ela", "ele",
+})
+"""A history noun carries the earlier address only beside one of these:
+"its transactions", "as transações dela" -- never "how many transactions"."""
 
 _PRONOUN_DID_DO = re.compile(
     r"\bwhat\s+(?:did|has)\s+(?:it|that|this\s+one)\s+(?:do|done)\b"
@@ -66,11 +96,20 @@ _PRONOUN_DID_DO = re.compile(
 )
 """A follow-up about the address asked about just before."""
 
-_PERIOD_FOLLOW_UP = re.compile(
-    r"\A\s*(?:e|and)\b[^?]{0,40}\??\s*\Z",
-    re.IGNORECASE,
-)
+_PERIOD_FOLLOW_UP = re.compile(r"\A\s*(?:e|and)\s+(?P<rest>[^?]{1,40})\??\s*\Z", re.IGNORECASE)
 """"and last month?", "e ontem?": short, opening with "and"."""
+
+_PERIOD_WORDS = frozenset({
+    "last", "past", "this", "the", "previous", "in", "over", "for", "week", "weeks",
+    "month", "months", "day", "days", "today", "yesterday", "year", "about",
+    "e", "o", "a", "de", "do", "da", "no", "na", "nos", "nas", "em", "essa", "esta",
+    "nesta", "nessa", "desta", "dessa", "semana", "semanas", "mês", "mes", "meses",
+    "dia", "dias", "hoje", "ontem", "passado", "passada", "último", "ultimo",
+    "última", "ultima", "últimos", "ultimos", "últimas", "ultimas", "anteontem",
+    "then", "ano",
+})
+"""All a period follow-up may say: "and the last 3 days?" is one, "and the gas
+today?" names something else and is not."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,18 +131,27 @@ def activity_question(text: str, previous: Sequence[str] = ()) -> ActivityQuesti
     conversation verbs veto this route exactly as they veto the balance one.
     """
     words = set(re.findall(r"[\w]+", text.lower()))
-    if words & CONVERSATION_VERBS:
+    if words & (CONVERSATION_VERBS | _NOT_ACTIVITY) or _NOT_ACTIVITY_PHRASES.search(text):
         return None
     if not _asks_about_activity(text, words):
         return _period_follow_up(text, previous)
     addresses = find_addresses(text)
     if addresses:
         return ActivityQuestion(addresses[0])
+    if _DEICTIC_WALLET.search(text):
+        # "What did this wallet do?" after a balance question: that wallet,
+        # not the asker's own.
+        carried = recent_chain_address(previous)
+        if carried is not None:
+            return ActivityQuestion(carried, carried=True)
     if words & _WALLET_WORDS or (words & _FIRST_PERSON and words & _ACTIVITY_NOUNS):
         return ActivityQuestion(None)
-    # "What did it do this week?" after a balance question: that address. Only
-    # on a history noun or a pronoun subject -- "what did John do?" is not.
-    if words & (_ACTIVITY_NOUNS | _CONTEXT_NOUNS) or _PRONOUN_DID_DO.search(text):
+    # "What did it do this week?" / "its transactions" after a balance
+    # question: that address. Only on a pronoun -- "what did John do?" and
+    # "how many transactions does Base do?" are not about it.
+    if (words & (_ACTIVITY_NOUNS | _CONTEXT_NOUNS) and words & _CARRY_WORDS) or (
+        _PRONOUN_DID_DO.search(text)
+    ):
         carried = recent_chain_address(previous)
         if carried is not None:
             return ActivityQuestion(carried, carried=True)
@@ -115,14 +163,23 @@ def _asks_about_activity(text: str, words: set[str]) -> bool:
 
 
 def _period_follow_up(text: str, previous: Sequence[str]) -> ActivityQuestion | None:
-    """"and last month?" right after an activity question: the same wallet."""
-    if not _PERIOD_FOLLOW_UP.match(text) or activity_period(text) is None:
+    """"and last month?" right after an activity question: the same wallet.
+
+    Only the turn immediately before counts, and only when the follow-up says
+    nothing but a period: after a corpus question, "and today?" is about that.
+    """
+    matched = _PERIOD_FOLLOW_UP.match(text)
+    if not matched or not previous or activity_period(text) is None:
         return None
-    for earlier in reversed(previous[-_FOLLOW_UP_TURNS:]):
-        found = activity_question(earlier)
-        if found is not None:
-            return ActivityQuestion(found.address, carried=found.address is not None)
-    return None
+    rest = re.findall(r"[\w]+", matched.group("rest").lower())
+    if any(word not in _PERIOD_WORDS and not word.isdigit() for word in rest):
+        return None
+    # The turn before may itself be a follow-up ("and last month?" then "and
+    # yesterday?"): it is read with the turns before it.
+    found = activity_question(previous[-1], previous[:-1])
+    if found is None:
+        return None
+    return ActivityQuestion(found.address, carried=found.address is not None)
 
 
 # --- the span -------------------------------------------------------------------

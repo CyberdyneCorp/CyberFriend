@@ -84,11 +84,13 @@ EN = {
         "wallet's history."
     ),
     "truncated": "More activity than shown: only the latest {rows} records were read.",
+    "unlisted": "unlisted token",
     "no_wrappers": "Aave's tokens could not be identified, so Aave actions may be missing.",
     "footer": (
         "_USD at current prices (each chain's Aave oracle), not at the time of each "
-        "action. Only tokens this deployment recognises are shown: USDC, USDT, DAI, "
-        "WETH and each chain's Aave assets._"
+        "action. Tokens others send are shown only when this deployment recognises "
+        "them (USDC, USDT, DAI, WETH and each chain's Aave assets); other tokens "
+        "appear only in the wallet's own transactions._"
     ),
     "verbs": {
         "supplied": "supplied",
@@ -149,11 +151,13 @@ PT = {
         "Há mais atividade do que a mostrada: só os {rows} registros mais recentes "
         "foram lidos."
     ),
+    "unlisted": "token não listado",
     "no_wrappers": "Não consegui identificar os tokens do Aave, então ações no Aave podem faltar.",
     "footer": (
         "_USD a preços atuais (oráculo do Aave de cada rede), não do momento de cada "
-        "ação. Só aparecem tokens que esta instalação reconhece: USDC, USDT, DAI, "
-        "WETH e os ativos do Aave de cada rede._"
+        "ação. Tokens enviados por terceiros só aparecem se esta instalação os "
+        "reconhece (USDC, USDT, DAI, WETH e os ativos do Aave de cada rede); outros "
+        "tokens só aparecem nas transações da própria carteira._"
     ),
     "verbs": {
         "supplied": "depositou",
@@ -327,7 +331,8 @@ def _flows(legs: Sequence[Leg], words: _Words, *, signed: bool) -> str:
     shown = []
     for leg in _net_legs(legs, net):
         sign = ("+" if leg.amount > 0 else "−") if signed else ""
-        shown.append(f"{sign}{words.number(abs(leg.amount))} {leg.symbol}")
+        symbol = leg.symbol or str(words.text["unlisted"])
+        shown.append(f"{sign}{words.number(abs(leg.amount))} {symbol}")
     return ", ".join(shown) or "—"
 
 

@@ -27,6 +27,7 @@ a fee: nothing on chain says it is one.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -169,6 +170,27 @@ class Transaction:
 # --- reading rows -----------------------------------------------------------------
 
 
+_PLAIN_SYMBOL = re.compile(r"[A-Za-z0-9.$+-]{1,16}")
+_PLAIN_METHOD = re.compile(r"[A-Za-z0-9_]{1,64}")
+"""What an explorer-sourced name may look like to be quoted in an answer.
+
+A token symbol and a method name are whatever the contract's author wrote: a
+token that joins the wallet's own transaction could otherwise put markdown --
+a masked link, say -- into a reply the bot posts verbatim."""
+
+
+def plain_symbol(raw: object) -> str:
+    """The explorer's symbol if it is plain, else "" (rendered as unlisted)."""
+    text = str(raw or "")
+    return text if _PLAIN_SYMBOL.fullmatch(text) else ""
+
+
+def plain_method(raw: object) -> str:
+    """The explorer's method name or selector if it is plain, else ""."""
+    text = str(raw or "")
+    return text if _PLAIN_METHOD.fullmatch(text) else ""
+
+
 def transactions(rows: Iterable[Row], wallet: str, known: Recognised) -> list[Transaction]:
     """The rows grouped by transaction, newest first, as the explorer lists them."""
     wallet = wallet.lower()
@@ -199,7 +221,7 @@ def _native_row(tx: Transaction, row: Row, wallet: str, known: Recognised) -> No
         # row it is somebody else's gas.
         tx.sent = True
         tx.fee += _units(row.get("fee"), ETHER_DECIMALS)
-        tx.method = str(row.get("method") or "")
+        tx.method = plain_method(row.get("method"))
     if sender == wallet and receiver and receiver != wallet:
         tx.called.append(receiver)
     value = _units(row.get("value"), ETHER_DECIMALS)
@@ -226,7 +248,11 @@ def _token_row(tx: Transaction, row: Row, wallet: str, known: Recognised) -> Non
     wrapper = known.wrappers.get(address)
     info = known.tokens.get(address)
     symbol = (
-        wrapper.underlying.symbol if wrapper else info.symbol if info else str(token.get("symbol"))
+        wrapper.underlying.symbol
+        if wrapper
+        else info.symbol
+        if info
+        else plain_symbol(token.get("symbol"))
     )
     side = "to" if outgoing else "from"
     tx.legs.append(

@@ -177,6 +177,90 @@ def test_and_last_month_after_anything_else_is_not_activity() -> None:
     assert activity_question("and last month?", ("when is the deploy?",)) is None
 
 
+BALANCE_TURN = (f"what's the balance of {ADDRESS}?",)
+
+
+@pytest.mark.parametrize(
+    ("text", "previous"),
+    [
+        # A newer question that was not about activity owns the follow-up.
+        ("and today?", ("what did my wallet do this week?",
+                        "what did people decide about the deploy yesterday?")),
+        # A follow-up that names something besides a period.
+        ("and the gas today?", ("what did my wallet do this week?",)),
+        ("and my alerts this week?", ("what did my wallet do this week?",)),
+    ],
+)
+def test_a_period_follow_up_is_only_a_period_right_after_activity(
+    text: str, previous: tuple[str, ...]
+) -> None:
+    """Regression: any short "and ..." naming a period, with an activity
+    question anywhere in the last three turns, was read as activity."""
+    found = crypto_route(text, previous)
+    assert found is None or found.route is not CryptoRoute.WALLET_ACTIVITY
+
+
+@pytest.mark.parametrize(
+    ("text", "previous"),
+    [
+        ("e ontem?", ("o que minha carteira fez essa semana?",)),
+        ("and the last 3 days?", ("what did my wallet do this week?",)),
+        ("and yesterday?", ("what did my wallet do this week?", "and last month?")),
+    ],
+)
+def test_a_period_follow_up_chains_on_the_turn_before(
+    text: str, previous: tuple[str, ...]
+) -> None:
+    found = crypto_route(text, previous)
+    assert found is not None and found.route is CryptoRoute.WALLET_ACTIVITY
+
+
+@pytest.mark.parametrize(
+    ("text", "previous"),
+    [
+        # Fees and throughput, after a balance question: no address carried.
+        ("what is the tx fee on Base now?", BALANCE_TURN),
+        ("how many transactions per second does Base do?", BALANCE_TURN),
+        ("quanto de gas custa uma transação na base hoje?", BALANCE_TURN),
+        ("how many transactions does Base process?", BALANCE_TURN),
+        ("what's the gas fee for my transaction?", ()),
+        # Alerts, now or later.
+        ("o que aconteceu com o alerta da minha carteira?", ()),
+        ("what did you do with my wallet alert?", ()),
+        ("alert me when my wallet makes a transaction", ()),
+        ("tell me when my wallet has a transaction", ()),
+    ],
+)
+def test_fees_throughput_and_alerts_are_not_activity(
+    text: str, previous: tuple[str, ...]
+) -> None:
+    """Regression: a bare history noun, or "o que ... aconteceu" beside
+    "carteira", captured these, carrying the earlier address with no pronoun."""
+    found = crypto_route(text, previous)
+    assert found is None or found.route is not CryptoRoute.WALLET_ACTIVITY
+
+
+@pytest.mark.parametrize(
+    ("text", "earlier"),
+    [
+        ("what did this wallet do this week?", f"balance of {ADDRESS}"),
+        ("o que essa carteira fez essa semana?", f"saldo de {ADDRESS}"),
+        ("show its transactions", f"what does {ADDRESS} hold?"),
+    ],
+)
+def test_this_wallet_after_a_balance_question_is_that_address(text: str, earlier: str) -> None:
+    """Regression: "this wallet" read the asker's saved wallet, or asked for
+    one, instead of the address just asked about."""
+    found = crypto_route(text, (earlier,))
+    assert found is not None and found.route is CryptoRoute.WALLET_ACTIVITY
+    assert found.addresses == (ADDRESS.lower(),) and not found.mine
+
+
+def test_what_happened_to_my_wallet_is_still_activity() -> None:
+    found = crypto_route("o que aconteceu com minha carteira essa semana?")
+    assert found is not None and found.route is CryptoRoute.WALLET_ACTIVITY
+
+
 # --- the route, through the real answer service ---------------------------------------
 
 

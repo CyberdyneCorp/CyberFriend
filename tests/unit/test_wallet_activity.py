@@ -234,6 +234,42 @@ def test_an_unlisted_token_in_the_wallets_own_transaction_is_shown() -> None:
     assert action.kind is Kind.SWAP and action.legs[1].symbol == "ODD"
 
 
+@pytest.mark.parametrize(
+    ("symbol", "shown"),
+    [("[click](https://evil.example)", "unlisted token"), (None, "unlisted token"),
+     ("ODD", "ODD")],
+)
+def test_an_explorer_symbol_is_quoted_only_when_plain(symbol: str | None, shown: str) -> None:
+    """Regression: a token's own symbol went verbatim into the reply, so a
+    token joining the wallet's transaction could post a masked link, and a
+    missing symbol printed as "None"."""
+    tx, at = "0xc1" + "0" * 62, "2026-09-18T10:00:00.000000Z"
+    odd = {"address_hash": "0x" + "ab" * 20, "symbol": symbol, "decimals": "18"}
+    rows = [
+        native(tx, WALLET, GATEWAY, 10**17, at=at, method="swap", fee=1),
+        erc20(tx, "0x" + "cd" * 20, WALLET, 5 * 10**18, odd, at=at),
+    ]
+
+    text = _render(rows, private=True)
+
+    assert f"5 {shown}" in text
+    assert "evil.example" not in text and "None" not in text
+
+
+def test_an_explorer_method_is_quoted_only_when_plain() -> None:
+    tx, at = "0xc2" + "0" * 62, "2026-09-18T10:00:00.000000Z"
+    rows = [native(tx, WALLET, GATEWAY, 0, at=at, method="a`](https://evil.example)", fee=1)]
+
+    [action] = classified(rows).actions
+
+    assert action.kind is Kind.OTHER and action.detail == ""
+
+
+def test_the_footer_says_unlisted_tokens_appear_in_the_wallets_own_transactions() -> None:
+    assert "only in the wallet's own transactions" in _render(base_week(), private=True)
+    assert "transações da própria carteira" in _render(base_week(), private=True, pt=True)
+
+
 # --- the explorer cursor --------------------------------------------------------------
 
 
