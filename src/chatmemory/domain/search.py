@@ -53,3 +53,19 @@ class SearchHit:
     score: float
     relevance_source: RelevanceSource
     message_ids: tuple[int, ...] = ()
+    #: Who wrote every line in `text`, when the hit is one person's lines
+    #: (an author-scoped search). Empty for an ordinary, multi-author window.
+    author_display: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class PersonCandidate:
+    """Somebody a name in a question may refer to, and the name they go by.
+
+    Only ever produced under a viewer: a candidate is a person with a visible
+    message in that viewer's channels, so listing candidates cannot name
+    somebody known only from channels the viewer may not read.
+    """
+
+    ref: PersonRef
+    display: str

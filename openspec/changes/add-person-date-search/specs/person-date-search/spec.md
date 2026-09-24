@@ -82,6 +82,10 @@ retrieval or a model call, and with none it SHALL answer as before.
   asks what João said
 - THEN the reply SHALL ask which João, naming both, and no search SHALL run
 
+#### Scenario: A namesake known only from a private channel
+- WHEN a third João speaks only in a channel the asker cannot read
+- THEN the "which João?" reply SHALL NOT name him
+
 #### Scenario: A name that is not a person
 - WHEN someone asks "what did the docs say about X"
 - THEN the question SHALL be answered by the ordinary route

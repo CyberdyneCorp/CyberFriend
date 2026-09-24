@@ -17,7 +17,7 @@ from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message
-from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
+from chatmemory.domain.search import PersonCandidate, RelevanceSource, SearchHit, SearchQuery
 from chatmemory.mcp.auth import bind_viewer, unbind_viewer
 from chatmemory.mcp.tools import UNAVAILABLE, build_server
 
@@ -93,6 +93,11 @@ class RecordingSearch:
             (c for c in viewer.visible_channels if c in self.corpus),
             key=lambda c: c.platform_channel_id,
         )
+
+    async def people_named(
+        self, viewer: Viewer, name: str, limit: int = 6
+    ) -> Sequence[PersonCandidate]:
+        return []
 
 
 def corpus() -> dict[ChannelRef, list[SearchHit]]:

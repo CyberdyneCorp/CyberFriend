@@ -40,6 +40,9 @@ answer stack's `search` and `chat` -> `build_bot(catchup=...)` ->
 `tests/unit/test_catchup_wiring.py` reads that chain from this file down. A
 process that skips it answers "what did I miss in #x" by searching the corpus
 for those words -- the behaviour before the feature, never a wider one.
+"What did Ana say about X" follows it: `assemble` -> `build_said_by` ->
+`build_bot(said_by=...)` -> `build_ask_service` -> `AskService(said_by=...)`,
+read from this file down by `tests/unit/test_said_by_wiring.py`.
 
 Indexing scope is live here as it is in ingest. `assemble` builds a `LiveScope`
 over the answer stack's engine, refreshes it before identifying, hands it to
@@ -130,6 +133,7 @@ from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.indexing import ChannelPurge, IndexingService
 from chatmemory.app.notifications import NotificationDelivery
+from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import ScheduledTaskRunner
 from chatmemory.app.scope import LiveScope, ScopeProvider
 from chatmemory.composition import (
@@ -147,6 +151,7 @@ from chatmemory.composition import (
     build_notification_delivery,
     build_notification_preferences,
     build_personal_facts,
+    build_said_by,
     build_schedules,
     build_task_runner,
 )
@@ -235,6 +240,7 @@ def build_bot(
     indexing: IndexingStores | None = None,
     facts: PersonalFactsService | None = None,
     catchup: CatchUpService | None = None,
+    said_by: SaidByService | None = None,
     notifications: AsyncEngine | None = None,
     alert_transport: httpx.AsyncBaseTransport | None = None,
     clock: Clock = utc_now,
@@ -288,6 +294,9 @@ def build_bot(
         # by searching the corpus for those words, which is the behaviour
         # this process had before the feature existed.
         catchup=catchup,
+        # "What did Ana say about X". Without it that question is answered by
+        # the ordinary search, which is what this process did before.
+        said_by=said_by,
         alerts=alert_requests,
     )
     if corrections is not None:
@@ -649,6 +658,9 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # handle the answer stack holds. Omitted, catch-up is built, tested
         # and reachable from nothing -- which is this project's failure mode.
         catchup=build_catch_up(settings, stack.search, stack.chat, edges.clock),
+        # "What did Ana say about X last week", over the same backend and chat
+        # handle, and on the same clock that decides what "last week" is.
+        said_by=build_said_by(settings, stack.search, stack.chat, edges.clock),
         # The other end of the queue the ingest process fills. Omitted, the
         # notification tables are written by one process and read by none:
         # `/notifications` says it is unavailable, and nobody is ever told

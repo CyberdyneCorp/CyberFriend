@@ -13,16 +13,17 @@
 
 ## PR 2. Author-scoped retrieval and resolution
 
-- [ ] 2.1 Migration: `ix_message_author_time` partial index
-- [ ] 2.2 `HybridSearch.search` author branch: ACL, tombstones, author, bounds in one statement; exact cosine ranking; author-only hits
-- [ ] 2.3 `SearchHit.author_display`; `SearchBackend.people_named` with the visible-message predicate; fakes implement it
-- [ ] 2.4 Integration tests: ACL, tombstones, bounds, multi-author windows, `people_named` scoping, statement audit
+- [x] 2.1 Migration: `ix_message_author_time` partial index
+- [x] 2.2 `HybridSearch.search` author branch: ACL, tombstones, author, bounds in one statement; exact cosine ranking; author-only hits
+- [x] 2.3 `SearchHit.author_display`; `SearchBackend.people_named` with the visible-message predicate; fakes implement it
+- [x] 2.4 Integration tests: ACL, tombstones, bounds, multi-author windows, `people_named` scoping, statement audit
 
 ## PR 3. The route
 
-- [ ] 3.1 `said_by_request` parser with precedence against obligations, catch-up, market and facts
-- [ ] 3.2 `SaidByService` dispatched after catch-up; provenance `said_by` resolved/ambiguous/fallback
-- [ ] 3.3 Ambiguity reply with zero model calls; uniform empty reply; `RetrievalUnavailable` answered as a failure
-- [ ] 3.4 Labelled PT/EN eval set including non-person subjects
-- [ ] 3.5 E2E: the scenarios in the spec
-- [ ] 3.6 README, docs/operations.md, self-description; archive the change
+- [x] 3.1 `said_by_request` parser with precedence against obligations, catch-up, market and facts
+- [x] 3.2 `SaidByService` dispatched after catch-up; provenance `said_by` resolved/ambiguous/fallback
+- [x] 3.3 Ambiguity reply with zero model calls; uniform empty reply; `RetrievalUnavailable` answered as a failure
+- [x] 3.4 Labelled PT/EN eval set including non-person subjects
+- [x] 3.5 E2E: the scenarios in the spec
+- [x] 3.6 README, docs/operations.md, self-description
+- [ ] 3.7 Archive the change once merged

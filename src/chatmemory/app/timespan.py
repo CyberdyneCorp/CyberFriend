@@ -384,6 +384,23 @@ def _opened(folded: str, match: re.Match[str]) -> bool:
     )
 
 
+def span_phrases(folded: str, today: date) -> tuple[tuple[int, int], ...]:
+    """Where already-folded text names a real day or span, as (start, end).
+
+    Every phrase, not just the one `parse_span` would pick, with a since-word
+    right before it included -- for a caller that wants the rest of the
+    sentence without the time in it ("o que ela disse sobre o deploy").
+    """
+    found = []
+    for rule in _RULES:
+        for match in rule.pattern.finditer(folded):
+            if rule.resolve(match, today) is None:
+                continue
+            opened = _SINCE_BEFORE.search(folded[: match.start()])
+            found.append((opened.start() if opened else match.start(), match.end()))
+    return tuple(sorted(found))
+
+
 def _midnight(day: date, tz: tzinfo) -> datetime:
     return datetime.combine(day, time(), tzinfo=tz).astimezone(UTC)
 

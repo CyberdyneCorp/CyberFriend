@@ -21,7 +21,7 @@ from chatmemory.app.documents.retrieval import (
 )
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message
-from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
+from chatmemory.domain.search import PersonCandidate, RelevanceSource, SearchHit, SearchQuery
 
 OPEN = ChannelRef("discord", 100)
 T0 = datetime(2026, 9, 13, tzinfo=UTC)
@@ -66,6 +66,11 @@ class FakeConversation:
         return []
 
     async def list_channels(self, viewer: Viewer) -> Sequence[ChannelRef]:  # pragma: no cover
+        return []
+
+    async def people_named(
+        self, viewer: Viewer, name: str, limit: int = 6
+    ) -> Sequence[PersonCandidate]:
         return []
 
 

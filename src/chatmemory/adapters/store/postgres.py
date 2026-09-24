@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import cast
 
 import structlog
@@ -14,9 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from chatmemory.adapters.store import sql
 from chatmemory.app.fusion import reciprocal_rank_fusion
+from chatmemory.app.people import matching, name_key
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import DirtyChannel, Message, Window
-from chatmemory.domain.search import RelevanceSource, SearchHit, SearchQuery
+from chatmemory.domain.search import (
+    PersonCandidate,
+    RelevanceSource,
+    SearchHit,
+    SearchQuery,
+)
 from chatmemory.ports.sources import EmbeddingClient
 from chatmemory.ports.store import PendingExtraction
 
@@ -507,6 +513,70 @@ class PostgresStore:
             }
 
 
+AUTHOR_CANDIDATES = 200
+"""How many of a person's newest messages in the span the topic is ranked among.
+
+Bounded so exact cosine over them stays cheap; a span in which one person
+wrote more than this is answered from the newest of it.
+"""
+
+PEOPLE_SCANNED = 200
+"""How many visible people whose name contains the typed word are compared.
+
+The statement narrows by a substring of the first word, so this is far more
+than any real server shares one; it only bounds a pathological name."""
+
+# Accents folded in SQL the way `timespan.fold` folds them in Python, for the
+# narrowing LIKE. The exact decision is made in `app.people` on the full fold.
+_ACCENTED = "áàâãäåéèêëíìîïóòôõöúùûüçñý"
+_PLAIN = "aaaaaaeeeeiiiiooooouuuucny"
+
+
+def _like_escape(word: str) -> str:
+    return word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _line(row: RowMapping) -> str:
+    at = cast(datetime, row["created_at"]).astimezone(UTC)
+    return f"[{at:%Y-%m-%d %H:%M} UTC] {row['author_display']}: {row['content']}"
+
+
+def authored_hits(rows: Sequence[RowMapping], limit: int) -> list[SearchHit]:
+    """Group ranked author rows by window: best window first, lines in order.
+
+    A window's rank is its best message's. Its text is only the authors'
+    lines, oldest first, so the model reads what was said in the order it was
+    said, and nothing anybody else said beside it.
+    """
+    grouped: dict[int, list[RowMapping]] = {}
+    seen: set[int] = set()
+    for row in rows:
+        # A message held by two live windows is cited from the better one.
+        if cast(int, row["message_id"]) not in seen:
+            seen.add(cast(int, row["message_id"]))
+            grouped.setdefault(cast(int, row["window_id"]), []).append(row)
+    return [_authored_hit(window_id, members) for window_id, members in grouped.items()][
+        :limit
+    ]
+
+
+def _authored_hit(window_id: int, members: Sequence[RowMapping]) -> SearchHit:
+    best = members[0]["score"]
+    ordered = sorted(members, key=lambda r: cast(datetime, r["created_at"]))
+    return SearchHit(
+        window_id=window_id,
+        channel=ChannelRef(PLATFORM, cast(int, members[0]["channel_id"])),
+        text="\n".join(_line(r) for r in ordered),
+        starts_at=cast(datetime, ordered[0]["created_at"]),
+        ends_at=cast(datetime, ordered[-1]["created_at"]),
+        # Exact cosine against the window; 0 when no topic was ranked.
+        score=float(best) if best is not None else 0.0,
+        relevance_source=RelevanceSource.VECTOR,
+        message_ids=tuple(cast(int, r["message_id"]) for r in ordered),
+        author_display=str(ordered[0]["author_display"] or ""),
+    )
+
+
 class HybridSearch:
     """Lexical and vector retrieval, fused.
 
@@ -527,6 +597,11 @@ class HybridSearch:
             # No readable channels: there is nothing to search, and an
             # unconstrained query here would return everything.
             return []
+
+        if query.authors is not None:
+            # Set, even to nobody, means "what these people said": an empty set
+            # is a search for no one, never a fall back to everyone.
+            return await self._authored(channels, query)
 
         params = {
             "channel_ids": channels,
@@ -561,6 +636,68 @@ class HybridSearch:
             # Only the fused survivors are resolved, so the cost is one
             # statement per search rather than one per overfetched candidate.
             return await self._with_message_ids(conn, fused)
+
+    async def _authored(self, channels: list[int], query: SearchQuery) -> Sequence[SearchHit]:
+        """The authors' own messages, grouped into the windows that cite them.
+
+        One statement carries the viewer's channels, tombstones, the authors
+        and the span; see `sql.AUTHOR_SEARCH`. Each hit holds only the
+        authors' lines and message ids, so the model never reads what anyone
+        else said in the same conversation, and the citation lands on the
+        author's own message rather than the window's opening line.
+        """
+        authors = [a.platform_user_id for a in query.authors or () if a.platform == PLATFORM]
+        if not authors:
+            return []
+        topic = query.text.strip()
+        # One embedding for the topic, none without one: the order is then
+        # simply newest first.
+        embedding = (
+            sql.vector_literal((await self._embeddings.embed([topic]))[0]) if topic else None
+        )
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                sql.AUTHOR_SEARCH,
+                {
+                    "channel_ids": channels,
+                    "author_ids": authors,
+                    "platform": PLATFORM,
+                    "since": query.since,
+                    "until": query.until,
+                    "candidates": AUTHOR_CANDIDATES,
+                    "embedding": embedding,
+                    "q": topic,
+                },
+            )
+            return authored_hits(list(rows.mappings()), query.limit)
+
+    async def people_named(
+        self, viewer: Viewer, name: str, limit: int = 6
+    ) -> Sequence[PersonCandidate]:
+        channels = _channel_ids(viewer)
+        typed = name_key(name).split()
+        if not channels or not typed:
+            return []
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                sql.PEOPLE_VISIBLE,
+                {
+                    "channel_ids": channels,
+                    "platform": PLATFORM,
+                    "accented": _ACCENTED,
+                    "plain": _PLAIN,
+                    "pattern": f"%{_like_escape(typed[0])}%",
+                    "cap": PEOPLE_SCANNED,
+                },
+            )
+            visible = [
+                PersonCandidate(
+                    PersonRef(PLATFORM, int(r["platform_user_id"])), str(r["display_name"])
+                )
+                for r in rows.mappings()
+                if r["platform_user_id"] is not None
+            ]
+        return matching(name, visible, limit)
 
     async def _with_message_ids(
         self, conn: AsyncConnection, hits: Sequence[SearchHit]

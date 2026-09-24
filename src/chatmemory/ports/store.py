@@ -30,7 +30,7 @@ from typing import Protocol
 
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import DirtyChannel, Message, Window
-from chatmemory.domain.search import SearchHit, SearchQuery
+from chatmemory.domain.search import PersonCandidate, SearchHit, SearchQuery
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,4 +187,16 @@ class SearchBackend(Protocol):
 
     async def list_channels(self, viewer: Viewer) -> Sequence[ChannelRef]:
         """Indexed channels the viewer may read."""
+        ...
+
+    async def people_named(
+        self, viewer: Viewer, name: str, limit: int = 6
+    ) -> Sequence[PersonCandidate]:
+        """People a typed name may refer to, best match first, at most `limit`.
+
+        Only people with a live message in a channel the viewer may read are
+        candidates, applied in the statement: a list of names is itself a
+        disclosure, and somebody known only from a private channel must not
+        appear in it. An exact full name beats a first-name or prefix match.
+        """
         ...
