@@ -12,6 +12,7 @@ each step exists; in order, all before any request:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import structlog
@@ -25,9 +26,23 @@ from chatmemory.domain.chain import is_address, normalise
 log = structlog.get_logger()
 
 
+MAX_ADDRESSES = 3
+"""Wallets one portfolio call may cover: a person's saved wallet and a couple
+they typed. More than that is a sweep, not a question about one's own money."""
+
+_SEPARATORS = re.compile(r"[\s,;]+")
+
+
 @dataclass(frozen=True, slots=True)
 class Cleared:
-    address: str
+    addresses: tuple[str, ...]
+    #: The asker's own question, as the clearance carries it: what the answer's
+    #: language is taken from. Never the model's arguments.
+    question: str = ""
+
+    @property
+    def address(self) -> str:
+        return self.addresses[0]
 
 
 def refusal(server: str, tool: str, reason: str) -> ToolResult:
@@ -50,6 +65,50 @@ async def clear_address(
     address, so asking for pools and then loans about one wallet are two
     questions, not one question asked twice.
     """
+    rooted = _rooted(server, tool)
+    if isinstance(rooted, ToolResult):
+        return rooted
+    text, question = rooted
+    if not is_address(text):
+        log.warning("chain.not_an_address", tool=tool)
+        return refusal(server, tool, "not_an_address")
+    address = normalise(text)
+    key = f"{tool}:{address}" if per_tool_budget else address
+    return await _admit(server, tool, budget, limiter, key, Cleared((address,), question))
+
+
+async def clear_addresses(
+    server: str,
+    tool: str,
+    budget: CallBudget,
+    limiter: RateLimiter,
+    *,
+    limit: int = MAX_ADDRESSES,
+) -> Cleared | ToolResult:
+    """One or more addresses, separated by spaces or commas, each checked whole.
+
+    Every piece must be an address: a text with one address and one word is
+    refused, not trimmed to the address, for the same reason a single address
+    is never trimmed. The budget is charged per (tool, set of addresses).
+    """
+    rooted = _rooted(server, tool)
+    if isinstance(rooted, ToolResult):
+        return rooted
+    text, question = rooted
+    pieces = [p for p in _SEPARATORS.split(text.strip()) if p]
+    if not pieces or not all(is_address(p) for p in pieces):
+        log.warning("chain.not_an_address", tool=tool)
+        return refusal(server, tool, "not_an_address")
+    addresses = tuple(dict.fromkeys(normalise(p) for p in pieces))
+    if len(addresses) > limit:
+        log.warning("chain.too_many_addresses", tool=tool, count=len(addresses))
+        return refusal(server, tool, "too_many_addresses")
+    key = f"{tool}:{','.join(sorted(addresses))}"
+    return await _admit(server, tool, budget, limiter, key, Cleared(addresses, question))
+
+
+def _rooted(server: str, tool: str) -> tuple[str, str] | ToolResult:
+    """The cleared text and the asker's question, or the refusal."""
     # The clearance, never the arguments: those are model output.
     try:
         clearance = current_authorization(server)
@@ -68,17 +127,22 @@ async def clear_address(
             foreign=list(check.foreign),
         )
         return refusal(server, tool, str(check.refusal))
+    return check.query, clearance.question
 
-    if not is_address(check.query):
-        log.warning("chain.not_an_address", tool=tool)
-        return refusal(server, tool, "not_an_address")
 
-    address = normalise(check.query)
-    key = f"{tool}:{address}" if per_tool_budget else address
+async def _admit(
+    server: str,
+    tool: str,
+    budget: CallBudget,
+    limiter: RateLimiter,
+    key: str,
+    cleared: Cleared,
+) -> Cleared | ToolResult:
+    """The per-question budget, then the rate limit."""
     if not budget.spend(key):
         log.warning("chain.budget_exhausted", tool=tool)
         return refusal(server, tool, "calls_per_run_exhausted")
     if not await limiter.acquire():
         log.warning("chain.rate_limited", tool=tool)
         return refusal(server, tool, "rate_limited")
-    return Cleared(address)
+    return cleared

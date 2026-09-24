@@ -78,6 +78,12 @@ class Node:
     async def block_number(self) -> int:
         return int(str(await self._rpc("eth_blockNumber", [])), 16)
 
+    async def native_balance(self, address: str) -> int:
+        """`eth_getBalance`, in wei. Here rather than only in `rpc.py` so a
+        lookup that already holds this chain's Node reads it with the same
+        back-off as every other call."""
+        return int(str(await self._rpc("eth_getBalance", [address, "latest"])), 16)
+
     async def logs(
         self, address: str, topics: list[str | None], from_block: int, to_block: int
     ) -> list[dict[str, object]]:
@@ -97,7 +103,7 @@ class Node:
         body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         response = await self._client.post(self._endpoint, json=body)
         for delay in self._backoff:
-            if not _rate_limited(response):
+            if not rate_limited(response):
                 break
             await asyncio.sleep(delay)
             response = await self._client.post(self._endpoint, json=body)
@@ -127,12 +133,23 @@ class Node:
         return out
 
 
-def _rate_limited(response: httpx.Response) -> bool:
+def rate_limited(response: httpx.Response) -> bool:
+    """Whether Infura said "Too Many Requests", as a status or in the body.
+
+    A JSON-RPC batch carries the error per entry, so one rate-limited entry
+    marks the whole batch: the rest of it is retried with it rather than
+    reported as an unreachable chain.
+    """
     if response.status_code == 429:
         return True
     try:
         payload = response.json()
     except ValueError:
         return False
-    error = payload.get("error") if isinstance(payload, dict) else None
+    entries = payload if isinstance(payload, list) else [payload]
+    return any(_rate_limit_error(entry) for entry in entries)
+
+
+def _rate_limit_error(entry: object) -> bool:
+    error = entry.get("error") if isinstance(entry, dict) else None
     return isinstance(error, dict) and error.get("code") == RATE_LIMITED_CODE

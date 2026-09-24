@@ -7,13 +7,20 @@ request to anyone but the node already being asked.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from decimal import Decimal
 
 from chatmemory.adapters.chain import abi
 from chatmemory.adapters.chain.deployments import NATIVE, Deployment
 from chatmemory.adapters.chain.liquidity_math import apy_from_ray, whole
 from chatmemory.adapters.chain.node import Call, Node, NodeError
-from chatmemory.adapters.chain.positions import ChainLending, LendingAsset, TokenDirectory
+from chatmemory.adapters.chain.positions import (
+    ChainLending,
+    LendingAsset,
+    TokenDirectory,
+    TokenInfo,
+)
 
 BASE_CURRENCY_DECIMALS = 8
 """Aave v3 markets on these chains quote the base currency as USD with 8
@@ -22,13 +29,51 @@ decimals, for account totals and the oracle alike."""
 HEALTH_DECIMALS = 18
 NO_DEBT_HEALTH = (1 << 256) - 1
 
+RESERVES_TTL_SECONDS = 3600.0
+"""How long a chain's reserve list is trusted. Aave lists a new asset a few
+times a year; an hour late is a portfolio missing a token nobody holds yet."""
+
+
+class ReserveCache:
+    """Each chain's Aave reserve assets with their symbols, kept per process.
+
+    Keyed by chain and pool, never by who asked: the list is public chain
+    state and the same for everyone, so sharing it discloses nothing and saves
+    two multicalls per chain on every portfolio question.
+    """
+
+    def __init__(
+        self,
+        ttl_seconds: float = RESERVES_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._entries: dict[str, tuple[float, tuple[TokenInfo, ...]]] = {}
+
+    def get(self, key: str) -> tuple[TokenInfo, ...] | None:
+        entry = self._entries.get(key)
+        if entry is None or self._clock() - entry[0] >= self._ttl:
+            return None
+        return entry[1]
+
+    def put(self, key: str, tokens: tuple[TokenInfo, ...]) -> None:
+        self._entries[key] = (self._clock(), tokens)
+
 
 class AaveReader:
-    def __init__(self, node: Node, deployment: Deployment, tokens: TokenDirectory) -> None:
+    def __init__(
+        self,
+        node: Node,
+        deployment: Deployment,
+        tokens: TokenDirectory,
+        reserves: ReserveCache | None = None,
+    ) -> None:
         self._node = node
         self._deployment = deployment
         self._tokens = tokens
         self._contracts: tuple[str, str, str] | None = None
+        self._reserves = reserves or ReserveCache()
 
     async def contracts(self) -> tuple[str, str, str]:
         """Pool, data provider and oracle, from the addresses provider."""
@@ -66,6 +111,25 @@ class AaveReader:
             if value:
                 prices[asset] = whole(value, BASE_CURRENCY_DECIMALS)
         return prices
+
+    async def reserve_tokens(self) -> tuple[TokenInfo, ...]:
+        """Every asset this chain's main market lists, underlyings only.
+
+        Never the aTokens or debt tokens: a wallet read over these finds the
+        cbBTC somebody holds without counting their Aave supply a second time.
+        """
+        pool, _, _ = await self.contracts()
+        key = f"{self._deployment.chain.key}:{pool}"
+        cached = self._reserves.get(key)
+        if cached is not None:
+            return cached
+        reserves = abi.decode_address_array(
+            await self._node.eth_call(pool, abi.AAVE_RESERVES_LIST)
+        )
+        known = await self._tokens.load(set(reserves))
+        tokens = tuple(known[r.lower()] for r in reserves)
+        self._reserves.put(key, tokens)
+        return tokens
 
     async def lending(self, user: str) -> ChainLending:
         pool, data, _ = await self.contracts()

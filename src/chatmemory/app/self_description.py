@@ -68,11 +68,13 @@ LOOKUP_DESCRIPTIONS = {
     DEFI_POSITIONS_PROVIDER: {
         Language.ENGLISH: (
             "Uniswap v3/v4 liquidity positions and Aave supplies and borrows "
-            "for a wallet on Ethereum, Base and Arbitrum"
+            "for a wallet on Ethereum, Base and Arbitrum, and what your wallets "
+            "are worth in total"
         ),
         Language.PORTUGUESE: (
             "posições de liquidez na Uniswap v3/v4 e depósitos e empréstimos "
-            "no Aave de uma carteira na Ethereum, Base e Arbitrum"
+            "no Aave de uma carteira na Ethereum, Base e Arbitrum, e quanto "
+            "suas carteiras valem no total"
         ),
     },
     "context7": {

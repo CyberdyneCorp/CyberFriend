@@ -275,7 +275,9 @@ answering from one reports a colleague's project summary as somebody's balance
 An address is still allowed to be what a question is *about*: "what did people
 say about 0x…" keeps its corpus answer, because the conversation verbs mark it
 as a question about the conversation. Asking about a wallet without naming an
-address is answered by asking for one, not by searching.
+address is answered by asking for one, not by searching. A bare "what's my
+balance?" / "qual o meu saldo?" reads the asker's saved wallet; a question asking
+for a *total* ("what's my wallet's total balance") is the portfolio's, below.
 
 ### What it cannot see
 
@@ -297,13 +299,15 @@ transaction even if later code asked it to — the allowlist entry declares
 `READ_ONLY` and the package agrees with the declaration.
 
 A chain that cannot be reached is reported as unreachable, never as an address
-holding nothing; one endpoint failing still reports the other.
+holding nothing; one endpoint failing still reports the other. A rate-limited
+balance read is retried with the same back-off as positions reads (up to 7.5 s)
+before a chain is called unreachable.
 
 ## DeFi positions
 
 The same switch and key also register the `defi_positions` server, with three
-read-only tools. The route picks exactly one from the question, so the model's
-only job is to copy the address:
+positions tools and the portfolio total (below), all read-only. The route picks
+exactly one from the question, so the model's only job is to copy the address:
 
 | Asked about | Tool | Reports |
 |---|---|---|
@@ -355,6 +359,49 @@ reads liquidity then lending, so its server timeout is twice that.
 Other exchanges (Aerodrome, SushiSwap, …), Aave's other markets (Prime, EtherFi),
 history, P&L and impermanent loss. Adding a chain is one entry in
 `adapters/chain/deployments.py`.
+
+## Portfolio total
+
+A fourth tool on the same server, `portfolio_summary`, answers "quanto eu tenho
+no total?", "what's my portfolio worth?", "what's my net worth on chain?" and
+"e no total?" after a wallet or positions question. It is recognised before
+retrieval (route label `PORTFOLIO`, ahead of the positions and balance routes)
+and needs no setting beyond the positions ones.
+
+| Per chain | What is counted |
+|---|---|
+| Wallet | Native ETH, the named tokens, and every asset the chain's Aave v3 market lists (which is how cbBTC is found). Underlying tokens only: an aToken or debt token is never read as a balance |
+| Liquidity | Open Uniswap v3/v4 positions, **including uncollected fees** (shown on the line) |
+| Aave | Per asset, (supplied − borrowed) × oracle price, so a supply not enabled as collateral still counts. The health factor is shown |
+
+The answer is a line per chain (largest first; chains holding nothing share
+one line), a subtotal per wallet when there are several, and a grand total in
+USD, in the question's language, followed by what is not included: other
+tokens, other exchanges and protocols, other Aave markets, and anything held
+that has no price.
+
+**Whose wallets.** The asker's saved wallet, plus any address they typed about
+their own money ("my portfolio with 0x…"), at most three per question. A typed
+address in a question about that address ("what is 0x… worth in total?") is
+read alone. The tool's `addresses` argument is cleared piece by piece like the
+single-address tools: each rooted in the question or the saved wallet, the
+whole call refused if any piece is not an address.
+
+**Prices.** Each chain's Aave oracle, for ether (as WETH) and every reserve; a
+dollar stablecoin the oracle does not list is $1; if the oracle does not
+answer, ether is priced from CoinGecko and the answer says so.
+
+**Partial answers.** Each section of each chain is tried twice. One still
+unread makes the headline "**At least $X** — not read: Base (Aave)", never a
+plain total. Everything shares one deadline of three sections × chains ×
+`POSITIONS_TIMEOUT_SECONDS`, which is also the server's timeout.
+
+**Cost.** One node per chain for the whole lookup, however many wallets: Aave's
+contracts are resolved once, and the reserve list with its symbols is cached
+per process for an hour (it is public and the same for everyone). A wallet is
+about one and a half times the reads of the combined positions tool, and
+takes as long as that tool on the same wallet (seconds, or ~30 s for a v4
+position the explorer has not indexed on Arbitrum).
 
 ## Seeing what is archived
 

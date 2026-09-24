@@ -122,12 +122,20 @@ class ScriptedChat:
         model to. Nothing to copy, or nothing offered, is a plain answer.
         """
         self.calls.append(("tools", user))
-        address = ADDRESS.search(user)
+        found = list(dict.fromkeys(ADDRESS.findall(user)))
         for tool in tools:
             properties = tool.input_schema.get("properties")
-            if address and isinstance(properties, Mapping) and "address" in properties:
-                call = ToolCall(tool.name, {"address": address.group()}, call_id="scripted")
-                return ToolCompletion(call=call)
+            if not found or not isinstance(properties, Mapping):
+                continue
+            # The portfolio takes every address the question holds; the other
+            # chain tools take one.
+            if "addresses" in properties:
+                arguments = {"addresses": " ".join(found)}
+            elif "address" in properties:
+                arguments = {"address": found[0]}
+            else:
+                continue
+            return ToolCompletion(call=ToolCall(tool.name, arguments, call_id="scripted"))
         return ToolCompletion(text="")
 
     def tool_caller(self) -> ScriptedChat:

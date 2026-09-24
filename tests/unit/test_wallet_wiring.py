@@ -105,8 +105,9 @@ def test_enabling_wallet_tools_also_registers_positions() -> None:
 
     assert "defi_positions" in tools.server_names
     positions = next(s for s in tools.servers if s.name == "defi_positions")
-    # The combined tool reads liquidity then lending, each bounded per chain.
-    assert positions.timeout_seconds > 2 * 30
+    # The portfolio reads three sections per chain under one deadline; the
+    # server waits for all of it rather than cutting a slow chain short.
+    assert positions.timeout_seconds > 3 * 3 * 30
     assert {e.tool for e in tools.allowlist if e.server == "defi_positions"} == {
-        "liquidity_positions", "lending_positions", "defi_positions",
+        "liquidity_positions", "lending_positions", "defi_positions", "portfolio_summary",
     }

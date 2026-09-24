@@ -35,6 +35,7 @@ from chatmemory.adapters.chain.positions_provider import (
 )
 from chatmemory.adapters.chain.positions_provider import (
     PositionsProvider,
+    portfolio_budget,
 )
 from chatmemory.adapters.chain.prices import CoinGeckoPrices
 from chatmemory.adapters.chain.provider import PriceLookup, WalletProvider
@@ -143,18 +144,18 @@ def build_chain_tools(
         )
         for chain in CHAINS
     ]
+    # Default rather than required: a deployment that wants raw balances
+    # passes its own, and one that passes nothing still gets USD values.
+    price_lookup = prices or CoinGeckoPrices(
+        client=client,
+        timeout_seconds=settings.timeout_seconds,
+        transport=settings.transport,
+    )
     provider = WalletProvider(
         readers,
         CallBudget(settings.max_calls_per_run),
         RateLimiter(settings.min_interval_seconds),
-        # Default rather than required: a deployment that wants raw balances
-        # passes its own, and one that passes nothing still gets USD values.
-        prices=prices
-        or CoinGeckoPrices(
-            client=client,
-            timeout_seconds=settings.timeout_seconds,
-            transport=settings.transport,
-        ),
+        prices=price_lookup,
     )
     positions = PositionsProvider(
         DEPLOYMENTS,
@@ -164,6 +165,8 @@ def build_chain_tools(
         client=client,
         timeout_seconds=settings.positions_timeout_seconds,
         transport=settings.transport,
+        # Only for ether in a portfolio, when a chain's Aave oracle is down.
+        prices=price_lookup,
     )
     return ChainTools(
         servers=(
@@ -183,10 +186,12 @@ def build_chain_tools(
                     + [d.blockscout for d in DEPLOYMENTS]
                 ),
                 # Chains are read one after another, each bounded, and the
-                # combined tool reads liquidity then lending: the server waits
-                # for the worst case rather than cutting a slow chain short.
+                # portfolio reads three sections per chain under one deadline:
+                # the server waits for that rather than cutting a slow chain
+                # short, which would lose the "at least" answer with it.
                 timeout_seconds=(
-                    2 * len(DEPLOYMENTS) * settings.positions_timeout_seconds + TIMEOUT_HEADROOM
+                    portfolio_budget(len(DEPLOYMENTS), settings.positions_timeout_seconds)
+                    + TIMEOUT_HEADROOM
                 ),
             ),
         ),

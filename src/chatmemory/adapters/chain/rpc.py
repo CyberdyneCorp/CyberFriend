@@ -21,6 +21,7 @@ from decimal import Decimal
 import httpx
 import structlog
 
+from chatmemory.adapters.chain.node import RATE_LIMIT_RETRIES, rate_limited
 from chatmemory.adapters.chain.tokens import Chain, Token
 from chatmemory.domain.chain import normalise
 
@@ -73,8 +74,10 @@ class ChainReader:
         timeout_seconds: float = DEFAULT_TIMEOUT,
         endpoint: str = "",
         transport: httpx.AsyncBaseTransport | None = None,
+        backoff: tuple[float, ...] = RATE_LIMIT_RETRIES,
     ) -> None:
         self.chain = chain
+        self._backoff = backoff
         self._endpoint = endpoint or f"https://{chain.infura_host}.infura.io/v3/{api_key}"
         self._client = client
         self._timeout = timeout_seconds
@@ -128,6 +131,14 @@ class ChainReader:
             ),
         ]
         response = await client.post(self._endpoint, json=batch, timeout=self._timeout)
+        # The same back-off as `Node`. Without it a balance read straight
+        # after a positions read was reported "could not be reached" on
+        # Arbitrum, and a single retry a moment later answered.
+        for delay in self._backoff:
+            if not rate_limited(response):
+                break
+            await asyncio.sleep(delay)
+            response = await client.post(self._endpoint, json=batch, timeout=self._timeout)
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, list):

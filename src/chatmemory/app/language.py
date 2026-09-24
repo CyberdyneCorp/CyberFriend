@@ -40,6 +40,7 @@ _PORTUGUESE = frozenset({
     "ele", "ela", "eles", "elas", "nosso", "nossa", "obrigado", "obrigada",
     "ola", "olá", "bom", "boa", "dia", "tarde", "noite", "favor",
     "funcionalidades", "comandos", "ferramentas", "carteira", "saldo",
+    "quanto", "tenho",
 })
 
 _ENGLISH = frozenset({
