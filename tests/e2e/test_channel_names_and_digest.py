@@ -65,7 +65,9 @@ async def test_a_scheduled_question_is_stored_with_the_channel_linked(
 
     assert turn.text.startswith("Pronto."), turn.text
     async with bot.engine.connect() as conn:
-        stored = (await conn.execute(text("SELECT question FROM scheduled_task"))).scalar_one()
+        stored: str = (
+            await conn.execute(text("SELECT question FROM scheduled_task"))
+        ).scalar_one()
     assert stored == f"resuma o que aconteceu no <#{GENERAL}>"
 
 

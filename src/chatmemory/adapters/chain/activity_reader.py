@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, TypeVar
 
@@ -28,7 +30,12 @@ from chatmemory.adapters.chain.activity import (
     needs_selectors,
     transactions,
 )
-from chatmemory.adapters.chain.activity_explorer import Rows, activity_rows, multicall_selectors
+from chatmemory.adapters.chain.activity_explorer import (
+    Rows,
+    activity_rows,
+    indexed_until,
+    multicall_selectors,
+)
 from chatmemory.adapters.chain.positions import TokenInfo
 from chatmemory.adapters.chain.tokens import tokens_for
 from chatmemory.app.wallet_activity import ActivityWindow
@@ -39,6 +46,18 @@ if TYPE_CHECKING:  # pragma: no cover - a cycle at runtime, a type only here
 log = structlog.get_logger()
 
 T = TypeVar("T")
+
+STALE_AFTER = timedelta(minutes=30)
+"""How far behind the window's end an explorer may be before the answer says
+so. Blocks index within seconds when an explorer is healthy."""
+
+
+def _with_freshness(result: ChainActivity, rows: Rows, window: ActivityWindow) -> ChainActivity:
+    """Mark a chain whose explorer stops short of the window's end."""
+    head = rows.indexed_until
+    if head is None or head >= window.end - STALE_AFTER:
+        return result
+    return replace(result, stale_until=head)
 
 
 class ActivityReader:
@@ -73,13 +92,17 @@ class ActivityReader:
                 results.append(ChainActivity(chain.deployment.chain, unreachable=rows))
                 continue
             known[key] = await self._recognised(chain)
-            results.append(await self._judged(chain, address, rows, known[key]))
+            judged = await self._judged(chain, address, rows, known[key])
+            results.append(_with_freshness(judged, rows, window))
         return results, known
 
     async def _rows(self, chain: ChainPositions, address: str, window: ActivityWindow) -> Rows:
-        return await activity_rows(
-            self._client, chain.deployment.blockscout, address, window.start, window.end
+        explorer = chain.deployment.blockscout
+        rows, head = await asyncio.gather(
+            activity_rows(self._client, explorer, address, window.start, window.end),
+            indexed_until(self._client, explorer),
         )
+        return replace(rows, indexed_until=head)
 
     async def _recognised(self, chain: ChainPositions) -> Recognised:
         """The named tokens, Aave's reserves and its aTokens and debt tokens.

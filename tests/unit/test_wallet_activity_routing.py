@@ -371,7 +371,9 @@ async def test_the_window_is_the_questions_and_never_the_models() -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         if "blockscout" in request.url.host:
-            asked.append(request.url)
+            # The freshness read (/api/v2/blocks) carries no window.
+            if request.url.path.endswith("/advanced-filters"):
+                asked.append(request.url)
             return httpx.Response(200, json={"items": [], "next_page_params": None})
         return httpx.Response(500)
 
@@ -430,3 +432,18 @@ async def test_the_tool_router_offers_activity_among_every_registered_tool(text:
     routed = ToolRouter(limit).route(text, register(config, discoveries))
 
     assert routed.offers(QUALIFIED_ACTIVITY_TOOL)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Verbatim from production: answered with the balance, not the activity.
+        "oque essa carteira fez nos ultimos dias? 0xB26B933a075fBB3D4E8b0925CAd4f2bc345475e0",
+        "oq essa carteira fez essa semana? 0xB26B933a075fBB3D4E8b0925CAd4f2bc345475e0",
+    ],
+)
+def test_joined_o_que_is_an_activity_question(text: str) -> None:
+    from chatmemory.app.routing_crypto import CryptoRoute, crypto_route
+
+    routed = crypto_route(text)
+    assert routed is not None and routed.route is CryptoRoute.WALLET_ACTIVITY
