@@ -346,7 +346,10 @@ class SelfDescriptionAnswerService:
                     personal_facts=self._personal_facts,
                     commands=self._offered_where(question),
                     language=language if language.known else Language.ENGLISH,
-                )
+                ),
+                # An empty set, not None: it read no channel. None means
+                # "never established", and memory refuses to store that.
+                consulted_channels=frozenset(),
             )
         return await self._fallback.answer(question)
 
