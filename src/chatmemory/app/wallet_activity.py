@@ -124,12 +124,18 @@ class ActivityQuestion:
     carried: bool = False
 
 
+_JOINED_O_QUE = re.compile(r"\b(?:oque|oq)\b", re.IGNORECASE)
+
+
 def activity_question(text: str, previous: Sequence[str] = ()) -> ActivityQuestion | None:
     """The activity lookup being asked for, or None for everything else.
 
     "What did people say about my wallet" stays with the corpus: the
     conversation verbs veto this route exactly as they veto the balance one.
     """
+    # "oque"/"oq" as people type them. "oque essa carteira fez nos ultimos
+    # dias? 0x..." missed this route and was answered with the balance.
+    text = _JOINED_O_QUE.sub("o que", text)
     words = set(re.findall(r"[\w]+", text.lower()))
     if words & (CONVERSATION_VERBS | _NOT_ACTIVITY) or _NOT_ACTIVITY_PHRASES.search(text):
         return None

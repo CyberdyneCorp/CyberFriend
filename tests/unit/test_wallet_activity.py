@@ -490,3 +490,34 @@ def test_long_weeks_are_bounded_with_a_count_of_the_rest() -> None:
 
     assert "…and 3 more." in text
     assert text.count(f"`{REAL_PAYEE}`") == MAX_LINES
+
+
+def test_a_stale_explorer_is_reported_not_read_as_no_activity() -> None:
+    """Regression, from production: Arbitrum's explorer stopped at 2026-09-22
+    21:41 UTC while reporting "finished indexing", and a position minted the
+    next day read as "nenhuma atividade"."""
+    from datetime import UTC, datetime
+
+    from chatmemory.adapters.chain.activity import ChainActivity
+    from chatmemory.adapters.chain.activity_explorer import Rows
+    from chatmemory.adapters.chain.activity_reader import _with_freshness
+    from chatmemory.adapters.chain.activity_render import render_activity
+    from chatmemory.adapters.chain.tokens import ARBITRUM
+    from chatmemory.app.language import Language
+    from chatmemory.app.wallet_activity import ActivityWindow
+
+    end = datetime(2026, 9, 24, 20, 0, tzinfo=UTC)
+    window = ActivityWindow(start=datetime(2026, 9, 17, tzinfo=UTC), end=end, named=False)
+    stale = Rows((), indexed_until=datetime(2026, 9, 22, 21, 41, tzinfo=UTC))
+    fresh = Rows((), indexed_until=end)
+
+    marked = _with_freshness(ChainActivity(ARBITRUM), stale, window)
+    assert marked.stale_until == stale.indexed_until
+    assert _with_freshness(ChainActivity(ARBITRUM), fresh, window).stale_until is None
+
+    text = render_activity(
+        "0xb26b933a075fbb3d4e8b0925cad4f2bc345475e0", window, [marked], {}, Language.PORTUGUESE,
+        private=True,
+    )
+    assert "o explorador só indexou até 22/09/2026 21:41 UTC" in text
+    assert "nenhuma atividade" not in text

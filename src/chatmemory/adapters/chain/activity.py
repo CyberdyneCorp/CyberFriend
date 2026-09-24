@@ -133,6 +133,9 @@ class ChainActivity:
     hidden: Hidden = Hidden()
     truncated: bool = False
     unreachable: str | None = None
+    #: The explorer only knows the chain up to here, and the window runs past
+    #: it: later activity is missing, not absent.
+    stale_until: datetime | None = None
     #: USD per whole token, now, by token address (native ether included).
     prices: Mapping[str, Decimal] = field(default_factory=dict)
     #: False when Aave's tokens could not be read, so its actions may be hidden.

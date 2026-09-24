@@ -55,6 +55,10 @@ EN = {
     "many": "{count} actions",
     "empty": "{chains} — no activity",
     "unread": "**{chain}** — could not be read ({reason}); this is not the same as no activity",
+    "stale": (
+        "⚠️ **{chain}**: the explorer has only indexed up to {until} UTC, so "
+        "anything after that is missing here, not absent"
+    ),
     "more": "…and {count} more.",
     "external": "an external address",
     "swap": "swapped {out} → {into}{usd}",
@@ -115,6 +119,10 @@ PT = {
     "empty": "{chains} — nenhuma atividade",
     "unread": (
         "**{chain}** — não foi possível ler ({reason}); isso não é o mesmo que sem atividade"
+    ),
+    "stale": (
+        "⚠️ **{chain}**: o explorador só indexou até {until} UTC, então o que "
+        "aconteceu depois não aparece aqui — não quer dizer que não houve"
     ),
     "more": "…e mais {count}.",
     "external": "um endereço externo",
@@ -244,12 +252,20 @@ def render_activity(
     who = f"`{address}`" if private else f"…{address[-4:]}"
     note = words("clamped") if window.clamped else "" if window.named else words("default")
     lines = [words("header", who=who, span=span), words("period", span=span, note=note)]
-    quiet = [c.chain.name for c in chains if c.unreachable is None and not _has_news(c)]
+    quiet = [
+        c.chain.name
+        for c in chains
+        if c.unreachable is None and c.stale_until is None and not _has_news(c)
+    ]
     for chain in chains:
         if chain.unreachable is not None:
             reason = words.reason(chain.unreachable)
             lines.extend(("", words("unread", chain=chain.chain.name, reason=reason)))
-        elif _has_news(chain):
+            continue
+        if chain.stale_until is not None:
+            until = words.moment(chain.stale_until, "span")
+            lines.extend(("", words("stale", chain=chain.chain.name, until=until)))
+        if _has_news(chain):
             lines.append("")
             lines.extend(_chain_lines(chain, known[chain.chain.key], words))
     if quiet:

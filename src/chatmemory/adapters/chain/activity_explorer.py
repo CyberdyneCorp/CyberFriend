@@ -41,6 +41,8 @@ class Rows:
     items: tuple[Row, ...]
     #: More rows existed than `MAX_PAGES` pages hold.
     truncated: bool = False
+    #: The newest block the explorer has indexed, when it said.
+    indexed_until: datetime | None = None
 
 
 def next_cursor(following: Mapping[str, object]) -> dict[str, str]:
@@ -88,6 +90,23 @@ async def activity_rows(
         seen.add(key)
         params = {**base, **cursor}
     return Rows(tuple(items), truncated=True)
+
+
+async def indexed_until(client: httpx.AsyncClient, explorer: str) -> datetime | None:
+    """When the newest block the explorer has indexed was made, or None.
+
+    An explorer can stop indexing and still report "finished": Arbitrum's was
+    two days behind the chain while claiming it, so a position minted in
+    those two days read as "no activity". Asked once per lookup, never
+    trusted to be current.
+    """
+    try:
+        response = await client.get(f"{explorer}/api/v2/blocks", params={"type": "block"})
+        response.raise_for_status()
+        newest = (response.json().get("items") or [{}])[0].get("timestamp")
+        return datetime.fromisoformat(str(newest).replace("Z", "+00:00")) if newest else None
+    except Exception:  # noqa: BLE001 - unknown freshness is reported as nothing
+        return None
 
 
 MULTICALL = "0xac9650d8"
