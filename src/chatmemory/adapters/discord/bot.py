@@ -41,6 +41,7 @@ erased what they asked would say something about what they asked.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable, Sequence
 from itertools import zip_longest
 from typing import Any, Protocol
@@ -65,6 +66,7 @@ from chatmemory.adapters.discord.formatting import (
 from chatmemory.adapters.discord.views import RequesterOnlyView
 from chatmemory.app.alert_requests import AlertProposal, AlertRequests
 from chatmemory.app.ask import (
+    AskOutcome,
     AskRequest,
     AskService,
     CorrectionRequest,
@@ -89,7 +91,7 @@ from chatmemory.app.indexing import (
     IndexingService,
     IndexRequest,
 )
-from chatmemory.app.language import Language
+from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import CreateRefusal, CreateResult, ScheduleService
@@ -403,6 +405,24 @@ CAPABILITIES_PT = (
 """`CAPABILITIES` for someone whose saved language is Portuguese. A bare
 mention has no words to detect a language from, so the saved preference is
 the only signal."""
+
+
+PROGRESS_AFTER_SECONDS = 8.0
+"""How long an answer may take before the asker is told it is still coming.
+
+The typing indicator alone was not enough: a portfolio over three chains can
+take a minute or more, and silence that long reads as a bot that broke."""
+
+PROGRESS = {
+    Language.ENGLISH: (
+        "⏳ Still working on this — some answers, on-chain lookups especially, "
+        "take up to a minute."
+    ),
+    Language.PORTUGUESE: (
+        "⏳ Ainda estou trabalhando nisso — algumas respostas, principalmente "
+        "consultas on-chain, levam até um minuto."
+    ),
+}
 
 
 def _person(user: discord.User | discord.Member) -> PersonRef:
@@ -1530,19 +1550,19 @@ class CyberFriendClient(discord.Client):
             return
 
         destination = ChannelRef(PLATFORM, message.channel.id) if not is_dm else None
-        async with message.channel.typing():
-            outcome = await self._asks.ask(
-                AskRequest(
-                    asker=_person(message.author),
-                    text=text,
-                    destination=destination,
-                    location_id=message.channel.id,
-                ),
-                # A DM even when the question was asked in a channel: the
-                # answer's destination is not the prompt's, because a prompt
-                # in the channel would ask the room to decide for the asker.
-                DirectMessageConfirmation(message.author),
-            )
+        asking = self._asks.ask(
+            AskRequest(
+                asker=_person(message.author),
+                text=text,
+                destination=destination,
+                location_id=message.channel.id,
+            ),
+            # A DM even when the question was asked in a channel: the
+            # answer's destination is not the prompt's, because a prompt
+            # in the channel would ask the room to decide for the asker.
+            DirectMessageConfirmation(message.author),
+        )
+        outcome = await self._with_progress(message, text, asking)
 
         if outcome.rate_limited:
             await message.reply(
@@ -1566,6 +1586,32 @@ class CyberFriendClient(discord.Client):
                 # every part of one answer.
                 await message.channel.send(part, allowed_mentions=discord.AllowedMentions.none())
         await self._notify_if_withheld(outcome.scoped, message.author, message.channel)
+
+    async def _with_progress(
+        self, message: discord.Message, text: str, asking: Awaitable[AskOutcome]
+    ) -> AskOutcome:
+        """The outcome, with a "still working" note if it is slow in coming.
+
+        The note is removed before the answer is sent, so a finished
+        conversation reads as question and answer, not question, apology,
+        answer. A note that cannot be removed is left: it is true, and the
+        answer still follows.
+        """
+        task = asyncio.ensure_future(asking)
+        note: discord.Message | None = None
+        async with message.channel.typing():
+            done, _ = await asyncio.wait({task}, timeout=PROGRESS_AFTER_SECONDS)
+            if not done:
+                language = detect(text)
+                note = await message.reply(
+                    PROGRESS.get(language, PROGRESS[Language.ENGLISH]),
+                    mention_author=False,
+                )
+            outcome = await task
+        if note is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await note.delete()
+        return outcome
 
     def user_mentioned(self, message: discord.Message) -> bool:
         return self.user is not None and self.user in message.mentions

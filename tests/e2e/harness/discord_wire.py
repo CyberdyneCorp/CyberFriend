@@ -288,6 +288,8 @@ class FakeHTTP(HTTPClient):
         super().__init__(loop)
         self._wire = wire
         self.sent: list[Sent] = []
+        #: Ids of messages the bot deleted, such as a progress note.
+        self.deleted: list[int] = []
         self.global_commands: list[dict[str, Any]] = []
         self.guild_commands: dict[int, list[dict[str, Any]]] = {}
 
@@ -297,6 +299,9 @@ class FakeHTTP(HTTPClient):
             return self._message(int(route.channel_id or 0), kwargs.get("json") or {})
         if key == ("PATCH", "/channels/{channel_id}/messages/{message_id}"):
             return self._edit(int(route.channel_id or 0), route, kwargs.get("json") or {})
+        if key == ("DELETE", "/channels/{channel_id}/messages/{message_id}"):
+            self.deleted.append(int(route.url.rsplit("/", 1)[1]))
+            return None
         if key == ("POST", "/channels/{channel_id}/typing"):
             return None
         if key == ("POST", "/users/@me/channels"):
