@@ -328,43 +328,40 @@ ORDER BY name
 # What one person said: their own messages, not the windows around them.
 #
 # The viewer's channels, tombstones, the author and the span are all in the
-# inner WHERE, so the person filter can only narrow what the viewer may read.
-# The inner query takes the newest :candidates of those; the topic is ranked
-# only among them, by exact cosine against each message's window (no
-# approximate scan, so nothing is under-returned), with the message's own
-# lexical rank breaking ties and recency after that. A NULL :embedding -- no
-# topic -- leaves every score NULL and the order chronological. A message not
-# yet windowed has no window to cite and is left out until ingest windows it.
+# WHERE, so the person filter can only narrow what the viewer may read. The
+# topic is ranked over every one of those rows, by exact cosine against each
+# message's window (no approximate scan, so nothing is under-returned), with
+# the message's own lexical rank breaking ties and recency after that; only
+# then are the best :candidates kept. Ranking before the cut is what lets a
+# prolific person's old on-topic message beat two hundred newer off-topic
+# ones. A NULL :embedding -- no topic -- leaves every score NULL and the order
+# chronological. A message not yet windowed has no window to cite and is left
+# out until ingest windows it.
 AUTHOR_SEARCH = text("""
-WITH authored AS (
-    SELECT m.id AS message_id, m.channel_id, m.content, m.created_at,
-           m.search_tsv, pe.display_name AS author_display,
-           w.id AS window_id, w.starts_at, w.ends_at, w.embedding
-    FROM message m
-    JOIN person pe ON pe.id = m.author_person_id
-    JOIN conversation_window_message cwm ON cwm.message_id = m.id
-    JOIN conversation_window w ON w.id = cwm.window_id
-    WHERE m.deleted_at IS NULL
-      AND w.deleted_at IS NULL
-      AND m.channel_id = ANY(:channel_ids)
-      AND w.channel_id = ANY(:channel_ids)
-      AND m.author_person_id IN (
-          SELECT a.person_id FROM person_platform_id a
-          WHERE a.platform = :platform AND a.platform_user_id = ANY(:author_ids)
-      )
-      AND (CAST(:since AS timestamptz) IS NULL OR m.created_at >= CAST(:since AS timestamptz))
-      AND (CAST(:until AS timestamptz) IS NULL OR m.created_at < CAST(:until AS timestamptz))
-    ORDER BY m.created_at DESC
-    LIMIT :candidates
-)
-SELECT message_id, channel_id, content, created_at, author_display,
-       window_id, starts_at, ends_at,
-       1 - (embedding <=> CAST(:embedding AS vector)) AS score
-FROM authored
+SELECT m.id AS message_id, m.channel_id, m.content, m.created_at,
+       pe.display_name AS author_display,
+       w.id AS window_id, w.starts_at, w.ends_at,
+       1 - (w.embedding <=> CAST(:embedding AS vector)) AS score
+FROM message m
+JOIN person pe ON pe.id = m.author_person_id
+JOIN conversation_window_message cwm ON cwm.message_id = m.id
+JOIN conversation_window w ON w.id = cwm.window_id
+WHERE m.deleted_at IS NULL
+  AND w.deleted_at IS NULL
+  AND m.channel_id = ANY(:channel_ids)
+  AND w.channel_id = ANY(:channel_ids)
+  AND m.author_person_id IN (
+      SELECT a.person_id FROM person_platform_id a
+      WHERE a.platform = :platform AND a.platform_user_id = ANY(:author_ids)
+  )
+  AND (CAST(:since AS timestamptz) IS NULL OR m.created_at >= CAST(:since AS timestamptz))
+  AND (CAST(:until AS timestamptz) IS NULL OR m.created_at < CAST(:until AS timestamptz))
 ORDER BY score DESC NULLS LAST,
-         ts_rank_cd(search_tsv, plainto_tsquery('english', :q)) DESC,
-         created_at DESC
+         ts_rank_cd(m.search_tsv, plainto_tsquery('english', :q)) DESC,
+         m.created_at DESC
+LIMIT :candidates
 """)
+
 
 # Who a typed name may be, among people the viewer can see speak. A person is
 # a candidate only with a live message in the viewer's channels, so the list

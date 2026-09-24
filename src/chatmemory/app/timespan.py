@@ -401,6 +401,27 @@ def span_phrases(folded: str, today: date) -> tuple[tuple[int, int], ...]:
     return tuple(sorted(found))
 
 
+#: A weekday, or a day of a month ("5 de setembro", "september 5"), that no
+#: rule turned into a span: "on monday", "de segunda a quarta", "1 a 5 de
+#: setembro". A month alone is left out, because "o evento de setembro" is a
+#: topic, not a filter on when something was said.
+_UNRESOLVED_TIME = re.compile(
+    rf"\b(?:{_alternation(_WEEKDAYS)})\b"
+    rf"|\b\d{{1,2}} (?:de |of )?(?:{_alternation(_MONTHS)})\b"
+    rf"|\b(?:{_alternation(_MONTHS)}) \d{{1,2}}\b"
+)
+
+
+def names_unresolved_time(folded: str) -> bool:
+    """Whether already-folded text still names a day after its spans are cut.
+
+    For a caller that blanked out `span_phrases` and must not quietly drop a
+    time it could not read: searching all of history for "o que ele disse de
+    segunda a quarta" is a wider search than was asked, stated as if bounded.
+    """
+    return _UNRESOLVED_TIME.search(folded) is not None
+
+
 def _midnight(day: date, tz: tzinfo) -> datetime:
     return datetime.combine(day, time(), tzinfo=tz).astimezone(UTC)
 

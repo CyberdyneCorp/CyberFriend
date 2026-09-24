@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from chatmemory.adapters.store.postgres import HybridSearch, PostgresStore
+from chatmemory.adapters.store.postgres import AUTHOR_CANDIDATES, HybridSearch, PostgresStore
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message, Window
 from chatmemory.domain.search import SearchQuery
@@ -172,6 +172,42 @@ async def test_the_span_is_half_open_and_applied_in_the_statement(clean: AsyncEn
         SearchQuery(text="", authors=frozenset({LEO}), since=T0 - timedelta(days=1), until=T0),
     )
     assert at_the_end == [], "a message at `until` is outside a half-open span"
+
+
+async def test_an_old_on_topic_message_beats_more_newer_ones_than_the_cap(
+    clean: AsyncEngine,
+) -> None:
+    """The topic is ranked over all of a person's messages, then capped.
+
+    Taking the newest AUTHOR_CANDIDATES first and ranking only those turned
+    "what did Leo say about X" into "found nothing" for anyone who had since
+    written more than that about something else.
+    """
+    store = PostgresStore(clean)
+    [on_topic] = await window(
+        store, GENERAL, [(LEO, "Leo", "the migration runs overnight", T0 - timedelta(days=90))]
+    )
+    await window(
+        store,
+        GENERAL,
+        [
+            (LEO, "Leo", f"lunch chatter {n}", T0 + timedelta(minutes=n))
+            for n in range(AUTHOR_CANDIDATES + 5)
+        ],
+    )
+    embeddings = FakeEmbeddings()
+    for pending in await store.windows_missing_embeddings(100):
+        [vector] = await embeddings.embed([pending.text])
+        assert pending.window_id is not None
+        await store.store_embedding(pending.window_id, vector)
+
+    # The fake embeds by hash, so the window's own text is its exact topic.
+    hits = await search(clean).search(
+        viewer(GENERAL),
+        SearchQuery(text="Leo: the migration runs overnight", authors=frozenset({LEO})),
+    )
+
+    assert hits and hits[0].message_ids == (on_topic,)
 
 
 async def test_no_topic_costs_no_embedding(clean: AsyncEngine) -> None:

@@ -512,12 +512,23 @@ case-insensitive, exact full name first, then first name, prefix or surname.
 Several matches get "Qual João? …" listing at most six — no search, no model
 call, and nobody who only speaks in channels the room cannot read. No match
 at all falls through to the ordinary answer, so "what did the docs say" works
-as before. Per-server nicknames are not stored; mention such a person.
+as before. A typed "@Maria" (not picked from autocomplete) is a name like any
+other. Two people with the same display name are listed once and the reply
+asks for a mention, the only thing that tells them apart. Per-server
+nicknames are not stored; mention such a person.
 
 **When.** `app/timespan.py` in `ANSWER_TIMEZONE`: "semana passada" is the
 previous Monday-to-Monday, "ontem" the local day. A question naming two spans
-or a range falls through rather than searching one end of it. Catch-up and
+or a range falls through rather than searching one end of it, and so does one
+naming a day no rule reads ("de segunda a quarta", "1 a 5 de setembro", "on
+monday") rather than searching all of the person's history. A month alone
+("o evento de setembro") is part of the topic. Catch-up and
 obligations still use their older rolling, UTC-cut periods.
+
+**How much is read.** The topic is ranked over all of the person's messages
+in the span, and the best 200 (`AUTHOR_CANDIDATES`) are grouped into at most
+20 conversations; an old on-topic message is not lost behind newer chatter.
+With no topic, the newest 200 are used.
 
 **What the model sees.** Only the person's own lines from each conversation,
 each stamped in UTC, and the citation lands on their own message. Messages

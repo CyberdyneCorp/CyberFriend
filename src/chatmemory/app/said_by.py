@@ -45,6 +45,7 @@ import structlog
 from chatmemory.app.catchup import catch_up_request
 from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.language import Language
+from chatmemory.app.people import name_key
 from chatmemory.app.reasoning.budgets import Budget, BudgetLedger
 from chatmemory.app.reasoning.contract import Decision, DecisionMaker, failure_answer
 from chatmemory.app.reasoning.errors import RetrievalUnavailable
@@ -58,7 +59,13 @@ from chatmemory.app.routing import (
     obligation_question,
     single_lookup,
 )
-from chatmemory.app.timespan import Span, fold, parse_span, span_phrases
+from chatmemory.app.timespan import (
+    Span,
+    fold,
+    names_unresolved_time,
+    parse_span,
+    span_phrases,
+)
 from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.domain.search import PersonCandidate, SearchQuery
 from chatmemory.ports.answers import Answer, Question
@@ -109,7 +116,7 @@ class SaidByRequest:
     language: Language
 
 
-_SLOT = r"(?P<slot><@!?\d+>|[a-z][\w.'-]*(?:\s+[a-z][\w.'-]*){0,2})"
+_SLOT = r"(?P<slot><@!?\d+>|@?[a-z][\w.'-]*(?:\s+[a-z][\w.'-]*){0,2})"
 _END = r"\s*[?.!]*\s*$"
 #: Third person, and first person for "o que eu falei".
 _PT_VERBS = (
@@ -181,7 +188,7 @@ _NOT_A_PERSON = frozenset(
         *("o", "os", "as", "um", "uma", "ele", "ela", "eles", "elas", "voce"),
         *("voces", "vc", "vcs", "nos", "gente", "alguem", "ninguem", "todos"),
         *("todo", "pessoal", "galera", "time", "equipe", "isso", "isto", "e", "ou"),
-        *("se", "documento", "canal", "mensagem", "artigo"),
+        *("se", "documento", "canal", "mensagem", "artigo", "here"),
     }
 )
 
@@ -191,9 +198,13 @@ _ASK_VERBS = re.compile(
     r"\b(?:pediu|pediram|pedir|pedindo|mandou|asked|ask|requested|request)\b"
 )
 
-#: A span cut out of "sobre o deploy da semana passada" leaves "o deploy da".
+#: A span cut out of "sobre o deploy da semana passada" leaves "o deploy da",
+#: and one cut out of "about X in the last 3 days" leaves "X in the". An
+#: article goes only with the link before it, so "o plano a" keeps its "a".
 _TRAILING_LINK = re.compile(
-    r"\s+(?:de|da|do|na|no|em|in|on|at|from|during|durante|this|last|of)$", re.IGNORECASE
+    r"\s+(?:de|da|do|na|no|em|in|on|at|from|during|durante|this|last|of)"
+    r"(?:\s+(?:the|o|a|os|as))?$",
+    re.IGNORECASE,
 )
 
 
@@ -223,14 +234,18 @@ def _slot(typed: str) -> PersonSlot | None:
         return PersonSlot(SlotKind.MENTION, user_id=int(mention.group(1)))
     if folded in _SELF_WORDS:
         return PersonSlot(SlotKind.SELF)
+    # "@Maria" typed rather than picked from autocomplete is a name.
+    folded = folded.removeprefix("@")
     if set(folded.split()) & _NOT_A_PERSON:
         return None
-    return PersonSlot(SlotKind.NAME, name=" ".join(typed.split()))
+    return PersonSlot(SlotKind.NAME, name=" ".join(typed.removeprefix("@").split()))
 
 
 def _topic(typed: str) -> str:
     topic = " ".join(typed.split()).strip(" ?.!,")
-    return _TRAILING_LINK.sub("", topic).strip()
+    while (trimmed := _TRAILING_LINK.sub("", topic).strip()) != topic:
+        topic = trimmed
+    return topic
 
 
 def _shape(folded: str) -> tuple[re.Match[str], Language] | None:
@@ -247,7 +262,10 @@ def said_by_request(text: str, now: datetime, tz: tzinfo) -> SaidByRequest | Non
     None is the common case and the safe one: it leaves the question where it
     went before this route existed. So is a question that names a range or
     two spans, which `parse_span` refuses -- searching one end of it would be
-    a narrower search than was asked.
+    a narrower search than was asked -- and one that names a day no rule can
+    read ("de segunda a quarta", "1 a 5 de setembro", "on monday"): dropping
+    it would search all of the person's history under a header that reads
+    as if bounded.
     """
     if _deferred(text):
         return None
@@ -260,7 +278,10 @@ def said_by_request(text: str, now: datetime, tz: tzinfo) -> SaidByRequest | Non
     span = parse_span(typed, now, tz)
     if phrases and span is None:
         return None
-    found = _shape(_blank(folded, phrases))
+    blanked = _blank(folded, phrases)
+    if names_unresolved_time(blanked):
+        return None
+    found = _shape(blanked)
     if found is None:
         return None
     match, language = found
@@ -287,6 +308,9 @@ _TEXT: dict[Language, dict[str, str]] = {
             "posso consultar aqui."
         ),
         "which": "Qual {name}? {names}. Mencione a pessoa com @ ou use o nome completo.",
+        "which_same": (
+            "Qual {name}? {names}. Mais de uma pessoa usa esse nome: mencione a pessoa com @."
+        ),
         "date": "%d/%m",
     },
     Language.ENGLISH: {
@@ -298,6 +322,9 @@ _TEXT: dict[Language, dict[str, str]] = {
         "header": "-# What {who} said{about}{when}:",
         "empty": "I found nothing {who} said{about}{when} in the channels I can search here.",
         "which": "Which {name}? {names}. Mention them with @ or use their full name.",
+        "which_same": (
+            "Which {name}? {names}. More than one person goes by that name: mention them with @."
+        ),
         "date": "%d %b",
     },
 }
@@ -450,8 +477,17 @@ class SaidByService:
         names are a statement about who speaks where, and a remembered turn
         would outlive a change in who may read those channels.
         """
-        names = ", ".join(c.display for c in candidates)
-        text = _words(request.language)["which"].format(name=request.person.name, names=names)
+        # Two people can go by the same name; listing it twice and suggesting
+        # the full name would ask for something that cannot tell them apart.
+        # Only a mention can, and naming a channel to help would say where
+        # somebody speaks.
+        shown: dict[str, str] = {}
+        for candidate in candidates:
+            shown.setdefault(name_key(candidate.display), candidate.display)
+        key = "which" if len(shown) == len(candidates) else "which_same"
+        text = _words(request.language)[key].format(
+            name=request.person.name, names=", ".join(shown.values())
+        )
         return Answer(text=text)
 
     async def _search(

@@ -93,6 +93,15 @@ RECOGNISED = [
     # About the record, not a live figure: the market route declines it.
     ("what did Leo say about the bitcoin price today?", name("Leo"), "the bitcoin price",
      "today", EN),
+    # Typed, not autocompleted: "@Maria" is a name, resolved like any other.
+    ("@Maria comentou algo sobre Y ontem?", name("Maria"), "Y", "yesterday", PT),
+    ("o que a @Ana disse sobre o deploy?", name("Ana"), "o deploy", None, PT),
+    # A link word and its article both go with the span cut out after them.
+    ("what did Leo say about X in the last 3 days?", name("Leo"), "X", "last_3_days", EN),
+    ("o que a Ana disse sobre o plano a?", name("Ana"), "o plano a", None, PT),
+    # A month alone is a topic, not a time.
+    ("o que o João disse sobre o evento de setembro?", name("João"), "o evento de setembro",
+     None, PT),
 ]
 
 
@@ -120,6 +129,14 @@ NOT_RECOGNISED = [
     "what did Ana say about pricing and whether Bea replied?",
     "o que o João disse desde segunda até quarta?",
     "o que o João disse hoje e ontem?",
+    # A time no rule can read: dropping it would search all of history.
+    "o que o João disse de 1 a 5 de setembro?",
+    "what did Leo say about X between monday and wednesday?",
+    "o que o joao disse sobre X de segunda a quarta?",
+    "what did Leo say about the deploy on monday?",
+    "o que a Ana falou sobre o deploy na sexta-feira?",
+    "what did Ana say about pricing on september 5?",
+    "@everyone comentou algo sobre Y?",
     # A shape the route cannot answer faithfully.
     "what did Ana say in #general about pricing",
     "eu falei sobre isso ontem",
@@ -323,6 +340,19 @@ async def test_the_which_reply_is_in_english_for_an_english_question() -> None:
     outcome = await ask(built, "what did João say?")
     assert outcome.answer is not None
     assert outcome.answer.text.startswith("Which João? João Silva, Joao Pereira.")
+
+
+async def test_people_who_share_a_name_are_told_apart_only_by_a_mention() -> None:
+    twin = PersonCandidate(PersonRef("discord", 33), "João Silva")
+    built = service(People(JOAO_SILVA, twin, JOAO_PEREIRA), Retrieval())
+
+    outcome = await ask(built, "o que o João disse?")
+
+    assert outcome.answer is not None
+    assert outcome.answer.text == (
+        "Qual João? João Silva, Joao Pereira. Mais de uma pessoa usa esse nome: "
+        "mencione a pessoa com @."
+    )
 
 
 async def test_nobody_by_that_name_falls_through() -> None:

@@ -514,10 +514,12 @@ class PostgresStore:
 
 
 AUTHOR_CANDIDATES = 200
-"""How many of a person's newest messages in the span the topic is ranked among.
+"""How many of a person's best-ranked messages in the span are grouped into hits.
 
-Bounded so exact cosine over them stays cheap; a span in which one person
-wrote more than this is answered from the newest of it.
+The topic is ranked over all of their messages in the span first, so this
+caps what is grouped, not what is considered: an old on-topic message still
+beats newer off-topic ones. With no topic the order is newest first, and a
+span in which one person wrote more than this is answered from the newest.
 """
 
 PEOPLE_SCANNED = 200
