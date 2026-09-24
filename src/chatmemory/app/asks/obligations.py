@@ -136,7 +136,12 @@ class ObligationService:
         if not found:
             # A successful answer, not an abstention: "nothing" is the true
             # answer to the question, and abstaining would read as a failure.
-            return Answer(text=NOTHING_OUTSTANDING)
+            # It is a statement about every channel searched, so the turn is
+            # recalled only while the viewer can still read all of them. Left
+            # undeclared, memory refused to store the turn at all.
+            return Answer(
+                text=NOTHING_OUTSTANDING, consulted_channels=frozenset(viewer.visible_channels)
+            )
 
         citations = tuple(self._cite(item) for item in found)
         lines = [
@@ -154,6 +159,9 @@ class ObligationService:
             text="\n".join([heading, *lines]),
             citations=citations,
             partial=len(found) >= limit,
+            # Declared, or memory drops the turn and "and the second one?"
+            # has nothing to refer to.
+            consulted_channels=frozenset(item.ask.channel for item in found),
         )
 
     def _line(self, item: ReportedAsk) -> str:
