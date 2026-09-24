@@ -72,6 +72,9 @@ STATEMENTS = discover()
 UNSCOPED: dict[str, str] = {
     # --- sql: writes -----------------------------------------------------
     "sql.UPDATE_PERSON_DISPLAY": "write; keeps a person's shown name current",
+    "sql.UNNAMED_PEOPLE": (
+        "ingest maintenance; returns account ids only, never content, to be named from Discord"
+    ),
     "sql.ENSURE_CHANNEL": (
         "write; registers the channel a message belongs to. Returns no row, "
         "and cannot be viewer-scoped: it runs during ingestion, where there "

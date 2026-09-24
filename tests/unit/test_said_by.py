@@ -102,6 +102,18 @@ RECOGNISED = [
     # A month alone is a topic, not a time.
     ("o que o João disse sobre o evento de setembro?", name("João"), "o evento de setembro",
      None, PT),
+    # Regression, from production: who it was said to fell outside every shape,
+    # and the question went to the ordinary route, which has no date filter --
+    # "hoje" was answered from months-old messages.
+    ("oque <@713763086305329162> falou com voce hoje ?",
+     PersonSlot(SlotKind.MENTION, user_id=713763086305329162), "", "today", PT),
+    ("o que o Leo te falou hoje?", name("Leo"), "", "today", PT),
+    ("o que a Ana me disse sobre o deploy ontem?", name("Ana"), "o deploy", "yesterday", PT),
+    ("o que o João falou comigo semana passada?", name("João"), "", "last_week", PT),
+    ("o que a Ana disse pra mim sobre wallet?", name("Ana"), "wallet", None, PT),
+    ("what did Ana tell you today?", name("Ana"), "", "today", EN),
+    ("what did Ana say to me about the deploy yesterday?", name("Ana"), "the deploy",
+     "yesterday", EN),
 ]
 
 

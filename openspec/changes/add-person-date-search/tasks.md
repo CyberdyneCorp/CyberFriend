@@ -26,4 +26,6 @@
 - [x] 3.4 Labelled PT/EN eval set including non-person subjects
 - [x] 3.5 E2E: the scenarios in the spec
 - [x] 3.6 README, docs/operations.md, self-description
+- [x] 3.8 Fix: recognise who it was said to ("falou com você", "te falou", "told you")
+- [x] 3.9 Fix: name people stored under their account id when ingest connects
 - [ ] 3.7 Archive the change once merged

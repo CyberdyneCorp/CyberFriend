@@ -513,6 +513,19 @@ ON CONFLICT (id) DO UPDATE SET
     name = COALESCE(NULLIF(EXCLUDED.name, ''), channel.name)
 """)
 
+# People still called by their account id: everyone whose messages were
+# captured before names were written on ingest (2f95d17). A backfilled message
+# is never captured again, so without a repair they stay unnamed for good and
+# "o que o João disse" can never find João.
+UNNAMED_PEOPLE = text("""
+SELECT a.platform_user_id
+FROM person p
+JOIN person_platform_id a ON a.person_id = p.id AND a.platform = :platform
+WHERE p.display_name = a.platform_user_id::text
+ORDER BY p.id
+LIMIT :cap
+""")
+
 UPDATE_PERSON_DISPLAY = text("""
 UPDATE person SET display_name = :n
 WHERE id = :id AND display_name IS DISTINCT FROM :n

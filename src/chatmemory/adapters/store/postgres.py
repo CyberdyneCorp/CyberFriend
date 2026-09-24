@@ -227,6 +227,14 @@ class PostgresStore:
                 )
             return person_id
 
+    async def unnamed_people(self, limit: int) -> Sequence[PersonRef]:
+        """People whose only name is their account id, for `name_people`."""
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                sql.UNNAMED_PEOPLE, {"platform": PLATFORM, "cap": limit}
+            )
+            return [PersonRef(PLATFORM, int(user_id)) for user_id in rows.scalars()]
+
     # --- window maintenance --------------------------------------------
 
     async def messages_without_window(self, limit: int) -> Sequence[Message]:

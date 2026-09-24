@@ -64,6 +64,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from chatmemory import logging as log_setup
 from chatmemory.adapters.discord.gateway import GatewayEventHandler, IngestClient
+from chatmemory.adapters.discord.names import PeopleNames, UserDirectory, name_people
 from chatmemory.adapters.discord.source import (
     DiscordChatSource,
     DiscordHistoryReader,
@@ -304,6 +305,18 @@ async def reconcile_loop(
 # re-formed with it, so a message arriving late still merges into the window
 # it belongs to rather than starting a new one.
 REWINDOW_LOOKBACK = timedelta(minutes=30)
+
+
+async def name_people_when_ready(
+    client: UserDirectory, store: PeopleNames, guild_id: int, ready: asyncio.Event
+) -> None:
+    """Name the people stored under their account id, once the member cache is warm.
+
+    People backfilled before names were written on ingest stay unnamed
+    otherwise, and a question by name can never find them.
+    """
+    await ready.wait()
+    await name_people(client, store, guild_id)
 
 
 async def rebuild_pending_windows(
@@ -581,7 +594,8 @@ async def main() -> None:
     # call. A cast here once hid a store missing window persistence, and the
     # process started anyway -- capturing messages that nothing ever windowed,
     # embedded or retrieved, with every health check green.
-    store: Store = PostgresStore(engine)
+    postgres = PostgresStore(engine)
+    store: Store = postgres
 
     client: IngestClient | None = None
 
@@ -671,6 +685,9 @@ async def main() -> None:
         # now declares the method, so the type checker proves at the wiring
         # site what the probe used to discover at runtime and discard.
         reconciler = Reconciler(source=source, ledger=store, sink=service)
+        tasks.create_task(
+            name_people_when_ready(client, postgres, settings.discord_guild_id, gateway_ready)
+        )
         tasks.create_task(reconcile_loop(reconciler, scope, ready=gateway_ready))
 
         # Retrieval exists only if these two run, so a store that cannot serve
