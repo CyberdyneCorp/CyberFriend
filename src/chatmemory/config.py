@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Annotated
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -296,6 +297,16 @@ class Settings(BaseSettings):
     waiting for something that is not for them.
     """
 
+    # --- Time ----------------------------------------------------------
+    answer_timezone: str = "America/Sao_Paulo"
+    """The zone whose calendar a question's "ontem" or "last week" means.
+
+    An IANA name. Where a day starts is a property of the deployment, not of
+    UTC: cut at UTC midnight, "yesterday" asked at 22:00 in Sao Paulo is the
+    day before the one meant. Read by `app.timespan`; the prompt's clock
+    notice and the older period tables still speak UTC.
+    """
+
     # --- Windowing -----------------------------------------------------
     # Guesses until measured against a real corpus; see design.md.
     window_max_messages: int = 10
@@ -360,6 +371,17 @@ class Settings(BaseSettings):
         """
         if isinstance(v, str):
             return tuple(p for p in v.replace(",", " ").split())
+        return v
+
+    @field_validator("answer_timezone")
+    @classmethod
+    def _known_timezone(cls, v: str) -> str:
+        """Refused at boot: an unknown zone would otherwise fail on the first
+        question that names a day, as an error nobody links to a setting."""
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"answer_timezone {v!r} is not a known IANA zone") from exc
         return v
 
     @field_validator("embedding_dimensions")

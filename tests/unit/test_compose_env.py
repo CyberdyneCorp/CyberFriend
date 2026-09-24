@@ -121,6 +121,12 @@ def test_setting_reaches_every_service_that_reads_it(
         )
 
 
+def test_answer_timezone_reaches_the_bot_with_the_teams_default() -> None:
+    """The bot reads days in this zone; blank in the platform must still mean
+    Sao Paulo, not UTC, because that is where the people asking are."""
+    assert "ANSWER_TIMEZONE=${ANSWER_TIMEZONE:-America/Sao_Paulo}" in service_block("bot")
+
+
 def test_ingest_runs_exactly_one_replica() -> None:
     """Two containers on one bot token double-ingest, silently."""
     assert "replicas: 1" in service_block("ingest")

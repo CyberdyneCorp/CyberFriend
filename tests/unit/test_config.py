@@ -30,6 +30,16 @@ def test_embedding_dimensions_must_be_positive() -> None:
         Settings(**BASE, embedding_dimensions=0)
 
 
+def test_answer_timezone_defaults_to_sao_paulo() -> None:
+    assert Settings(**BASE).answer_timezone == "America/Sao_Paulo"
+
+
+@pytest.mark.parametrize("zone", ["Mars/Olympus_Mons", "../etc/passwd", "BRT"])
+def test_an_unknown_answer_timezone_is_a_boot_failure(zone: str) -> None:
+    with pytest.raises(ValidationError, match="answer_timezone"):
+        Settings(**BASE, answer_timezone=zone)
+
+
 def test_secrets_are_not_stringified() -> None:
     """Tokens must not leak into logs via repr or str."""
     s = Settings(**BASE)

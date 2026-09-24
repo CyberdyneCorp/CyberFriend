@@ -138,6 +138,10 @@ services:
       # with INFURA_KEY and sent as direct messages. Off unless enabled.
       - ALERTS_ENABLED=${ALERTS_ENABLED:-false}
       - ALERT_SWEEP_SECONDS=${ALERT_SWEEP_SECONDS:-300}
+      # The calendar "ontem" and "semana passada" are read in. Defaulted here
+      # rather than left blank: the team is in Brazil, and a day cut at UTC
+      # midnight is the wrong day for three hours of every evening.
+      - ANSWER_TIMEZONE=${ANSWER_TIMEZONE:-America/Sao_Paulo}
       - TRACING_ENABLED=${TRACING_ENABLED}
       - LANGFUSE_HOST=${LANGFUSE_HOST}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}

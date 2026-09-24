@@ -50,6 +50,10 @@ DIMS = 1536
 OPEN_TERM = "deployment"
 PRIVATE_TERM = "compensation"
 
+# The seeded author's Discord account. Deliberately far from any person row
+# id, so a tool that reports the row id instead is caught.
+AUTHOR_DISCORD_ID = 880_001
+
 GENERAL_MESSAGE_ID = 500_001
 LEADERSHIP_MESSAGE_ID = 700_001
 MISSING_MESSAGE_ID = 424_242
@@ -90,6 +94,13 @@ async def seed(engine: AsyncEngine) -> None:
                 text("INSERT INTO person (display_name) VALUES ('seed') RETURNING id")
             )
         ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO person_platform_id (platform, platform_user_id, person_id) "
+                "VALUES ('discord', :u, :p)"
+            ),
+            {"u": AUTHOR_DISCORD_ID, "p": author},
+        )
 
         for channel_id, name in ((GENERAL, "general"), (LEADERSHIP, "leadership")):
             await conn.execute(
@@ -349,6 +360,23 @@ async def test_context_is_returned_for_a_readable_message(
     assert body["messages"][0]["citation"]["url"] == (
         f"https://discord.com/channels/{GUILD}/{GENERAL}/{GENERAL_MESSAGE_ID}"
     )
+
+
+async def test_context_reports_the_discord_author_id_not_the_person_row(
+    app: AppFactory, tokens: PostgresTokenStore
+) -> None:
+    """Regression: the author id is the platform account a client can mention.
+
+    The store once wrapped the internal person row id as the Discord id, so
+    every context message named an account that does not exist.
+    """
+    alice = await tokens.issue(ALICE)
+    async with session_for(app, alice.token) as session:
+        result = await call(
+            session, "thread_context", {"message_id": str(GENERAL_MESSAGE_ID)}
+        )
+    authors = {m["author_id"] for m in result.structured_content["messages"]}
+    assert authors == {str(AUTHOR_DISCORD_ID)}
 
 
 async def test_context_for_a_private_message_is_refused_without_revealing_it(

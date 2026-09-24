@@ -425,6 +425,7 @@ lists the common ones. The settings worth knowing:
 | `POSITIONS_TIMEOUT_SECONDS` | Per-chain bound for liquidity and Aave lookups (default 25) |
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
+| `ANSWER_TIMEZONE` | The calendar "ontem" and "last week" are read in (IANA name, default `America/Sao_Paulo`) |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
 | `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Alerts (range, range edge, health factor, BTC/ETH price), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
