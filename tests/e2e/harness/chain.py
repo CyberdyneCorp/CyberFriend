@@ -88,6 +88,11 @@ USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 CBBTC = "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
 """On Base: an Aave reserve, and outside the named token set."""
 
+AWETH = "0xd4a0e0b9149bcee3c920d2e00b5de09138fd8bb7"
+AUSDC = "0x4e65fe4dba92790696d040ac24aa414708f5c0ab"
+DEBT_WETH = "0x24e6e0795b3c7c71d965fcc4f371803d1c1dca1e"
+DEBT_USDC = "0x59dca05b6c26dbd64b5381374aaac5cd05644c28"
+
 TOKENS = {
     WETH: ("WETH", 18),
     USDC: ("USDC", 6),
@@ -120,6 +125,11 @@ class FakeChain:
     """The Aave oracle's USD price by asset. Unlisted assets price at zero."""
     lending: dict[tuple[str, str], AaveReserve] = field(default_factory=dict)
     """Aave supplies and borrows by (owner, asset)."""
+    wrappers: dict[str, tuple[str, str]] = field(
+        default_factory=lambda: {WETH: (AWETH, DEBT_WETH), USDC: (AUSDC, DEBT_USDC)}
+    )
+    """The pool's aToken and variable-debt token by reserve, as `getReserveData`
+    reports them. A reserve not listed answers a revert."""
     failing: bool = False
     """Answer every request with HTTP 500."""
     failing_selectors: set[str] = field(default_factory=set)
@@ -204,13 +214,14 @@ class FakeChain:
     def _portfolio_answer(self, target: str, selector: str, args: list[int]) -> object:
         """The Aave reads beyond the account, and token balances."""
         provider = self.deployment.aave_addresses_provider
-        answers: dict[tuple[str, str], Callable[[], bytes]] = {
+        answers: dict[tuple[str, str], Callable[[], object]] = {
             (provider, abi.AAVE_GET_DATA_PROVIDER): lambda: _encode(int(AAVE_DATA_PROVIDER, 16)),
             (provider, abi.AAVE_GET_ORACLE): lambda: _encode(int(AAVE_ORACLE, 16)),
             (AAVE_POOL, abi.AAVE_RESERVES_LIST): self._reserve_list,
             (AAVE_DATA_PROVIDER, abi.AAVE_USER_RESERVE): lambda: self._user_reserve(args),
             (AAVE_DATA_PROVIDER, abi.AAVE_RESERVE_DATA): lambda: _encode(*[0] * 12),
             (AAVE_ORACLE, abi.AAVE_ASSET_PRICE): lambda: self._price(args),
+            (AAVE_POOL, abi.AAVE_RESERVE_DATA): lambda: self._pool_reserve(args),
         }
         answer = answers.get((target, selector))
         if answer is not None:
@@ -230,6 +241,15 @@ class FakeChain:
         decimals = self.tokens[asset][1]
         supplied, borrowed = (int(v * 10**decimals) for v in (entry.supplied, entry.borrowed))
         return _encode(supplied, 0, borrowed, 0, 0, 0, 0, 0, int(entry.collateral))
+
+    def _pool_reserve(self, args: list[int]) -> bytes | None:
+        """The pool's `ReserveData`: the aToken at word 8, variable debt at 10."""
+        tokens = self.wrappers.get(abi.as_address(args[0]))
+        if tokens is None:
+            return None
+        words = [0] * 15
+        words[8], words[10] = int(tokens[0], 16), int(tokens[1], 16)
+        return _encode(*words)
 
     def _price(self, args: list[int]) -> bytes:
         return _encode(int(self.prices.get(abi.as_address(args[0]), Decimal(0)) * 10**8))

@@ -259,6 +259,10 @@ class InvocationRequest:
     #: this is where clearance is minted, and empty unless a caller that knows
     #: whose facts these are puts them here.
     asker_values: frozenset[str] = frozenset()
+    #: Whether the answer this call feeds is seen by the requester alone. A
+    #: provider may show more in private (a wallet's counterparties), and the
+    #: default is the channel's rule.
+    private: bool = False
 
     @property
     def digest(self) -> str:

@@ -139,6 +139,7 @@ class GuardedInvoker:
                         asker=request.requester,
                         query=_query_for(request, permit),
                         provider=permit.server,
+                        private=request.private,
                     )
                 )
             except EgressRefused as refused:
@@ -161,6 +162,7 @@ class GuardedInvoker:
                         asker=request.requester,
                         query=_query_for(trimmed, permit),
                         provider=permit.server,
+                        private=request.private,
                     )
                 )
                 log.info(

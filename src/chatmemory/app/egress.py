@@ -376,6 +376,10 @@ class EgressRequest:
     asker: PersonRef
     query: ProvenancedQuery
     provider: str
+    #: The answer is seen by the asker alone (a DM or an ephemeral reply).
+    #: False unless a caller that knows the audience says so, so a provider
+    #: that shows less in a channel shows less by default.
+    private: bool = False
 
     @classmethod
     def for_question(
@@ -413,6 +417,8 @@ class AuthorizedQuery:
     asked_by: PersonRef
     question: str
     minted_by: object = None
+    #: Copied from the request: whether only the asker will read the answer.
+    private: bool = False
 
     def __post_init__(self) -> None:
         if self.minted_by is not _MINTED_BY_GUARD:
@@ -544,6 +550,7 @@ class EgressGuard:
             asked_by=request.asker,
             question=request.query.question,
             minted_by=_MINTED_BY_GUARD,
+            private=request.private,
         )
 
     async def send(

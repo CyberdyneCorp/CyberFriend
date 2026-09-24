@@ -45,6 +45,7 @@ from datetime import datetime
 import structlog
 
 from chatmemory.app.clock import Clock, utc_now
+from chatmemory.app.periods import portuguese_period
 from chatmemory.app.reasoning.budgets import Budget, BudgetLedger
 from chatmemory.app.reasoning.contract import Decision, failure_answer
 from chatmemory.app.reasoning.errors import RetrievalUnavailable
@@ -151,33 +152,6 @@ _BARE_CHANNEL = re.compile(r"(?<![\w#])#[a-z0-9][a-z0-9_\-]{1,99}", re.IGNORECAS
 #: that stopped at midnight would leave out most of what was missed.
 _SINCE = re.compile(r"\b(since|desde|from|a partir de)\b")
 
-#: Spans named in Portuguese, longest phrase first so "semana passada" is not
-#: read as "semana". They live here rather than in `routing._PERIODS` on
-#: purpose: that table is also what obligation questions are read against, and
-#: teaching it a new language would change what "o que me pediram ontem"
-#: answers -- a worthwhile change, and a different one from this.
-_PT_PERIODS: tuple[tuple[str, Period], ...] = (
-    ("hoje de manha", Period(0)),
-    ("hoje de manhã", Period(0)),
-    ("esta manha", Period(0)),
-    ("esta manhã", Period(0)),
-    ("anteontem", Period(2, 1)),
-    ("ontem", Period(1, 1)),
-    ("hoje", Period(0)),
-    ("semana passada", Period(14, 7)),
-    ("ultima semana", Period(7)),
-    ("última semana", Period(7)),
-    ("esta semana", Period(7)),
-    ("ultimos 7 dias", Period(7)),
-    ("últimos 7 dias", Period(7)),
-    ("mes passado", Period(60, 30)),
-    ("mês passado", Period(60, 30)),
-    ("ultimo mes", Period(30)),
-    ("último mês", Period(30)),
-    ("este mes", Period(30)),
-    ("este mês", Period(30)),
-)
-
 DEFAULT_PERIOD = Period(1)
 """What a catch-up covers when nobody says: from the start of yesterday to now.
 
@@ -214,9 +188,7 @@ def catch_up_period(text: str) -> Period | None:
     here. Either way a bounded span that "since" made open-ended is widened.
     """
     padded = _normalise(text)
-    period = named_period(text) or next(
-        (p for phrase, p in _PT_PERIODS if phrase in padded), None
-    )
+    period = named_period(text) or portuguese_period(text)
     if period is None:
         return None
     if period.days_wide is not None and _SINCE.search(padded):

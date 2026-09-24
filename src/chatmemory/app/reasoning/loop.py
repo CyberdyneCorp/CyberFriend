@@ -503,6 +503,9 @@ class ReasoningLoop:
             # against these, so a value the model invented is refused even
             # when the route that built the call meant well.
             asker_values=question.asker_values,
+            # From the audience, never the arguments: whether a wallet's
+            # counterparties may be written out depends on who reads the reply.
+            private=question.audience.is_private,
         )
         try:
             outcome = await surface.invoke(request)

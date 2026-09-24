@@ -26,6 +26,7 @@ internet said.
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
 | **Wallet balances** | What a `0x` address holds on Ethereum, Base and Arbitrum, with USD values. An address you typed, or the one you saved |
 | **DeFi positions** | Open Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
+| **Wallet activity** | *o que essa carteira fez essa semana?*, *what did my wallet do this week?*, *minhas transações de ontem* — swaps, Uniswap liquidity, Aave supplies and borrows, transfers and gas, per chain, newest first, for up to 30 days. Relayed (EIP-7702) actions included; poisoning spam hidden and flagged; counterparties in full in a DM, redacted in a channel |
 | **Portfolio total** | *quanto eu tenho no total?*, *what's my portfolio worth?* — balances, pools with uncollected fees and the Aave net, per chain and per wallet, summed in USD. Your saved wallet plus any you type; "at least" when a chain could not be read |
 | **Alerts** | Ask *tell me when my LP goes out of range*, *warn me when my LP is within 5% of the range edge*, *me avisa se o health factor cair abaixo de 1,3* or *avisa quando o BTC passar de 100k*. A Confirm button shows exactly what will be watched and where it is now, and a DM arrives once when it changes. `/alert list`, `/alert delete`. Off by default |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
@@ -74,6 +75,9 @@ mindmap
       Aave supplies, borrows, health factor
       Portfolio total per chain and wallet
       quanto eu tenho no total
+      Wallet activity: swaps, LP, Aave, transfers, gas
+      o que essa carteira fez essa semana
+      Address-poisoning spam hidden and flagged
       Alerts: LP out of range or near its edge
       Alerts: health factor below a limit, BTC or ETH past a price
       Asked in words, created with a Confirm button
@@ -114,6 +118,7 @@ graph LR
     OUT --> X3["wallet balances on Ethereum &middot; Base &middot; Arbitrum"]
     OUT --> X5["my LP positions &middot; my Aave health factor"]
     OUT --> X6["quanto eu tenho no total? &middot; what's my portfolio worth?"]
+    OUT --> X7["o que essa carteira fez essa semana? &middot; what did my wallet do this week?"]
     OUT --> X4["any MCP server an operator allowlists"]
 
     P --> YOU["About you"]
@@ -192,7 +197,7 @@ Saving another wallet adds it rather than replacing the first. `forget my
 wallet 0x…` (or `…45e0`) / `esqueça minha carteira 0x…` removes that one;
 with several saved, `forget my wallet` alone asks which. `forget my wallets` /
 `esqueça minhas carteiras` removes them all, Ethereum and Bitcoin. `what's my portfolio?`
-sums every saved wallet; a balance, DeFi or alert question reads one, so with
+sums every saved wallet; a balance, DeFi, activity or alert question reads one, so with
 several saved it asks which (by their last four characters) unless you name it —
 `what's my wallet balance …45e0?`.
 

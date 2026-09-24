@@ -41,6 +41,9 @@ class Cleared:
     #: The asker's own question, as the clearance carries it: what the answer's
     #: language is taken from. Never the model's arguments.
     question: str = ""
+    #: Whether only the asker reads the answer, from the clearance's audience.
+    #: False -- the channel's rule -- unless the guard was told otherwise.
+    private: bool = False
 
     @property
     def address(self) -> str:
@@ -70,13 +73,14 @@ async def clear_address(
     rooted = _rooted(server, tool)
     if isinstance(rooted, ToolResult):
         return rooted
-    text, question = rooted
+    text, question, private = rooted
     if not is_address(text):
         log.warning("chain.not_an_address", tool=tool)
         return refusal(server, tool, "not_an_address")
     address = normalise(text)
     key = f"{tool}:{address}" if per_tool_budget else address
-    return await _admit(server, tool, budget, limiter, key, Cleared((address,), question))
+    cleared = Cleared((address,), question, private)
+    return await _admit(server, tool, budget, limiter, key, cleared)
 
 
 async def clear_addresses(
@@ -96,7 +100,7 @@ async def clear_addresses(
     rooted = _rooted(server, tool)
     if isinstance(rooted, ToolResult):
         return rooted
-    text, question = rooted
+    text, question, private = rooted
     pieces = [p for p in _SEPARATORS.split(text.strip()) if p]
     if not pieces or not all(is_address(p) for p in pieces):
         log.warning("chain.not_an_address", tool=tool)
@@ -106,11 +110,11 @@ async def clear_addresses(
         log.warning("chain.too_many_addresses", tool=tool, count=len(addresses))
         return refusal(server, tool, "too_many_addresses")
     key = f"{tool}:{','.join(sorted(addresses))}"
-    return await _admit(server, tool, budget, limiter, key, Cleared(addresses, question))
+    return await _admit(server, tool, budget, limiter, key, Cleared(addresses, question, private))
 
 
-def _rooted(server: str, tool: str) -> tuple[str, str] | ToolResult:
-    """The cleared text and the asker's question, or the refusal."""
+def _rooted(server: str, tool: str) -> tuple[str, str, bool] | ToolResult:
+    """The cleared text, the asker's question and its privacy, or the refusal."""
     # The clearance, never the arguments: those are model output.
     try:
         clearance = current_authorization(server)
@@ -129,7 +133,7 @@ def _rooted(server: str, tool: str) -> tuple[str, str] | ToolResult:
             foreign=list(check.foreign),
         )
         return refusal(server, tool, str(check.refusal))
-    return check.query, clearance.question
+    return check.query, clearance.question, clearance.private
 
 
 async def _admit(
