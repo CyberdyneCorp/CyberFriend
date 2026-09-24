@@ -82,6 +82,7 @@ Set at **runtime** scope, not build scope — the image must contain no secrets.
 | `EMBEDDING_MODEL` | `text-embedding-3-small`. |
 | `EMBEDDING_DIMENSIONS` | `1536`. Changing this later is a reindex, not a swap. |
 | `MCP_TOKENS` | Bearer tokens, each bound to one person. See below. |
+| `ANSWER_TIMEZONE` | Optional. IANA zone whose days "ontem" and "semana passada" mean; defaults to `America/Sao_Paulo`. An unknown name stops the bot at boot. |
 
 ### MCP tokens are bound to a person
 

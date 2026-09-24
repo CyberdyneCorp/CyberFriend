@@ -614,13 +614,14 @@ class HybridSearch:
                     "message_id": platform_message_id,
                     "channel_ids": channels,
                     "limit": radius * 2,
+                    "platform": PLATFORM,
                 },
             )
             return [
                 Message(
                     platform_message_id=cast(int, r["id"]),
                     channel=ChannelRef(PLATFORM, cast(int, r["channel_id"])),
-                    author=PersonRef(PLATFORM, cast(int, r["author_person_id"])),
+                    author=PersonRef(PLATFORM, cast(int, r["platform_user_id"])),
                     content=str(r["content"]),
                     created_at=cast(datetime, r["created_at"]),
                     edited_at=cast("datetime | None", r["edited_at"]),

@@ -158,7 +158,12 @@ async def thread_context_ids(engine: AsyncEngine, anchor: int) -> list[int]:
     async with engine.connect() as conn:
         rows = await conn.execute(
             sql.THREAD_CONTEXT,
-            {"message_id": anchor, "channel_ids": [CH_ID], "limit": 50},
+            {
+                "message_id": anchor,
+                "channel_ids": [CH_ID],
+                "limit": 50,
+                "platform": "discord",
+            },
         )
         return [int(r["id"]) for r in rows.mappings()]
 

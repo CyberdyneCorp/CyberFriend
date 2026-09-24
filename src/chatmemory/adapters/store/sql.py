@@ -297,8 +297,16 @@ WITH anchor AS (
     WHERE id = :message_id AND deleted_at IS NULL
       AND channel_id = ANY(:channel_ids)
 )
-SELECT m.id, m.channel_id, m.author_person_id, m.content, m.created_at,
-       m.edited_at, m.reply_to_id, m.thread_id
+SELECT m.id, m.channel_id, m.content, m.created_at,
+       m.edited_at, m.reply_to_id, m.thread_id,
+       -- The platform account, not the internal person row id: callers hand
+       -- this out as a Discord user id. Scalar subquery for the same reason
+       -- as MESSAGES_WITHOUT_WINDOW (a person may carry several accounts).
+       COALESCE((
+           SELECT p.platform_user_id FROM person_platform_id p
+           WHERE p.person_id = m.author_person_id AND p.platform = :platform
+           ORDER BY p.platform_user_id LIMIT 1
+       ), m.author_person_id) AS platform_user_id
 FROM message m, anchor a
 WHERE m.deleted_at IS NULL
   AND m.channel_id = a.channel_id
