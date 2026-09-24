@@ -89,6 +89,7 @@ from chatmemory.app.indexing import (
     IndexingService,
     IndexRequest,
 )
+from chatmemory.app.language import Language
 from chatmemory.app.notifications import NotificationPreferences
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import CreateRefusal, CreateResult, ScheduleService
@@ -382,6 +383,26 @@ CAPABILITIES = (
     "Answers posted in a channel only use sources everyone here can read. "
     "Ask me in a DM to search everything *you* can read."
 )
+
+
+CAPABILITIES_PT = (
+    "Respondo perguntas sobre o que foi dito nos canais que você pode ler.\n"
+    "Experimente: `o que me pediram hoje?`, `o que aconteceu no #infra essa semana?`\n"
+    "Me mencione com uma pergunta, use `/ask` ou me mande uma mensagem direta.\n"
+    "Use `/resolve` para fechar algo que eu disse que te pediram, ou para dizer "
+    "que nunca foi seu.\n"
+    "Lembro da nossa conversa para as perguntas seguintes fazerem sentido; "
+    "`/forget` apaga.\n"
+    "Se alguém te pedir algo num canal que você pode ler, te mando uma mensagem "
+    "direta; `/notifications off` desliga isso.\n"
+    "Me diga `pode me chamar de Leo`, seu email ou `responda em português` e eu "
+    "guardo; seu email só é mostrado para você, em mensagem direta.\n\n"
+    "Respostas postadas num canal só usam fontes que todos ali podem ler. "
+    "Me pergunte numa mensagem direta para buscar tudo o que *você* pode ler."
+)
+"""`CAPABILITIES` for someone whose saved language is Portuguese. A bare
+mention has no words to detect a language from, so the saved preference is
+the only signal."""
 
 
 def _person(user: discord.User | discord.Member) -> PersonRef:
@@ -1503,7 +1524,9 @@ class CyberFriendClient(discord.Client):
 
         text = self._strip_mention(message.content).strip()
         if not text:
-            await message.reply(CAPABILITIES, mention_author=False)
+            language = await self._asks.reply_language(_person(message.author))
+            reply = CAPABILITIES_PT if language is Language.PORTUGUESE else CAPABILITIES
+            await message.reply(reply, mention_author=False)
             return
 
         destination = ChannelRef(PLATFORM, message.channel.id) if not is_dm else None

@@ -148,7 +148,7 @@ from chatmemory.app.fact_replies import (  # noqa: E402
     unsupported,
 )
 from chatmemory.app.fact_replies import text as fact_text  # noqa: E402
-from chatmemory.app.language import Language, detect  # noqa: E402
+from chatmemory.app.language import Language, detect, language_named  # noqa: E402
 from chatmemory.app.localise import localised  # noqa: E402
 from chatmemory.app.self_description import (  # noqa: E402
     typed_command,
@@ -632,6 +632,25 @@ class AskService:
         return frozenset(
             value for kind in self.OUTBOUND_KINDS if (value := stored.get(kind))
         )
+
+    async def reply_language(self, asker: PersonRef) -> Language:
+        """The language to answer a message with no words in, such as a bare mention.
+
+        The asker's saved preferred language, or UNKNOWN (answered in English).
+        A failed read is UNKNOWN too: the reply is a description, not an answer
+        anything depends on.
+        """
+        if self._facts is None:
+            return Language.UNKNOWN
+        try:
+            viewer = await self._acl.resolve_viewer(asker)
+            stored = await self._facts.facts_for(
+                viewer, ConversationLocation(asker.platform, 0, direct=False)
+            )
+        except Exception:
+            log.exception("ask.reply_language_failed", asker=str(asker))
+            return Language.UNKNOWN
+        return language_named(stored.get(FactKind.PREFERRED_LANGUAGE))
 
     async def _asker_facts(self, viewer: Viewer, direct: bool) -> AskerFacts | None:
         """The asker's facts for the prompt, as they may be shown where they asked.

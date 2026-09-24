@@ -14,11 +14,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from chatmemory.app.catchup import CHANNEL_UNAVAILABLE, NAME_THE_CHANNEL, NO_SUMMARY
 from chatmemory.app.language import Language
 from chatmemory.app.reasoning.contract import NOTHING_FOUND
 from chatmemory.app.reasoning.loop import NOTHING_EXTERNAL
 from chatmemory.app.reasoning.service import (
     MARKET_UNAVAILABLE,
+    MCP_CHANGE_REFUSAL,
     NO_ADVICE,
     WALLET_ADDRESS_MISSING,
     WALLET_UNAVAILABLE,
@@ -26,6 +28,24 @@ from chatmemory.app.reasoning.service import (
 from chatmemory.ports.answers import Answer
 
 PORTUGUESE: dict[str, str] = {
+    MCP_CHANGE_REFUSAL: (
+        "Não consigo adicionar, remover ou mudar servidores MCP pelo chat. Conectar "
+        "um servidor amplia o que eu alcanço, então isso é feito por um operador no "
+        "console de administração, onde a mudança é autenticada e registrada."
+    ),
+    NAME_THE_CHANNEL: (
+        "Me diga qual canal resumir, e escolha-o na lista de canais do Discord para "
+        "ele chegar como link — como `o que perdi no #general`."
+    ),
+    CHANNEL_UNAVAILABLE: (
+        "Não consigo resumir esse canal aqui. Só resumo canais que eu indexo, que "
+        "você pode ler e que todos que veem esta conversa podem ler — e não vou "
+        "dizer qual dessas condições falha, nem se o canal existe."
+    ),
+    NO_SUMMARY: (
+        "Houve atividade nesse período, mas não consegui montar um resumo em que eu "
+        "confie. Me pergunte algo específico sobre ele e eu olho de novo."
+    ),
     NOTHING_FOUND: "Não encontrei nada sobre isso nas mensagens que você pode ver.",
     NOTHING_EXTERNAL: "Não consegui uma resposta das fontes externas que alcanço agora.",
     WALLET_ADDRESS_MISSING: (
