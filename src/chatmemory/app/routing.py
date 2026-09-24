@@ -498,7 +498,24 @@ def wallet_question(text: str) -> WalletQuestion | None:
     names_a_wallet = {"wallet", "wallets", "carteira", "carteiras"}
     if (words & names_a_wallet) and (words & (_WALLET_TERMS - names_a_wallet)):
         return WalletQuestion(address=None)
+    # "What's my balance?" and nothing else: the asker's saved wallet, or a
+    # request for one. Anchored, because "my balance of vacation days" is not.
+    if _MY_BALANCE.match(text):
+        return WalletQuestion(address=None)
     return None
+
+
+_MY_BALANCE = re.compile(
+    r"\A\s*(?:"
+    r"(?:what(?:'s|\s+is)|show(?:\s+me)?|check)\s+my\s+(?:current\s+)?balances?"
+    r"|qual\s+(?:[ée]\s+)?(?:o\s+)?meu\s+saldo(?:\s+atual)?"
+    r"|(?:mostra|mostre|ver)\s+(?:o\s+)?meu\s+saldo"
+    r"|meu\s+saldo"
+    r")[\s?!.,]*\Z",
+    re.IGNORECASE,
+)
+"""A bare "what is my balance?", in either language. A total balance is the
+portfolio's (`portfolio_question`), which is checked first."""
 
 
 class PositionKind(StrEnum):
@@ -596,9 +613,124 @@ has moved on for longer than this is not following up on that wallet."""
 def recent_chain_address(previous: Sequence[str]) -> str | None:
     """The address of the latest chain question among the last few turns."""
     for earlier in reversed(previous[-_FOLLOW_UP_TURNS:]):
-        found = defi_question(earlier) or wallet_question(earlier)
-        if found is not None and found.address is not None:
-            return found.address
+        addresses = _chain_turn(earlier)
+        if addresses:
+            return addresses[0]
+    return None
+
+
+def _chain_turn(text: str) -> tuple[str, ...] | None:
+    """The addresses a chain question named, () for none, None if not one."""
+    portfolio = portfolio_question(text)
+    if portfolio is not None:
+        return portfolio.addresses
+    found = defi_question(text) or wallet_question(text)
+    if found is None:
+        return None
+    return (found.address,) if found.address is not None else ()
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioQuestion:
+    """What somebody holds in total, on chain.
+
+    `addresses` are the ones written in the question (or, when `carried`, in
+    the asker's own earlier one). `mine` says the question is about the
+    asker's own money -- first person, or no address at all -- so their saved
+    wallet is added to whatever they typed.
+    """
+
+    addresses: tuple[str, ...]
+    mine: bool
+    carried: bool = False
+
+
+_PORTFOLIO_BARE = re.compile(
+    r"\A\s*(?:"
+    r"quanto\s+(?:eu\s+)?tenho(?:\s+(?:no\s+total|ao\s+todo|em\s+cripto))?"
+    r"|quanto\s+vale\s+(?:a\s+|o\s+)?"
+    r"(?:minha\s+carteira|meu\s+portf[oó]lio|meu\s+patrim[oô]nio)"
+    r"|qual\s+(?:[ée]\s+)?(?:o\s+)?meu\s+(?:saldo|valor|patrim[oô]nio)\s+total"
+    r"|how\s+much\s+(?:do\s+i\s+have|am\s+i\s+worth|(?:money|crypto)\s+do\s+i\s+have)"
+    r"(?:\s+(?:in\s+total|overall|altogether|on[\s-]?chain))?"
+    r"|what(?:'s|\s+is)\s+my\s+total\s+(?:balance|value|holdings)"
+    r"|what(?:'s|\s+is)\s+my\s+(?:crypto\s+|defi\s+|on[\s-]?chain\s+)?"
+    r"(?:portfolio|net\s+worth)(?:\s+worth)?(?:\s+on[\s-]?chain)?"
+    r")[\s?!.,]*\Z",
+    re.IGNORECASE,
+)
+"""The short forms, whole question only. "quanto eu tenho no total?" is also
+how somebody asks about their vacation days, so a longer question with these
+words is not one of these (see `_TOTAL_PHRASE` for what it then needs)."""
+
+_PORTFOLIO_FOLLOW_UP = re.compile(
+    r"\A\s*(?:e|and)\s+(?:no\s+total|ao\s+todo|o\s+total|in\s+total|the\s+total|"
+    r"overall|altogether)[\s?!.,]*\Z",
+    re.IGNORECASE,
+)
+""""e no total?" after a chain question: that wallet, summed."""
+
+_TOTAL_PHRASE = re.compile(
+    r"\b(?:in\s+total|no\s+total|ao\s+todo|total\s+(?:balance|value|holdings)|"
+    r"(?:saldo|valor)\s+total|net\s+worth|worth\s+in\s+total)\b",
+    re.IGNORECASE,
+)
+_PORTFOLIO_TERMS = frozenset({
+    "portfolio", "portfólio", "portifolio", "patrimonio", "patrimônio",
+})
+_VALUE_TERMS = frozenset({
+    "worth", "value", "vale", "valor", "total", "quanto", "much", "balance", "saldo",
+})
+# What makes "my total" about money on chain rather than about anything else.
+_HOLDINGS_TERMS = frozenset({
+    "wallet", "wallets", "carteira", "carteiras", "crypto", "cripto", "cryptos",
+    "criptos", "defi", "onchain", "chain",
+})
+
+
+def portfolio_question(text: str, previous: Sequence[str] = ()) -> PortfolioQuestion | None:
+    """The portfolio total being asked for, or None for everything else.
+
+    Checked before the positions and balance predicates: "what's my wallet's
+    total balance" names a wallet and a balance, and it is everything that
+    was asked about. A question naming a pool or a loan and no portfolio word
+    ("how much do I have in total in my LP") is the positions route's.
+    """
+    words = set(re.findall(r"[\w-]+", text.lower()))
+    if words & _CONVERSATION_VERBS:
+        return None
+    addresses = tuple(find_addresses(text))
+    if _PORTFOLIO_FOLLOW_UP.match(text):
+        return _portfolio_follow_up(previous)
+    if not _asks_for_a_total(text, words, bool(addresses)):
+        return None
+    about_me = bool(words & (_FIRST_PERSON | {"i", "eu"}))
+    return PortfolioQuestion(addresses=addresses, mine=about_me or not addresses)
+
+
+def _asks_for_a_total(text: str, words: set[str], addressed: bool) -> bool:
+    if _PORTFOLIO_BARE.match(text):
+        return True
+    named = bool(words & _PORTFOLIO_TERMS)
+    if not named and _position_kind(words) is not None:
+        return False
+    if addressed:
+        return named or bool(_TOTAL_PHRASE.search(text))
+    if not words & (_FIRST_PERSON | {"i", "eu"}):
+        return False
+    if named:
+        return bool(words & _VALUE_TERMS)
+    return bool(words & _HOLDINGS_TERMS) and bool(_TOTAL_PHRASE.search(text))
+
+
+def _portfolio_follow_up(previous: Sequence[str]) -> PortfolioQuestion | None:
+    for earlier in reversed(previous[-_FOLLOW_UP_TURNS:]):
+        addresses = _chain_turn(earlier)
+        if addresses is None:
+            continue
+        if addresses:
+            return PortfolioQuestion(addresses=addresses, mine=False, carried=True)
+        return PortfolioQuestion(addresses=(), mine=True)
     return None
 
 

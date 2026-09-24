@@ -47,6 +47,9 @@ ALL_TOOLS = (
         "qual o saldo da carteira 0xabc",
         "o que foi decidido sobre o deploy?",
         "resuma a conversa de ontem",
+        # No other known word: "quanto" and "tenho" alone carry it.
+        "quanto eu tenho no total?",
+        "quanto custa o ETH?",
     ],
 )
 def test_portuguese_is_recognised(text: str) -> None:

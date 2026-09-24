@@ -26,6 +26,7 @@ internet said.
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
 | **Wallet balances** | What a `0x` address holds on Ethereum, Base and Arbitrum, with USD values. An address you typed, or the one you saved |
 | **DeFi positions** | Open Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
+| **Portfolio total** | *quanto eu tenho no total?*, *what's my portfolio worth?* — balances, pools with uncollected fees and the Aave net, per chain and per wallet, summed in USD. Your saved wallet plus any you type; "at least" when a chain could not be read |
 | **Position alerts** | Ask *tell me when my LP goes out of range* or *me avisa se o health factor cair abaixo de 1,3*. A Confirm button shows exactly what will be watched, and a DM arrives once when it changes. `/alert list`, `/alert delete`. Off by default |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
@@ -71,6 +72,8 @@ mindmap
       Open Uniswap v3 and v4 positions
       Range, fees, in or out of range
       Aave supplies, borrows, health factor
+      Portfolio total per chain and wallet
+      quanto eu tenho no total
       Alerts: LP out of range, health factor below a limit
       Asked in words, created with a Confirm button
     Commands
@@ -109,6 +112,7 @@ graph LR
     OUT --> X2["BTC &middot; ETH &middot; S&P 500 &middot; currencies"]
     OUT --> X3["wallet balances on Ethereum &middot; Base &middot; Arbitrum"]
     OUT --> X5["my LP positions &middot; my Aave health factor"]
+    OUT --> X6["quanto eu tenho no total? &middot; what's my portfolio worth?"]
     OUT --> X4["any MCP server an operator allowlists"]
 
     P --> YOU["About you"]
@@ -187,10 +191,10 @@ message.** A wallet is public on its chain — what is private is that it is
 A channel message giving your own email or phone is never archived, even when
 it says other things too.
 
-Once a wallet is saved, `what's my wallet balance?` uses it instead of asking
-for an address. The question has to name a wallet: "what's my balance" alone
-stays with your channels, because in a conversation about money it is as likely
-to be about something somebody said.
+Once a wallet is saved, `what's my balance?` or `what's my wallet balance?` uses
+it instead of asking for an address, and `quanto eu tenho no total?` adds up
+everything it holds. A longer question has to name a wallet: "my balance of
+vacation days" stays with your channels.
 
 ## The rules it keeps
 

@@ -11,6 +11,11 @@ It also answers what creating a range alert reads once, through the positions
 reader: an owner's v3 `balanceOf` and `tokenOfOwnerByIndex`, the factory's
 `getPool`, the simulated `collect`, and the tokens' `symbol` and `decimals`.
 
+And what a portfolio reads besides: the native balance, ERC-20 `balanceOf`,
+Aave's reserve list, per-reserve user data and rates from the data provider,
+and the oracle's prices. Figures are whole units and dollars, converted here,
+so a scenario reads like the answer it expects.
+
 Calls it does not model revert, as a contract would: a scenario that reaches
 one has changed what it reads, and the watcher reports it as a failed read.
 """
@@ -18,6 +23,7 @@ one has changed what it reads, and the watcher reports it as a failed read.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -64,12 +70,32 @@ class AaveAccount:
     health_factor: Decimal | None
 
 
+@dataclass
+class AaveReserve:
+    """One person's supply and borrow of one reserve, in whole units."""
+
+    supplied: Decimal = Decimal(0)
+    borrowed: Decimal = Decimal(0)
+    collateral: bool = True
+
+
 AAVE_POOL = "0xa238dd80c259a72e81d7e4664a9801593f98d1c5"
+AAVE_DATA_PROVIDER = "0x0f43731eb8d45a581f4a36dd74f5f358bc90c73a"
+AAVE_ORACLE = "0x2cc0fc26ed4563a5ce5e8bdcfe1a2878676ae156"
+
+WETH = "0x4200000000000000000000000000000000000006"
+USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+CBBTC = "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+"""On Base: an Aave reserve, and outside the named token set."""
 
 TOKENS = {
-    "0x4200000000000000000000000000000000000006": ("WETH", 18),
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": ("USDC", 6),
+    WETH: ("WETH", 18),
+    USDC: ("USDC", 6),
+    CBBTC: ("cbBTC", 8),
 }
+
+_NOT_MODELLED = object()
+"""A call this group of contracts does not answer; `None` is a revert."""
 
 
 @dataclass
@@ -84,8 +110,20 @@ class FakeChain:
     aave: dict[str, AaveAccount] = field(default_factory=dict)
     tokens: dict[str, tuple[str, int]] = field(default_factory=lambda: dict(TOKENS))
     """Symbol and decimals by token address."""
+    native: dict[str, Decimal] = field(default_factory=dict)
+    """ETH held, by owner."""
+    balances: dict[tuple[str, str], Decimal] = field(default_factory=dict)
+    """ERC-20 held, by (token, owner), in whole units."""
+    reserves: list[str] = field(default_factory=lambda: [WETH, USDC, CBBTC])
+    """Aave's reserve list: underlyings, as `getReservesList` returns them."""
+    prices: dict[str, Decimal] = field(default_factory=dict)
+    """The Aave oracle's USD price by asset. Unlisted assets price at zero."""
+    lending: dict[tuple[str, str], AaveReserve] = field(default_factory=dict)
+    """Aave supplies and borrows by (owner, asset)."""
     failing: bool = False
     """Answer every request with HTTP 500."""
+    failing_selectors: set[str] = field(default_factory=set)
+    """Direct `eth_call`s with these selectors answer a JSON-RPC error."""
     requests: int = 0
 
     # --- the wire -------------------------------------------------------
@@ -96,18 +134,29 @@ class FakeChain:
             return httpx.Response(500, text="upstream error")
         body = json.loads(request.content)
         calls = body if isinstance(body, list) else [body]
-        replies = [{"jsonrpc": "2.0", "id": c.get("id"), "result": self._rpc(c)} for c in calls]
+        replies = [self._reply(c) for c in calls]
         return httpx.Response(200, json=replies if isinstance(body, list) else replies[0])
 
+    def _reply(self, call: dict[str, Any]) -> dict[str, Any]:
+        params = call.get("params") or [{}]
+        data = params[0].get("data", "") if isinstance(params[0], dict) else ""
+        if call.get("method") == "eth_call" and data[:10] in self.failing_selectors:
+            error = {"code": -32000, "message": "execution reverted"}
+            return {"jsonrpc": "2.0", "id": call.get("id"), "error": error}
+        return {"jsonrpc": "2.0", "id": call.get("id"), "result": self._rpc(call)}
+
     def _rpc(self, call: dict[str, Any]) -> str:
+        if call.get("method") == "eth_getBalance":
+            owner = str(call["params"][0]).lower()
+            return hex(int(self.native.get(owner, Decimal(0)) * 10**18))
         if call.get("method") != "eth_call":
             return "0x" + "0" * 64
         params = call["params"][0]
         target, data = params["to"].lower(), params["data"]
         if target == MULTICALL3:
-            results = [self._answer(t, d) for t, d in decode_aggregate3_call(data)]
+            results = [self._dispatch(t, d) for t, d in decode_aggregate3_call(data)]
             return "0x" + encode_aggregate3_result(results).hex()
-        answer = self._answer(target, data)
+        answer = self._dispatch(target, data)
         return "0x" + (answer or b"").hex()
 
     # --- the contracts ----------------------------------------------------
@@ -145,6 +194,45 @@ class FakeChain:
         if selector == abi.V3_SLOT0:
             return self._slot0(target)
         return None
+
+    def _dispatch(self, target: str, data: str) -> bytes | None:
+        answer = self._portfolio_answer(target, data[:10], _words(data[10:]))
+        if isinstance(answer, bytes):
+            return answer
+        return self._answer(target, data)
+
+    def _portfolio_answer(self, target: str, selector: str, args: list[int]) -> object:
+        """The Aave reads beyond the account, and token balances."""
+        provider = self.deployment.aave_addresses_provider
+        answers: dict[tuple[str, str], Callable[[], bytes]] = {
+            (provider, abi.AAVE_GET_DATA_PROVIDER): lambda: _encode(int(AAVE_DATA_PROVIDER, 16)),
+            (provider, abi.AAVE_GET_ORACLE): lambda: _encode(int(AAVE_ORACLE, 16)),
+            (AAVE_POOL, abi.AAVE_RESERVES_LIST): self._reserve_list,
+            (AAVE_DATA_PROVIDER, abi.AAVE_USER_RESERVE): lambda: self._user_reserve(args),
+            (AAVE_DATA_PROVIDER, abi.AAVE_RESERVE_DATA): lambda: _encode(*[0] * 12),
+            (AAVE_ORACLE, abi.AAVE_ASSET_PRICE): lambda: self._price(args),
+        }
+        answer = answers.get((target, selector))
+        if answer is not None:
+            return answer()
+        if selector == abi.BALANCE_OF and target in self.tokens:
+            owner = abi.as_address(args[0])
+            held = self.balances.get((target, owner), Decimal(0))
+            return _encode(int(held * 10 ** self.tokens[target][1]))
+        return _NOT_MODELLED
+
+    def _reserve_list(self) -> bytes:
+        return _encode(WORD, len(self.reserves), *(int(r, 16) for r in self.reserves))
+
+    def _user_reserve(self, args: list[int]) -> bytes:
+        asset, owner = abi.as_address(args[0]), abi.as_address(args[1])
+        entry = self.lending.get((owner, asset), AaveReserve())
+        decimals = self.tokens[asset][1]
+        supplied, borrowed = (int(v * 10**decimals) for v in (entry.supplied, entry.borrowed))
+        return _encode(supplied, 0, borrowed, 0, 0, 0, 0, 0, int(entry.collateral))
+
+    def _price(self, args: list[int]) -> bytes:
+        return _encode(int(self.prices.get(abi.as_address(args[0]), Decimal(0)) * 10**8))
 
     def _owned_v3(self, owner: str) -> list[int]:
         return sorted(t for t, p in self.v3.items() if p.owner.lower() == owner.lower())

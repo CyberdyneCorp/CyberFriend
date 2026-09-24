@@ -31,8 +31,8 @@ so a question the team's own conversations answer never leaves the server.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import structlog
@@ -73,20 +73,18 @@ from chatmemory.app.reasoning.ports import (
 )
 from chatmemory.app.reasoning.stages import ModelCritic, ModelPlanner, ModelSynthesizer
 from chatmemory.app.routing import (
-    DefiQuestion,
     MarketQuestion,
     PositionKind,
     Route,
     RoutingDecision,
     classify,
-    defi_question,
     explicit_web_search,
     market_follow_up,
     market_question,
     mcp_change_request,
     time_question,
-    wallet_question,
 )
+from chatmemory.app.routing_crypto import CryptoQuery, CryptoRoute, crypto_route
 from chatmemory.ports.answers import Answer, Question
 
 log = structlog.get_logger()
@@ -113,9 +111,38 @@ DEFI_TOOLS = {
 }
 """Exactly one tool per kind of question. The route decides what is read; the
 model only copies the address into the call."""
-"""The only server a wallet question may reach. Narrowed for the same reason
-the market route is: the offer the call is held to is this set, so a wallet
-question cannot end up searching the web instead."""
+PORTFOLIO_TOOL = f"{DEFI_POSITIONS_PROVIDER}:portfolio_summary"
+
+
+@dataclass(frozen=True, slots=True)
+class ChainHandler:
+    """What one chain label may reach, and the decision it is recorded as.
+
+    Narrowed to these servers -- and to one tool where the label names one --
+    for the same reason the market route is: the offer the call is held to is
+    this set, so a wallet question cannot end up searching the web instead.
+    """
+
+    servers: frozenset[str]
+    tool: str | None
+    decision: str
+
+
+CHAIN_HANDLERS = {
+    CryptoRoute.PORTFOLIO: ChainHandler(DEFI_SERVERS, PORTFOLIO_TOOL, "portfolio"),
+    CryptoRoute.DEFI_LIQUIDITY: ChainHandler(
+        DEFI_SERVERS, DEFI_TOOLS[PositionKind.LIQUIDITY], f"defi_{PositionKind.LIQUIDITY}"
+    ),
+    CryptoRoute.DEFI_LENDING: ChainHandler(
+        DEFI_SERVERS, DEFI_TOOLS[PositionKind.LENDING], f"defi_{PositionKind.LENDING}"
+    ),
+    CryptoRoute.DEFI_BOTH: ChainHandler(
+        DEFI_SERVERS, DEFI_TOOLS[PositionKind.BOTH], f"defi_{PositionKind.BOTH}"
+    ),
+    CryptoRoute.WALLET_BALANCE: ChainHandler(CHAIN_SERVERS, None, "wallet"),
+}
+"""One row per chain label. With no address to read, any of them is answered
+with a request for one (`wallet_address_missing`), and nothing is read."""
 
 MCP_CHANGE_REFUSAL = (
     "I can't add, remove or change MCP servers from chat. Connecting a server "
@@ -315,50 +342,15 @@ class ReasoningAnswerService:
                 current_time_answer(detect(text), self._clock())
             )
         # Remembered questions are the asker's own words as typed.
-        defi = defi_question(text, tuple(turn.question for turn in question.memory.turns))
-        if defi is not None:
-            # Before the wallet route: "my pools on 0x..." names an address
-            # too, and it is positions that were asked about.
-            return await self._defi_route(question, defi)
-        wallet = wallet_question(text)
-        if wallet is not None:
-            # A balance is never in the corpus. A channel message about a
-            # wallet is a record of what somebody said, and answering "what
-            # does 0x... hold" from one is how the assistant reported a
-            # colleague's project summary as somebody's balance -- which is
-            # exactly what it did before this route existed.
-            asked = question
-            if wallet.address is None:
-                saved = _saved_wallet(question)
-                if saved is None:
-                    log.info("reasoning.external_route", route="wallet_no_address")
-                    return (
-                        _route(EXTERNAL_ROUTE, "wallet_address_missing"),
-                        refusal(WALLET_ADDRESS_MISSING),
-                    )
-                # Spelled out for the tool proposal, which sees the question
-                # and nothing else: "what's my balance" names no address, so a
-                # model reading it alone cannot produce one.
-                #
-                # This is a hint, not the authorisation. The guard admits the
-                # address because it is one of `asker_values` -- the exact
-                # strings the store holds for this person -- so a wrong
-                # address put here would be refused rather than sent. Same
-                # arrangement as the market follow-up above, where the
-                # addition is checked by membership rather than trusted.
-                asked = replace(question, text=f"{question.text} {saved}")
-                log.info("reasoning.external_route", route="wallet_saved_address")
-            outcome = await self._loop.run_external(
-                asked, CHAIN_SERVERS, verbatim=True
-            )
-            answer = outcome.answer
-            if answer.abstained:
-                answer = replace(answer, text=WALLET_UNAVAILABLE)
-            log.info("reasoning.external_route", route="wallet")
-            return (
-                _route(EXTERNAL_ROUTE, "wallet"),
-                replace(outcome, answer=answer),
-            )
+        previous = tuple(turn.question for turn in question.memory.turns)
+        chain = crypto_route(text, previous)
+        if chain is not None:
+            # A balance, a position or a total is never in the corpus. A
+            # channel message about a wallet is a record of what somebody
+            # said, and answering "what does 0x... hold" from one is how the
+            # assistant reported a colleague's project summary as somebody's
+            # balance -- which is exactly what it did before this route existed.
+            return await self._chain_route(question, chain)
         if explicit_web_search(text):
             log.info("reasoning.external_route", route="explicit_web_search")
             outcome = await self._loop.run_external(question)
@@ -366,41 +358,47 @@ class ReasoningAnswerService:
         return None
 
 
-    async def _defi_route(
-        self, question: Question, defi: DefiQuestion
+    async def _chain_route(
+        self, question: Question, query: CryptoQuery
     ) -> tuple[Decision, RunOutcome]:
-        """Liquidity or lending positions, from the chain, never the corpus.
+        """A chain lookup, answered from the chain and never the corpus.
 
-        Same address rules as the wallet route: the one in the question, or
-        the asker's saved wallet (admitted by the guard as an asker fact), or
-        a request for one.
+        One path for every label: the addresses are the ones typed, carried
+        from the asker's own earlier question, or their saved wallet (admitted
+        by the guard as an asker fact) -- or, with none of those, a request
+        for one. The label's row decides what may be read.
         """
-        asked = question
-        if defi.carried:
-            # From the asker's own earlier question, as typed: spelled out so
-            # the tool proposal, which sees this question alone, can copy it.
-            asked = replace(question, text=f"{question.text} {defi.address}")
-            log.info("reasoning.external_route", route="defi_follow_up")
-        elif defi.address is None:
-            saved = _saved_wallet(question)
-            if saved is None:
-                log.info("reasoning.external_route", route="defi_no_address")
-                return (
-                    _route(EXTERNAL_ROUTE, "wallet_address_missing"),
-                    refusal(WALLET_ADDRESS_MISSING),
-                )
-            asked = replace(question, text=f"{question.text} {saved}")
+        handler = CHAIN_HANDLERS[query.route]
+        addresses = _lookup_addresses(question, query)
+        if not addresses:
+            log.info(
+                "reasoning.external_route", route="wallet_no_address", label=str(query.route)
+            )
+            return (
+                _route(EXTERNAL_ROUTE, "wallet_address_missing"),
+                refusal(WALLET_ADDRESS_MISSING),
+            )
         outcome = await self._loop.run_external(
-            asked, DEFI_SERVERS, verbatim=True, tools={DEFI_TOOLS[defi.kind]}
+            _spelled_out(question, addresses),
+            handler.servers,
+            verbatim=True,
+            tools=None if handler.tool is None else {handler.tool},
         )
         answer = outcome.answer
         if answer.abstained:
             answer = replace(answer, text=WALLET_UNAVAILABLE)
-        log.info("reasoning.external_route", route="defi", kind=str(defi.kind))
+        log.info(
+            "reasoning.external_route",
+            route=handler.decision,
+            label=str(query.route),
+            carried=query.carried,
+            wallets=len(addresses),
+        )
         return (
-            _route(EXTERNAL_ROUTE, f"defi_{defi.kind}"),
+            _route(EXTERNAL_ROUTE, handler.decision),
             replace(outcome, answer=answer),
         )
+
 
 def current_time_answer(language: Language, now: datetime | None = None) -> str:
     """What the date and time are, said in the asker's language.
@@ -428,6 +426,40 @@ def _saved_wallet(question: Question) -> str | None:
         if is_address(value):
             return value
     return None
+
+
+def _lookup_addresses(question: Question, query: CryptoQuery) -> tuple[str, ...]:
+    """Whose wallets to read: what was typed or carried, and the saved one.
+
+    The saved wallet joins a portfolio question about the asker's own money
+    even when they typed another address too -- "my portfolio with 0x..." is
+    both. Every other route uses it only when nothing was written: "what does
+    0x... hold" is about that address, not also about the asker's.
+    """
+    addresses = list(query.addresses)
+    wanted = query.mine and (query.route is CryptoRoute.PORTFOLIO or not addresses)
+    saved = _saved_wallet(question) if wanted else None
+    if saved is not None and saved.lower() not in {a.lower() for a in addresses}:
+        addresses.insert(0, saved)
+    return tuple(addresses)
+
+
+def _spelled_out(question: Question, addresses: Sequence[str]) -> Question:
+    """The question with every address to read written into it.
+
+    For the tool proposal, which sees the question and nothing else: "what's
+    my balance" names no address, so a model reading it alone cannot produce
+    one. This is a hint, not the authorisation. The guard admits a saved
+    address because it is one of `asker_values` -- the exact strings the
+    store holds for this person -- and a carried one because it is the
+    asker's own earlier words, so a wrong address put here would be refused
+    rather than sent.
+    """
+    lowered = question.text.lower()
+    missing = [a for a in addresses if a.lower() not in lowered]
+    if not missing:
+        return question
+    return replace(question, text=f"{question.text} {' '.join(missing)}")
 
 
 def _market_request(question: Question) -> tuple[MarketQuestion | None, Question]:

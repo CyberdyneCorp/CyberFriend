@@ -20,6 +20,9 @@ from typing import Any
 
 import httpx
 
+from chatmemory.adapters.chain.node import MULTICALL3
+from tests.e2e.harness.chain import decode_aggregate3_call, encode_aggregate3_result
+
 Handler = Callable[[httpx.Request], httpx.Response]
 
 INFURA_HOSTS = ("mainnet.infura.io", "base-mainnet.infura.io", "arbitrum-mainnet.infura.io")
@@ -28,6 +31,10 @@ PRICE_HOSTS = ("api.coingecko.com",)
 
 EMPTY_WORD = "0x" + "0" * 64
 """An ABI-encoded zero: no balance, no positions, no tokens."""
+
+EMPTY_RETURN = "0x" + "0" * 64 * 12
+"""Twelve zero words: wide enough for any tuple this package decodes (an Aave
+account is six), and an empty array or string to anything dynamic."""
 
 
 class UnexpectedEgress(AssertionError):
@@ -60,7 +67,15 @@ def _rpc_result(call: Mapping[str, Any]) -> object:
         return hex(20_000_000)
     if method == "eth_getLogs":
         return []
-    return EMPTY_WORD
+    params = call.get("params") or [{}]
+    target = params[0].get("to", "") if isinstance(params[0], dict) else ""
+    if method == "eth_call" and str(target).lower() == MULTICALL3:
+        # Folded reads, each answered zero, as many as were asked: a batch of
+        # balances that comes back one word long is a node error, not a wallet
+        # holding nothing.
+        count = len(decode_aggregate3_call(params[0]["data"]))
+        return "0x" + encode_aggregate3_result([bytes(32)] * count).hex()
+    return EMPTY_RETURN if method == "eth_call" else EMPTY_WORD
 
 
 def json_rpc(request: httpx.Request) -> httpx.Response:
