@@ -110,4 +110,5 @@ def test_enabling_wallet_tools_also_registers_positions() -> None:
     assert positions.timeout_seconds > 3 * 3 * 30
     assert {e.tool for e in tools.allowlist if e.server == "defi_positions"} == {
         "liquidity_positions", "lending_positions", "defi_positions", "portfolio_summary",
+        "wallet_activity",
     }

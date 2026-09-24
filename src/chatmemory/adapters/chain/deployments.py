@@ -28,7 +28,8 @@ class Deployment:
     aave_addresses_provider: str
     #: Wrapped ether: how native ETH is priced by the Aave oracle.
     weth: str
-    #: Blockscout instance used only to *find* v4 position IDs.
+    #: Blockscout instance used to *find* v4 position IDs and to read a
+    #: wallet's recent activity -- never for a balance or a position figure.
     blockscout: str
 
 

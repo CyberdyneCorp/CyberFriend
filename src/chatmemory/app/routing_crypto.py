@@ -11,7 +11,10 @@ router can take this precedence and these predicates over unchanged.
 
 Precedence, and why:
 
-*   PORTFOLIO first. "What's my wallet's total balance" names a wallet and a
+*   WALLET_ACTIVITY first. "What did my wallet do this week" names a wallet,
+    and "minhas transações de ontem" names nothing else: history was asked
+    for, and a balance route would answer a different question.
+*   PORTFOLIO next. "What's my wallet's total balance" names a wallet and a
     balance, and it is everything that was asked about.
 *   The positions labels next. "My pools on 0x..." names an address too, and
     it is positions that were asked about.
@@ -35,9 +38,11 @@ from chatmemory.app.routing import (
     portfolio_question,
     wallet_question,
 )
+from chatmemory.app.wallet_activity import activity_question
 
 
 class CryptoRoute(StrEnum):
+    WALLET_ACTIVITY = "WALLET_ACTIVITY"
     PORTFOLIO = "PORTFOLIO"
     DEFI_LIQUIDITY = "DEFI_LIQUIDITY"
     DEFI_LENDING = "DEFI_LENDING"
@@ -74,6 +79,14 @@ def crypto_route(text: str, previous: Sequence[str] = ()) -> CryptoQuery | None:
     `previous` is the asker's own earlier questions, oldest first, for a
     follow-up that names no address ("and in total?", "show me the v4 one").
     """
+    activity = activity_question(text, previous)
+    if activity is not None:
+        return CryptoQuery(
+            CryptoRoute.WALLET_ACTIVITY,
+            () if activity.address is None else (activity.address,),
+            mine=activity.address is None,
+            carried=activity.carried,
+        )
     portfolio = portfolio_question(text, previous)
     if portfolio is not None:
         return CryptoQuery(

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
+from typing import Generic, TypeVar
 
 from chatmemory.adapters.chain import abi
 from chatmemory.adapters.chain.deployments import NATIVE, Deployment
@@ -34,12 +37,15 @@ RESERVES_TTL_SECONDS = 3600.0
 times a year; an hour late is a portfolio missing a token nobody holds yet."""
 
 
-class ReserveCache:
-    """Each chain's Aave reserve assets with their symbols, kept per process.
+V = TypeVar("V")
 
-    Keyed by chain and pool, never by who asked: the list is public chain
+
+class PublicStateCache(Generic[V]):
+    """A chain's public Aave state, kept per process for a while.
+
+    Keyed by chain and pool, never by who asked: what is held is public chain
     state and the same for everyone, so sharing it discloses nothing and saves
-    two multicalls per chain on every portfolio question.
+    multicalls per chain on every question.
     """
 
     def __init__(
@@ -49,16 +55,46 @@ class ReserveCache:
     ) -> None:
         self._ttl = ttl_seconds
         self._clock = clock
-        self._entries: dict[str, tuple[float, tuple[TokenInfo, ...]]] = {}
+        self._entries: dict[str, tuple[float, V]] = {}
 
-    def get(self, key: str) -> tuple[TokenInfo, ...] | None:
+    def get(self, key: str) -> V | None:
         entry = self._entries.get(key)
         if entry is None or self._clock() - entry[0] >= self._ttl:
             return None
         return entry[1]
 
-    def put(self, key: str, tokens: tuple[TokenInfo, ...]) -> None:
-        self._entries[key] = (self._clock(), tokens)
+    def put(self, key: str, value: V) -> None:
+        self._entries[key] = (self._clock(), value)
+
+
+class ReserveCache(PublicStateCache[tuple[TokenInfo, ...]]):
+    """Each chain's Aave reserve assets with their symbols."""
+
+
+class Wrapping(StrEnum):
+    """What an Aave token stands for: a supply, or a debt."""
+
+    SUPPLY = "supply"
+    DEBT = "debt"
+
+
+@dataclass(frozen=True, slots=True)
+class Wrapper:
+    """An aToken or variable-debt token, and the reserve asset behind it."""
+
+    kind: Wrapping
+    underlying: TokenInfo
+
+
+class WrapperCache(PublicStateCache[dict[str, Wrapper]]):
+    """Each chain's aTokens and debt tokens, by token address."""
+
+
+RESERVE_ATOKEN_WORD = 8
+RESERVE_VARIABLE_DEBT_WORD = 10
+"""Where the pool's `getReserveData` puts the aToken and the variable-debt
+token (Aave v3 `ReserveData`: configuration, indexes and rates, timestamp,
+id, then the aToken, stable-debt and variable-debt token addresses)."""
 
 
 class AaveReader:
@@ -68,12 +104,14 @@ class AaveReader:
         deployment: Deployment,
         tokens: TokenDirectory,
         reserves: ReserveCache | None = None,
+        wrappers: WrapperCache | None = None,
     ) -> None:
         self._node = node
         self._deployment = deployment
         self._tokens = tokens
         self._contracts: tuple[str, str, str] | None = None
         self._reserves = reserves or ReserveCache()
+        self._wrappers = wrappers or WrapperCache()
 
     async def contracts(self) -> tuple[str, str, str]:
         """Pool, data provider and oracle, from the addresses provider."""
@@ -130,6 +168,32 @@ class AaveReader:
         tokens = tuple(known[r.lower()] for r in reserves)
         self._reserves.put(key, tokens)
         return tokens
+
+    async def wrappers(self) -> dict[str, Wrapper]:
+        """Every aToken and variable-debt token of the main market, by address.
+
+        What lets an activity answer say "supplied 0.02 ETH" for an aToken
+        mint instead of hiding it as a token nobody listed. One multicall of
+        the pool's `getReserveData`, cached like the reserve list.
+        """
+        pool, _, _ = await self.contracts()
+        key = f"{self._deployment.chain.key}:{pool}"
+        cached = self._wrappers.get(key)
+        if cached is not None:
+            return cached
+        reserves = await self.reserve_tokens()
+        results = await self._node.multicall(
+            [Call(pool, abi.call(abi.AAVE_RESERVE_DATA, abi.address(r.address))) for r in reserves]
+        )
+        found: dict[str, Wrapper] = {}
+        for reserve, raw in zip(reserves, results, strict=True):
+            w = abi.words(raw) if raw else []
+            if len(w) <= RESERVE_VARIABLE_DEBT_WORD:
+                continue
+            found[abi.as_address(w[RESERVE_ATOKEN_WORD])] = Wrapper(Wrapping.SUPPLY, reserve)
+            found[abi.as_address(w[RESERVE_VARIABLE_DEBT_WORD])] = Wrapper(Wrapping.DEBT, reserve)
+        self._wrappers.put(key, found)
+        return found
 
     async def lending(self, user: str) -> ChainLending:
         pool, data, _ = await self.contracts()

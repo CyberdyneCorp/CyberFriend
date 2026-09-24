@@ -113,6 +113,7 @@ DEFI_TOOLS = {
 """Exactly one tool per kind of question. The route decides what is read; the
 model only copies the address into the call."""
 PORTFOLIO_TOOL = f"{DEFI_POSITIONS_PROVIDER}:portfolio_summary"
+ACTIVITY_TOOL = f"{DEFI_POSITIONS_PROVIDER}:wallet_activity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +131,7 @@ class ChainHandler:
 
 
 CHAIN_HANDLERS = {
+    CryptoRoute.WALLET_ACTIVITY: ChainHandler(DEFI_SERVERS, ACTIVITY_TOOL, "wallet_activity"),
     CryptoRoute.PORTFOLIO: ChainHandler(DEFI_SERVERS, PORTFOLIO_TOOL, "portfolio"),
     CryptoRoute.DEFI_LIQUIDITY: ChainHandler(
         DEFI_SERVERS, DEFI_TOOLS[PositionKind.LIQUIDITY], f"defi_{PositionKind.LIQUIDITY}"

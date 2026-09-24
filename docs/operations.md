@@ -306,7 +306,7 @@ before a chain is called unreachable.
 ## DeFi positions
 
 The same switch and key also register the `defi_positions` server, with three
-positions tools and the portfolio total (below), all read-only. The route picks
+positions tools, the portfolio total and wallet activity (below), all read-only. The route picks
 exactly one from the question, so the model's only job is to copy the address:
 
 | Asked about | Tool | Reports |
@@ -359,7 +359,7 @@ reads liquidity then lending, so its server timeout is twice that.
 ### Not covered
 
 Other exchanges (Aerodrome, SushiSwap, …), Aave's other markets (Prime, EtherFi),
-history, P&L and impermanent loss. Adding a chain is one entry in
+P&L and impermanent loss. History is the activity tool's (below). Adding a chain is one entry in
 `adapters/chain/deployments.py`.
 
 ## Portfolio total
@@ -406,6 +406,66 @@ per process for an hour (it is public and the same for everyone). A wallet is
 about one and a half times the reads of the combined positions tool, and
 takes as long as that tool on the same wallet (seconds, or ~30 s for a v4
 position the explorer has not indexed on Arbitrum).
+
+## Wallet activity
+
+A fifth tool on the same server, `wallet_activity`, answers "o que essa
+carteira fez essa semana?", "what did my wallet do this week?", "minhas
+transações de ontem", "show my wallet activity" and "what did it do?" after a
+wallet question. It is recognised before retrieval (route label
+`WALLET_ACTIVITY`, ahead of every other chain label) and needs no setting
+beyond the positions ones. "What did people say about my wallet" stays with
+the corpus.
+
+**Whose wallet.** An address in the question, one carried from the asker's own
+earlier question, or the saved wallet; with several saved and none named by
+its last characters, the reply asks which. Cleared like the positions tools.
+
+**The window** is read from the asker's question as the clearance carries it,
+never from the model's arguments: "hoje", "ontem", "essa semana", "semana
+passada", "este mês", "nos últimos N dias", "today", "this week", "last N
+days"… Seven days when none is named, at most 30 (a wider one is cut, and the
+answer says so). The period is always stated, in UTC.
+
+**Where it reads.** Per chain, Blockscout's `/api/v2/advanced-filters` for the
+wallet (top-level, internal and token transfers, time-filtered on the server),
+the three explorers in parallel; then, one chain after another, Aave's reserve
+list with each reserve's aToken and debt token (cached per process for an
+hour) and the oracle's current prices. Not `/addresses/{a}/transactions`: an
+EIP-7702 wallet's relayed actions are missing from it. Blockscout's cursor
+sends null fields as empty strings (left out, the server loops on page one);
+at most four pages (200 rows) per chain, and more is stated. One extra page of
+the address's own transactions is read only to name a Uniswap multicall's inner
+calls.
+
+| Kind | How it is recognised |
+|---|---|
+| Uniswap | A position NFT moved, or the v3/v4 position manager was called or paid: opened, added, removed, collected fees, or "LP withdrawal (liquidity and/or fees)" when relayed |
+| Aave | An aToken or debt token moved: supplied, withdrew, borrowed, repaid, in the underlying (an aToken mint includes interest) |
+| Swap | One asset out and a different one in, native ETH included |
+| Sent / received | Everything else, with the counterparty. A payment to a plain address inside a larger transaction (a relayer's cut) is its own line and is never called a fee |
+| Other | A transaction the wallet sent that moved nothing (an approval), by its method |
+
+Gas is what the wallet paid on transactions it sent; relayer-submitted ones are
+counted separately. USD is at current prices, and says so.
+
+**Spam and poisoning.** Hidden and counted, never by Blockscout's reputation
+(it rated every poisoned token "ok"): tokens outside the named set and the Aave
+assets in transactions the wallet did not send, zero-value transfers, and
+third-party deposits under $0.01. A hidden transfer whose counterparty shares
+the first and last four characters with a real one adds a ⚠️ address-poisoning
+warning.
+
+**Privacy.** The egress clearance carries whether only the asker reads the
+answer (`private`, from the question's audience; false unless set). In a DM
+every address is printed in full and never shortened, because a shortened
+address is what poisoning imitates. In a channel a counterparty is "an external
+address" / "um endereço externo" and the wallet is `…` plus its last four
+characters, citation included.
+
+**Failures.** An explorer that fails or times out is "could not be read",
+never "no activity"; without Aave's tokens the answer says Aave actions may be
+missing. Each chain is bounded by `POSITIONS_TIMEOUT_SECONDS`.
 
 ## Seeing what is archived
 

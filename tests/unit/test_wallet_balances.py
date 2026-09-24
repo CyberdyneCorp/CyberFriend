@@ -306,7 +306,7 @@ def test_a_key_registers_only_read_only_tools() -> None:
     assert tools.server_names == (WalletProvider.server, "defi_positions")
     assert {e.tool for e in tools.allowlist} == {
         "wallet_balances", "liquidity_positions", "lending_positions", "defi_positions",
-        "portfolio_summary",
+        "portfolio_summary", "wallet_activity",
     }
     for entry in tools.allowlist:
         assert entry.effect.mutates is False

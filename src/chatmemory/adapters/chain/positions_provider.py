@@ -8,7 +8,12 @@ Three tools rather than one with a "kind" argument. The route decides which
 kind a question is about and offers exactly one of them, so the model's only
 job is to copy the address -- it never chooses what gets read.
 
-A fourth, `portfolio_summary`, adds up everything: wallet balances, positions
+`wallet_activity` reads what a wallet did over a span of days (see
+`activity`): the same clearance, the span taken from the asker's cleared
+question rather than from any argument, and counterparties written out only
+when the asker alone reads the answer.
+
+A fifth, `portfolio_summary`, adds up everything: wallet balances, positions
 and the Aave net, per chain and per wallet. It lives here rather than beside
 wallet balances because it reads with these readers, sharing one node per
 chain with them; its clearance is the same, extended to the asker's few own
@@ -26,7 +31,9 @@ from typing import TYPE_CHECKING, TypeVar
 import httpx
 import structlog
 
-from chatmemory.adapters.chain.aave import AaveReader, ReserveCache
+from chatmemory.adapters.chain.aave import AaveReader, ReserveCache, WrapperCache
+from chatmemory.adapters.chain.activity_reader import ActivityReader
+from chatmemory.adapters.chain.activity_render import activity_language, render_activity
 from chatmemory.adapters.chain.clearance import (
     MAX_ADDRESSES,
     Cleared,
@@ -45,7 +52,9 @@ from chatmemory.adapters.chain.uniswap import UniswapReader
 from chatmemory.adapters.mcp_client.session import DiscoveredTool, ToolResult, ToolSession
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
 from chatmemory.app.authorization import ToolEffect
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.egress import DEFI_POSITIONS_PROVIDER
+from chatmemory.app.wallet_activity import activity_window
 
 log = structlog.get_logger()
 
@@ -53,7 +62,8 @@ LIQUIDITY_TOOL = "liquidity_positions"
 LENDING_TOOL = "lending_positions"
 ALL_POSITIONS_TOOL = "defi_positions"
 PORTFOLIO_TOOL = "portfolio_summary"
-TOOLS = (LIQUIDITY_TOOL, LENDING_TOOL, ALL_POSITIONS_TOOL, PORTFOLIO_TOOL)
+ACTIVITY_TOOL = "wallet_activity"
+TOOLS = (LIQUIDITY_TOOL, LENDING_TOOL, ALL_POSITIONS_TOOL, PORTFOLIO_TOOL, ACTIVITY_TOOL)
 
 DEFAULT_TIMEOUT = 25.0
 """Per chain; chains are read one after another. A wallet with a hundred
@@ -117,6 +127,18 @@ _DESCRIPTIONS = {
         "uncollected fees and the Aave net, per chain and per wallet, with a "
         "grand total in USD (net worth, patrimônio, quanto tenho no total)."
     ),
+    # The period words are here for the tool router, which ranks tools by the
+    # words they share with the question once more are registered than a run
+    # may see: "what did my wallet do this week" shares only "wallet" and
+    # "week" with anything, and without "week" this tool lost the tie.
+    ACTIVITY_TOOL: (
+        "Wallet activity: what a wallet did recently -- today, yesterday, this "
+        "week, this month or the last days -- on Ethereum, Base and Arbitrum: "
+        "swaps, Uniswap liquidity, Aave supplies and borrows, transfers in and "
+        "out, and gas paid (history, transactions, txs, done, o que a carteira "
+        "fez, transações, movimentações, histórico, hoje, ontem, semana, mês, "
+        "dias). The period is taken from the question."
+    ),
 }
 
 T = TypeVar("T")
@@ -146,11 +168,12 @@ class ChainPositions:
         node: Node,
         explorer: httpx.AsyncClient,
         reserves: ReserveCache | None = None,
+        wrappers: WrapperCache | None = None,
     ) -> None:
         self.node = node
         self.tokens = TokenDirectory(node)
         self.deployment = deployment
-        self.aave = AaveReader(node, deployment, self.tokens, reserves)
+        self.aave = AaveReader(node, deployment, self.tokens, reserves, wrappers)
         self.uniswap = UniswapReader(node, deployment, self.tokens, self.aave, explorer)
 
 
@@ -171,6 +194,7 @@ class PositionsProvider:
         endpoints: Mapping[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         prices: PriceLookup | None = None,
+        clock: Clock = utc_now,
     ) -> None:
         if not deployments:
             raise ValueError("a positions provider needs at least one chain to read")
@@ -185,6 +209,9 @@ class PositionsProvider:
         #: Ether's price when an Aave oracle does not answer; portfolio only.
         self._prices = prices
         self._reserves = ReserveCache()
+        self._wrappers = WrapperCache()
+        #: "This week" is resolved against this, for the activity tool only.
+        self._clock = clock
 
     @asynccontextmanager
     async def opened(self) -> AsyncIterator[ToolSession]:
@@ -208,6 +235,8 @@ class PositionsProvider:
             return refusal(self.server, name, "unknown_tool")
         if name == PORTFOLIO_TOOL:
             return await self._portfolio_call()
+        if name == ACTIVITY_TOOL:
+            return await self._activity_call()
         cleared = await clear_address(
             self.server, name, self._budget, self._limiter, per_tool_budget=True
         )
@@ -222,6 +251,14 @@ class PositionsProvider:
         if isinstance(cleared, ToolResult):
             return cleared
         return ToolResult(text=await self.portfolio(cleared))
+
+    async def _activity_call(self) -> ToolResult:
+        cleared = await clear_address(
+            self.server, ACTIVITY_TOOL, self._budget, self._limiter, per_tool_budget=True
+        )
+        if isinstance(cleared, ToolResult):
+            return cleared
+        return ToolResult(text=await self.activity(cleared))
 
     # --- reading -------------------------------------------------------
 
@@ -271,6 +308,32 @@ class PositionsProvider:
         )
         wallets = [await reader.read(address) for address in cleared.addresses]
         return render_portfolio(wallets, portfolio_language(cleared.question))
+
+    async def activity(self, cleared: Cleared) -> str:
+        """What the cleared wallet did. The span is the cleared question's."""
+        if self._client is not None:
+            return await self._activity(cleared, self._client)
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            return await self._activity(cleared, client)
+
+    async def _activity(self, cleared: Cleared, client: httpx.AsyncClient) -> str:
+        window = activity_window(cleared.question, self._clock())
+        chains = [
+            ChainPositions(d, self._node(d, client), client, self._reserves, self._wrappers)
+            for d in self._deployments
+        ]
+        reader = ActivityReader(
+            chains, client, timeout_seconds=self._timeout, redact=self._redact
+        )
+        found, known = await reader.read(cleared.address, window)
+        return render_activity(
+            cleared.address,
+            window,
+            found,
+            known,
+            activity_language(cleared.question),
+            private=cleared.private,
+        )
 
     def _redact(self, text: str) -> str:
         return text.replace(self._key, "***") if self._key else text

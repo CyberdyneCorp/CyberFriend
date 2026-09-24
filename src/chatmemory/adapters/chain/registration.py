@@ -179,8 +179,9 @@ def build_chain_tools(
             ),
             ServerConfig(
                 name=POSITIONS_SERVER,
-                # Blockscout is reached only to find v4 position IDs; every
-                # figure is read from the chain.
+                # Blockscout is reached to find v4 position IDs and to read a
+                # wallet's recent activity; every balance and position figure
+                # is read from the chain.
                 target=",".join(
                     [f"https://{d.chain.infura_host}.infura.io" for d in DEPLOYMENTS]
                     + [d.blockscout for d in DEPLOYMENTS]
@@ -211,7 +212,8 @@ def build_chain_tools(
                     server=POSITIONS_SERVER,
                     tool=tool,
                     # Public chain state and a public explorer; `collect` is
-                    # simulated with `eth_call` and never sent.
+                    # simulated with `eth_call` and never sent, and activity is
+                    # read from the explorer's index, never signed for.
                     credential=CredentialScope.NARROW_READ_ONLY,
                     effect=ToolEffect.READ_ONLY,
                     mutation_enabled=False,
