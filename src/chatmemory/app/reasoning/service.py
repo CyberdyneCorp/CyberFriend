@@ -85,6 +85,7 @@ from chatmemory.app.routing import (
     time_question,
 )
 from chatmemory.app.routing_crypto import CryptoQuery, CryptoRoute, crypto_route
+from chatmemory.domain.chain import is_address, named_by_suffix, suffix_list
 from chatmemory.ports.answers import Answer, Question
 
 log = structlog.get_logger()
@@ -181,6 +182,15 @@ An answer, not a search. No channel holds a live balance, so searching for one
 returns whatever a colleague once wrote about wallets and presents it as the
 asker's own -- which is the failure this whole route exists to stop.
 """
+
+WHICH_SAVED_WALLET = (
+    "You have several wallets saved, and this reads one. Which? Ask again with "
+    "its last four characters (like `what's my wallet balance …1a2b?`), or with "
+    "the address:"
+)
+"""Followed by the saved wallets' last characters. Asked rather than guessed:
+a balance read from the wrong one of somebody's wallets is a confident wrong
+answer about their money."""
 
 WALLET_UNAVAILABLE = (
     "I couldn't read that address just now - the chain endpoints didn't "
@@ -369,7 +379,16 @@ class ReasoningAnswerService:
         for one. The label's row decides what may be read.
         """
         handler = CHAIN_HANDLERS[query.route]
-        addresses = _lookup_addresses(question, query)
+        lookup = _lookup_addresses(question, query)
+        addresses = lookup.addresses
+        if lookup.choose_from:
+            log.info(
+                "reasoning.external_route", route="wallet_choose", label=str(query.route)
+            )
+            return (
+                _route(EXTERNAL_ROUTE, "wallet_choose"),
+                refusal(f"{WHICH_SAVED_WALLET}\n{suffix_list(lookup.choose_from)}"),
+            )
         if not addresses:
             log.info(
                 "reasoning.external_route", route="wallet_no_address", label=str(query.route)
@@ -413,35 +432,48 @@ def current_time_answer(language: Language, now: datetime | None = None) -> str:
     return f"It is **{stamp} UTC**."
 
 
-def _saved_wallet(question: Question) -> str | None:
-    """The asker's own Ethereum address, if they have told the assistant one.
+def _saved_wallets(question: Question) -> tuple[str, ...]:
+    """The asker's own Ethereum addresses, as many as they have told the assistant.
 
-    Only an address: `asker_values` may hold a Bitcoin wallet too, and this
+    Only addresses: `asker_values` may hold a Bitcoin wallet too, and this
     lookup reads Ethereum and Base. Sending a Bitcoin address to an EVM node
     would return a confident zero.
     """
-    from chatmemory.domain.chain import is_address
-
-    for value in sorted(question.asker_values):
-        if is_address(value):
-            return value
-    return None
+    return tuple(sorted(v for v in question.asker_values if is_address(v)))
 
 
-def _lookup_addresses(question: Question, query: CryptoQuery) -> tuple[str, ...]:
-    """Whose wallets to read: what was typed or carried, and the saved one.
+@dataclass(frozen=True, slots=True)
+class _Lookup:
+    """The wallets to read, or -- with several saved and none chosen -- the
+    saved ones to ask the asker to choose between."""
 
-    The saved wallet joins a portfolio question about the asker's own money
+    addresses: tuple[str, ...] = ()
+    choose_from: tuple[str, ...] = ()
+
+
+def _lookup_addresses(question: Question, query: CryptoQuery) -> _Lookup:
+    """Whose wallets to read: what was typed or carried, and the saved ones.
+
+    Every saved wallet joins a portfolio question about the asker's own money,
     even when they typed another address too -- "my portfolio with 0x..." is
-    both. Every other route uses it only when nothing was written: "what does
-    0x... hold" is about that address, not also about the asker's.
+    both, and a portfolio sums several. Every other route reads one wallet and
+    uses a saved one only when nothing was written: "what does 0x... hold" is
+    about that address, not also about the asker's. With several saved, that
+    route reads the one the question names by its last characters, and
+    otherwise asks which -- never silently the first.
     """
-    addresses = list(query.addresses)
-    wanted = query.mine and (query.route is CryptoRoute.PORTFOLIO or not addresses)
-    saved = _saved_wallet(question) if wanted else None
-    if saved is not None and saved.lower() not in {a.lower() for a in addresses}:
-        addresses.insert(0, saved)
-    return tuple(addresses)
+    typed = query.addresses
+    portfolio = query.route is CryptoRoute.PORTFOLIO
+    if not query.mine or (typed and not portfolio):
+        return _Lookup(typed)
+    saved = _saved_wallets(question)
+    if not portfolio and len(saved) > 1:
+        named = named_by_suffix(question.text, saved)
+        if len(named) != 1:
+            return _Lookup(choose_from=saved)
+        saved = named
+    lowered = {a.lower() for a in typed}
+    return _Lookup((*(w for w in saved if w.lower() not in lowered), *typed))
 
 
 def _spelled_out(question: Question, addresses: Sequence[str]) -> Question:

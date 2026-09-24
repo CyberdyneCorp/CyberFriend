@@ -24,7 +24,6 @@ from chatmemory.app.ask import fact_set_reply, facts_set_reply
 from chatmemory.app.asker import AskerFacts, _payload
 from chatmemory.app.facts import FactOutcome, FactResult
 from chatmemory.app.routing import (
-    WHERE_YOU_LIVE,
     FactAction,
     fact_intent,
     states_own_contact,
@@ -50,9 +49,11 @@ def test_the_production_introduction_is_every_fact_it_states() -> None:
         (FactKind.FULL_NAME, "Leonardo Araujo dos Santos"),
         (FactKind.PREFERRED_NAME, "Leo"),
         (FactKind.EMAIL, EMAIL),
+        # Where they live was once named as "not kept"; it is a home address now.
+        (FactKind.HOME_ADDRESS, "Brasi, Rio de Janeiro"),
         (FactKind.PHONE, PHONE),
     )
-    assert intent.not_kept == (WHERE_YOU_LIVE,)
+    assert intent.not_kept == ()
 
 
 async def test_an_introduction_is_saved_and_never_answered_or_remembered() -> None:
@@ -72,7 +73,8 @@ async def test_an_introduction_is_saved_and_never_answered_or_remembered() -> No
         assert shown in text
     # Answered in the language it was written in.
     assert text.startswith("Aqui está o que salvei:")
-    assert "Onde você mora: não guardo isso" in text
+    assert store.rows[(LEO, FactKind.HOME_ADDRESS)] == "Brasi, Rio de Janeiro"
+    assert "Endereço: **Brasi, Rio de Janeiro**" in text
 
 
 async def test_in_a_channel_contact_details_are_confirmed_without_their_values() -> None:

@@ -47,6 +47,7 @@ from chatmemory.app.alerts import (
 )
 from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.language import Language, detect
+from chatmemory.domain.chain import suffix_list
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.alerts import (
     CHAIN_NAMES,
@@ -86,6 +87,10 @@ _TEXT: dict[AlertLanguage, dict[str, str]] = {
         "no_address": (
             "Which wallet? Save yours with `my wallet is 0x…` or put the address in "
             "the request, and ask again."
+        ),
+        "which_wallet": (
+            "You have several wallets saved ({wallets}). Which one? Ask again with "
+            "its last four characters, or with the address."
         ),
         "need_limit": (
             "Below what health factor? For example: `alert me if my health factor "
@@ -186,6 +191,10 @@ _TEXT: dict[AlertLanguage, dict[str, str]] = {
         "no_address": (
             "Qual carteira? Salve a sua com `minha carteira é 0x…` ou coloque o "
             "endereço no pedido, e peça de novo."
+        ),
+        "which_wallet": (
+            "Você tem várias carteiras salvas ({wallets}). Qual delas? Peça de novo "
+            "com os quatro últimos caracteres dela, ou com o endereço."
         ),
         "need_limit": (
             "Abaixo de qual health factor? Por exemplo: `me avisa se o health factor "
@@ -447,14 +456,22 @@ class AlertRequests:
         person: PersonRef,
         intent: AlertIntent,
         *,
-        saved_wallet: str | None,
+        saved_wallets: Sequence[str] = (),
         language: AlertLanguage,
         direct: bool,
     ) -> AlertReply:
-        """What would be watched, or why nothing can be. Stores nothing."""
+        """What would be watched, or why nothing can be. Stores nothing.
+
+        `saved_wallets` are the asker's saved Ethereum addresses the request
+        may use. With several and none typed, the asker is asked which: an
+        alert on the wrong wallet is a standing watch nobody wanted.
+        """
         if intent.kind is AlertKind.PRICE:
             return await self._propose_price(person, intent, language)
-        address = intent.address or saved_wallet
+        address = intent.address or (saved_wallets[0] if len(saved_wallets) == 1 else None)
+        if address is None and saved_wallets:
+            wallets = suffix_list(tuple(saved_wallets))
+            return AlertReply(text("which_wallet", language, wallets=wallets))
         if address is None:
             return AlertReply(text("no_address", language))
         refused = _limit_refusal(intent, language)

@@ -16,6 +16,7 @@ from chatmemory.adapters.store import facts_sql
 from chatmemory.adapters.store.memory_postgres import _person_id
 from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.ports.facts import (
+    MULTI_VALUED_KINDS,
     FactKind,
     FactStore,
     PersonalFact,
@@ -39,8 +40,13 @@ class PostgresFactStore:
             # The same resolution memory uses, so a fact and a remembered turn
             # for one account land on one person -- and are purged together.
             person_id = await _person_id(conn, person)
+            statement = (
+                facts_sql.ADD_WALLET
+                if fact.kind in MULTI_VALUED_KINDS
+                else facts_sql.UPSERT_FACT
+            )
             result = await conn.execute(
-                facts_sql.UPSERT_FACT,
+                statement,
                 {"person_id": person_id, "kind": fact.kind.value, "value": fact.value},
             )
             return result.scalar() is not None
@@ -57,11 +63,15 @@ class PostgresFactStore:
             )
         return PersonalFacts(facts)
 
-    async def forget_fact(self, person: PersonRef, kind: FactKind) -> bool:
+    async def forget_fact(
+        self, person: PersonRef, kind: FactKind, value: str | None = None
+    ) -> bool:
+        params = {**_requester(person), "kind": kind.value}
+        statement = facts_sql.FORGET_FACT
+        if value is not None:
+            statement, params["value"] = facts_sql.FORGET_FACT_VALUE, value
         async with self._engine.begin() as conn:
-            result = await conn.execute(
-                facts_sql.FORGET_FACT, {**_requester(person), "kind": kind.value}
-            )
+            result = await conn.execute(statement, params)
         return bool(result.rowcount)
 
     async def forget_all_facts(self, person: PersonRef) -> int:

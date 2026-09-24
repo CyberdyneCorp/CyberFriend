@@ -334,14 +334,20 @@ class E2EBot:
         await EmbeddingWorker(store, self.embeddings, batch_size=len(windows) or 1).run_once()
 
     async def facts_of(self, who: discord.Member) -> dict[str, str]:
-        """The person's stored facts, by SQL."""
+        """The person's stored facts, by SQL: one value per kind (for a wallet
+        kind with several, any one of them -- use `fact_rows`)."""
+        return dict(await self.fact_rows(who))
+
+    async def fact_rows(self, who: discord.Member) -> list[tuple[str, str]]:
+        """Every stored (kind, value), in the order saved, by SQL."""
         async with self.engine.connect() as conn:
             rows = await conn.execute(
                 text(
                     "SELECT f.kind, f.value FROM person_fact f "
                     "JOIN person_platform_id p ON p.person_id = f.person_id "
-                    "WHERE p.platform = 'discord' AND p.platform_user_id = :user"
+                    "WHERE p.platform = 'discord' AND p.platform_user_id = :user "
+                    "ORDER BY f.id"
                 ),
                 {"user": who.id},
             )
-            return {kind: value for kind, value in rows}
+            return [(str(kind), str(value)) for kind, value in rows]

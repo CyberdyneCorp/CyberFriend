@@ -529,7 +529,7 @@ async def price_proposal(
 ) -> Any:
     requests, _ = flow(prices)
     return await requests.propose(
-        LEO, intent, saved_wallet=None, language=language, direct=False
+        LEO, intent, saved_wallets=(), language=language, direct=False
     )
 
 
@@ -589,13 +589,13 @@ async def test_without_a_price_source_price_alerts_are_unavailable() -> None:
 async def test_a_confirmed_price_alert_is_listed_with_its_level() -> None:
     requests, store = flow(Prices({"BTC": btc("97412.35")}))
     reply = await requests.propose(
-        LEO, price_intent(ABOVE), saved_wallet=None, language=EN, direct=True
+        LEO, price_intent(ABOVE), saved_wallets=(), language=EN, direct=True
     )
     done = await requests.confirm(reply.proposal)
 
     assert "• **1** — BTC above $100,000" in done
     again = await requests.propose(
-        LEO, price_intent(ABOVE), saved_wallet=None, language=EN, direct=True
+        LEO, price_intent(ABOVE), saved_wallets=(), language=EN, direct=True
     )
     assert again.proposal is None and again.text.startswith("I'm already watching")
     listing = alert_listing(store.rows, EN)
@@ -621,7 +621,7 @@ async def edge_proposal(edge: str, language: AlertLanguage = EN, store: Store | 
     requests, _ = flow(None, TargetsRead(lp=(arbitrum_candidate(),)), store)
     intent = AlertIntent(AlertKind.LP_RANGE, edge_percent=Decimal(edge))
     return await requests.propose(
-        LEO, intent, saved_wallet=SAVED, language=language, direct=True
+        LEO, intent, saved_wallets=(SAVED,), language=language, direct=True
     )
 
 
@@ -689,7 +689,7 @@ async def test_a_plain_range_request_is_covered_by_an_edge_warning() -> None:
     requests, _ = flow(None, TargetsRead(lp=(arbitrum_candidate(),)), store)
 
     reply = await requests.propose(
-        LEO, AlertIntent(AlertKind.LP_RANGE), saved_wallet=SAVED, language=EN, direct=True
+        LEO, AlertIntent(AlertKind.LP_RANGE), saved_wallets=(SAVED,), language=EN, direct=True
     )
 
     assert reply.proposal is None and reply.text.startswith("I'm already watching")
@@ -706,14 +706,16 @@ async def test_an_edge_warning_on_a_watched_position_is_offered_at_the_cap() -> 
 
     edge = AlertIntent(AlertKind.LP_RANGE, edge_percent=Decimal(3))
     reply = await at_cap(arbitrum_candidate()).propose(
-        LEO, edge, saved_wallet=SAVED, language=EN, direct=True
+        LEO, edge, saved_wallets=(SAVED,), language=EN, direct=True
     )
     assert reply.proposal is not None
     [alert] = reply.proposal.alerts
     assert alert.edge_percent == Decimal(3) and alert.lp == V4
 
     other = replace(arbitrum_candidate(), target=replace(V4, token_id=999))
-    refused = await at_cap(other).propose(LEO, edge, saved_wallet=SAVED, language=EN, direct=True)
+    refused = await at_cap(other).propose(
+        LEO, edge, saved_wallets=(SAVED,), language=EN, direct=True
+    )
     assert refused.proposal is None and refused.text.startswith("You already have 1 alerts")
 
 

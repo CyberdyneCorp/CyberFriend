@@ -175,7 +175,10 @@ async def propose(
     language: AlertLanguage = EN,
     direct: bool = True,
 ) -> Any:
-    return await flow.propose(LEO, intent, saved_wallet=saved, language=language, direct=direct)
+    wallets = () if saved is None else (saved,)
+    return await flow.propose(
+        LEO, intent, saved_wallets=wallets, language=language, direct=direct
+    )
 
 
 # --- the address ----------------------------------------------------------------
@@ -489,3 +492,53 @@ async def test_a_question_about_alerts_still_reaches_the_answers() -> None:
     await service.ask(in_dm("what did people say about alerts?"))
 
     assert [q.text for q in answers.seen] == ["what did people say about alerts?"]
+
+
+# --- several saved wallets --------------------------------------------------------
+
+
+async def test_several_saved_wallets_and_none_typed_asks_which_and_reads_nothing() -> None:
+    flow, _, chain = requests(TargetsRead(health=(debt(),)))
+
+    reply = await flow.propose(
+        LEO, health(), saved_wallets=(SAVED, TYPED), language=EN, direct=True
+    )
+
+    assert reply.proposal is None and chain.asked == []
+    assert reply.text.startswith("You have several wallets saved (`…63d6`, `…75e0`)")
+
+
+async def test_several_saved_wallets_ask_which_in_portuguese() -> None:
+    flow, _, _ = requests(TargetsRead(health=(debt(),)))
+
+    reply = await flow.propose(
+        LEO, health(), saved_wallets=(SAVED, TYPED), language=PT, direct=False
+    )
+
+    assert reply.text.startswith("Você tem várias carteiras salvas (`…63d6`, `…75e0`)")
+
+
+async def test_the_ask_path_asks_which_of_several_saved_wallets() -> None:
+    flow, _, chain = requests(TargetsRead(health=(debt(),)))
+    service, _ = _ask(flow)
+    await service.ask(in_dm(f"my wallet is {SAVED}"))
+    await service.ask(in_dm(f"my wallet is {TYPED}"))
+
+    outcome = await service.ask(in_dm("alert me if my health factor drops below 1.3"))
+
+    assert outcome.alert is None and chain.asked == []
+    assert "`…63d6`" in outcome.scoped.answer.text
+    assert "`…75e0`" in outcome.scoped.answer.text
+
+
+async def test_the_ask_path_uses_the_saved_wallet_named_by_its_last_characters() -> None:
+    flow, _, chain = requests(TargetsRead(health=(debt(),)))
+    service, _ = _ask(flow)
+    await service.ask(in_dm(f"my wallet is {SAVED}"))
+    await service.ask(in_dm(f"my wallet is {TYPED}"))
+
+    outcome = await service.ask(in_dm("alert me if my health factor drops below 1.3 on …75e0"))
+
+    assert outcome.alert is not None
+    assert chain.asked == [(TYPED, AlertKind.AAVE_HEALTH, None)]
+    assert outcome.alert.alerts[0].address_source is AddressSource.SAVED
