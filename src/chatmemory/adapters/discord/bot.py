@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from itertools import zip_longest
 from typing import Any, Protocol
@@ -63,6 +64,11 @@ from chatmemory.adapters.discord.formatting import (
     sanitize_answer,
     split_message,
 )
+from chatmemory.adapters.discord.schedule_replies import (
+    created_message,
+    schedule_listing,
+)
+from chatmemory.adapters.discord.schedule_replies import text as schedule_text
 from chatmemory.adapters.discord.views import RequesterOnlyView
 from chatmemory.app.alert_requests import AlertProposal, AlertRequests
 from chatmemory.app.ask import (
@@ -94,7 +100,7 @@ from chatmemory.app.indexing import (
 from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
-from chatmemory.app.schedules import CreateRefusal, CreateResult, ScheduleService
+from chatmemory.app.schedules import ScheduleService
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Citation
 from chatmemory.ports.notifications import (
@@ -105,8 +111,6 @@ from chatmemory.ports.notifications import (
 from chatmemory.ports.schedules import (
     MAX_INTERVAL_HOURS,
     MIN_INTERVAL_HOURS,
-    ScheduledTask,
-    TaskOutcome,
 )
 
 UNPLACEABLE_INTERACTION = (
@@ -178,86 +182,12 @@ FORGET_EVERYWHERE = "everywhere"
 
 MEMORY_UNAVAILABLE = "I don't keep conversation history here, so there's nothing to forget."
 
-SCHEDULE_DELETED = "Stopped. I won't ask that again."
-
-SCHEDULE_NOT_YOURS = (
-    "I don't have a scheduled task with that number for you. "
-    "`/schedule list` shows yours."
-)
-"""Said both when the task is somebody else's and when it does not exist.
-
-Two sentences would make this command a way to learn which task numbers are
-real, which is the same disclosure `/channels` refuses to make about
-channels."""
-
-
-def _created_message(result: CreateResult) -> str:
-    if result.task is not None:
-        task = result.task
-        return (
-            f"Done. I'll ask that every **{task.interval_hours}h**, "
-            f"starting {discord.utils.format_dt(task.next_run_at, 'R')}.\n"
-            "I'll only message you when I find something, so silence means "
-            "nothing new. `/schedule list` shows when each one last ran."
-        )
-    if result.refusal is CreateRefusal.INTERVAL_OUT_OF_RANGE:
-        return (
-            f"I can ask between every **{MIN_INTERVAL_HOURS}h** and every "
-            f"**{MAX_INTERVAL_HOURS}h**."
-        )
-    if result.refusal is CreateRefusal.EMPTY_QUESTION:
-        return "Tell me what to ask."
-    return (
-        "You've reached the number of scheduled questions I can keep for one "
-        "person. Delete one with `/schedule delete` first."
-    )
-
-
-def _schedule_listing(tasks: Sequence[ScheduledTask]) -> str:
-    if not tasks:
-        return (
-            "You have no scheduled questions. `/schedule create` sets one up.\n"
-            "I'll only message you when there's something to say."
-        )
-    lines = [f"**Your scheduled questions ({len(tasks)}):**"]
-    for task in tasks:
-        lines.append(f"**{task.id}** - every {task.interval_hours}h - {task.question}")
-        lines.append(f"  {_task_state(task)}")
-    return "\n".join(lines)
-
-
-def _task_state(task: ScheduledTask) -> str:
-    """When it last ran and what happened, so silence is legible.
-
-    The whole reason this exists: a task that has run eleven times and found
-    nothing is working, and without this it is indistinguishable from one that
-    stopped running in March.
-    """
-    if not task.active:
-        return f"stopped - {task.disabled_reason or 'disabled'}"
-    if task.last_run_at is None:
-        return f"not run yet - first {discord.utils.format_dt(task.next_run_at, 'R')}"
-    when = discord.utils.format_dt(task.last_run_at, "R")
-    outcome = {
-        TaskOutcome.REPORTED: "found something and messaged you",
-        TaskOutcome.NOTHING: "found nothing",
-        TaskOutcome.FAILED: "failed",
-        TaskOutcome.CLOSED: "couldn't reach your direct messages",
-    }.get(task.last_outcome or TaskOutcome.NOTHING, "ran")
-    return f"last ran {when}, {outcome} - next {discord.utils.format_dt(task.next_run_at, 'R')}"
-
-
 SCHEDULED_PREFIX = "⏰ **Scheduled**"
 """Marks an answer nobody just asked for.
 
 Without it a direct message arriving at 3am reads as the assistant volunteering
 something, which is the one thing this project is careful never to do
 unannounced."""
-
-SCHEDULES_UNAVAILABLE = (
-    "I can't manage scheduled tasks here - the feature isn't switched on for "
-    "this deployment."
-)
 
 CHANNELS_UNAVAILABLE = (
     "I can't list archived channels here - indexing isn't wired up on this "
@@ -406,6 +336,9 @@ CAPABILITIES_PT = (
 mention has no words to detect a language from, so the saved preference is
 the only signal."""
 
+
+_CHANNEL_NAME = re.compile(r"(?<![<\w&])#([\w-]{1,100})")
+"""A channel typed by name. Not `<#123>` (already a link) and not `&#39;`."""
 
 PROGRESS_AFTER_SECONDS = 8.0
 """How long an answer may take before the asker is told it is still coming.
@@ -1181,14 +1114,19 @@ class CyberFriendClient(discord.Client):
             interaction: discord.Interaction, question: str, every_hours: int
         ) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
+            language = await self._caller_language(interaction, question)
             if self._schedules is None:
-                await interaction.followup.send(SCHEDULES_UNAVAILABLE, ephemeral=True)
+                await interaction.followup.send(
+                    schedule_text("unavailable", language), ephemeral=True
+                )
                 return
+            # Stored with channel links, so the run tomorrow names a channel
+            # rather than a word: a typed "#general" is text, not a link.
             result = await self._schedules.create(
-                _person(interaction.user), question, every_hours
+                _person(interaction.user), self.link_channel_names(question), every_hours
             )
             await interaction.followup.send(
-                _created_message(result),
+                created_message(result, language),
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -1196,12 +1134,15 @@ class CyberFriendClient(discord.Client):
         @group.command(name="list", description="Show the questions I ask for you")
         async def listing(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
+            language = await self._caller_language(interaction)
             if self._schedules is None:
-                await interaction.followup.send(SCHEDULES_UNAVAILABLE, ephemeral=True)
+                await interaction.followup.send(
+                    schedule_text("unavailable", language), ephemeral=True
+                )
                 return
             tasks = await self._schedules.list_for(_person(interaction.user))
             await interaction.followup.send(
-                _schedule_listing(tasks),
+                schedule_listing(tasks, language),
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -1210,14 +1151,17 @@ class CyberFriendClient(discord.Client):
         @app_commands.describe(task="The number shown by `/schedule list`")
         async def delete(interaction: discord.Interaction, task: int) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
+            language = await self._caller_language(interaction)
             if self._schedules is None:
-                await interaction.followup.send(SCHEDULES_UNAVAILABLE, ephemeral=True)
+                await interaction.followup.send(
+                    schedule_text("unavailable", language), ephemeral=True
+                )
                 return
             deleted = await self._schedules.delete(_person(interaction.user), task)
             # The same sentence either way. "That is not yours" and "there is
             # no such task" would let somebody learn which numbers exist.
             await interaction.followup.send(
-                SCHEDULE_DELETED if deleted else SCHEDULE_NOT_YOURS, ephemeral=True
+                schedule_text("deleted" if deleted else "not_yours", language), ephemeral=True
             )
 
         return group
@@ -1497,7 +1441,7 @@ class CyberFriendClient(discord.Client):
             outcome = await self._asks.ask(
                 AskRequest(
                     asker=_person(interaction.user),
-                    text=question,
+                    text=self.link_channel_names(question),
                     destination=destination,
                     location_id=interaction.channel_id or interaction.user.id,
                 ),
@@ -1554,7 +1498,7 @@ class CyberFriendClient(discord.Client):
         asking = self._asks.ask(
             AskRequest(
                 asker=_person(message.author),
-                text=text,
+                text=self.link_channel_names(text),
                 destination=destination,
                 location_id=message.channel.id,
             ),
@@ -1613,6 +1557,42 @@ class CyberFriendClient(discord.Client):
             with contextlib.suppress(discord.HTTPException):
                 await note.delete()
         return outcome
+
+    def link_channel_names(self, text: str) -> str:
+        """`#general` typed as text, turned into the channel link Discord sends
+        when it is picked from the list.
+
+        In a DM Discord cannot make a channel link at all, so "o que eu perdi
+        no #general?" arrived as a word and catch-up refused to guess. A name
+        is linked only when exactly one text channel in the server has it.
+        Linking grants nothing: catch-up still finds the channel only among
+        the ones the asker may read, and refuses the rest in one sentence.
+        """
+        guild = self.get_guild(self._guild_id)
+        if guild is None or "#" not in text:
+            return text
+        by_name: dict[str, list[int]] = {}
+        for channel in guild.text_channels:
+            by_name.setdefault(channel.name.casefold(), []).append(channel.id)
+
+        def link(match: re.Match[str]) -> str:
+            ids = by_name.get(match.group(1).casefold(), [])
+            return f"<#{ids[0]}>" if len(ids) == 1 else match.group(0)
+
+        return _CHANNEL_NAME.sub(link, text)
+
+    async def _caller_language(
+        self, interaction: discord.Interaction, text: str = ""
+    ) -> Language:
+        """The question's language, else the saved preference, else the client's."""
+        detected = detect(text) if text else Language.UNKNOWN
+        if detected.known:
+            return detected
+        saved = await self._asks.reply_language(_person(interaction.user))
+        if saved.known:
+            return saved
+        client = locale_language(interaction.locale)
+        return Language.PORTUGUESE if client == "pt" else Language.ENGLISH
 
     def user_mentioned(self, message: discord.Message) -> bool:
         return self.user is not None and self.user in message.mentions

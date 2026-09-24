@@ -107,9 +107,12 @@ class ScheduleService:
         task = await self._store.create(person, question.strip(), interval_hours, first)
         if task is None:
             # The store refuses both at the cap and for a person it has never
-            # seen, and the two are distinguishable there but not worth
-            # distinguishing here: both mean "no task was made".
-            return CreateResult(refusal=CreateRefusal.AT_CAP)
+            # seen. Told apart here because the reply differs: "you have too
+            # many" was once said to somebody with none. Somebody refused with
+            # no tasks at all cannot be at the cap.
+            existing = await self._store.for_person(person)
+            refusal = CreateRefusal.AT_CAP if existing else CreateRefusal.UNKNOWN_PERSON
+            return CreateResult(refusal=refusal)
         return CreateResult(task=task)
 
     async def list_for(self, person: PersonRef) -> Sequence[ScheduledTask]:
