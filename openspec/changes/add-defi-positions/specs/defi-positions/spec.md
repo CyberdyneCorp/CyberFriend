@@ -36,7 +36,7 @@ uncollected fees.
 
 #### Scenario: A v4 position the explorer has not indexed yet
 - WHEN the chain reports more v4 positions than the explorer returns
-- THEN recent blocks SHALL be searched for transfers to the address
+- THEN the chain's history SHALL be searched for the block each missing position arrived in
 - AND each position found SHALL still be confirmed on-chain before it is listed
 
 #### Scenario: A v4 position the chain does not confirm

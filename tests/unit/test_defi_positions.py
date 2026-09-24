@@ -369,12 +369,16 @@ class FakeNode:
         answer: Callable[[str, str], bytes | None],
         transfers_in: dict[int, list[int]] | None = None,
         head: int = 100_000,
+        unreadable_before: int = 0,
     ) -> None:
         self._answer = answer
         #: block -> token IDs transferred to the owner in that block
         self._transfers = transfers_in or {}
         self._head = head
+        #: Archive state before this block raises, as pre-Nitro Arbitrum does.
+        self._unreadable_before = unreadable_before
         self.log_ranges: list[tuple[int, int]] = []
+        self.history_reads = 0
 
     async def block_number(self) -> int:
         return self._head
@@ -394,7 +398,16 @@ class FakeNode:
     def redact(self, text: str) -> str:
         return text
 
-    async def eth_call(self, target: str, data: str, *, sender: str | None = None) -> bytes:
+    async def eth_call(
+        self, target: str, data: str, *, sender: str | None = None, block: int | None = None
+    ) -> bytes:
+        if block is not None and data.startswith(abi.BALANCE_OF):
+            # The owner's balance then: every transfer in up to that block.
+            self.history_reads += 1
+            if block < self._unreadable_before:
+                raise NodeError("error creating execution cursor")
+            held = sum(len(t) for b, t in self._transfers.items() if b <= block)
+            return _word(held)
         result = self._answer(target.lower(), data)
         if result is None:
             raise NodeError("reverted")
@@ -477,7 +490,7 @@ async def test_a_v4_position_the_chain_does_not_confirm_is_dropped() -> None:
     assert position.usd0 == 2000  # native ETH priced as WETH by the oracle
 
 
-async def test_a_position_the_explorer_has_not_indexed_is_found_in_recent_blocks() -> None:
+async def test_a_position_the_explorer_has_not_indexed_is_found_by_its_arrival_block() -> None:
     """Regression, from production: a v4 position minted twenty minutes before
     the question was missing from Blockscout on Arbitrum, and the answer said
     "1 Uniswap v4 position(s) could not be listed"."""
@@ -486,8 +499,32 @@ async def test_a_position_the_explorer_has_not_indexed_is_found_in_recent_blocks
 
     assert [p.token_id for p in result.positions] == [1]
     assert result.notes == ()
-    # Newest first, in windows Infura accepts, stopping once found.
-    assert node.log_ranges == [(90_001, 100_000), (80_001, 90_000)]
+    # One log read, of the one block the position arrived in.
+    assert node.log_ranges == [(85_000, 85_000)]
+
+
+async def test_an_old_position_the_explorer_never_indexed_is_still_found() -> None:
+    """Regression, from production: a day-old v4 position on Arbitrum was out
+    of reach of the recent-blocks scan (24 windows, ~17 hours there) and
+    Blockscout never indexed it. The history search has no age limit."""
+    node = FakeNode(
+        _v4_chain(BASE_DEPLOYMENT), transfers_in={1_000: [1]}, head=500_000_000
+    )
+    result = await _reader(node, _explorer([])).liquidity(OWNER)
+
+    assert [p.token_id for p in result.positions] == [1]
+    assert node.history_reads <= 32, "a binary search, not a scan"
+
+
+async def test_state_older_than_the_chain_serves_counts_as_empty() -> None:
+    """Arbitrum refuses pre-Nitro state; before v4 existed, the balance was 0."""
+    node = FakeNode(
+        _v4_chain(BASE_DEPLOYMENT), transfers_in={400_000: [1]}, head=500_000,
+        unreadable_before=300_000,
+    )
+    result = await _reader(node, _explorer(None)).liquidity(OWNER)
+
+    assert [p.token_id for p in result.positions] == [1]
 
 
 async def test_a_recent_transfer_the_chain_does_not_confirm_is_dropped() -> None:

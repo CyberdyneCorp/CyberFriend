@@ -25,7 +25,7 @@ from chatmemory.adapters.chain.liquidity_math import (
     price_from_sqrt,
     whole,
 )
-from chatmemory.adapters.chain.node import Call, Node
+from chatmemory.adapters.chain.node import Call, Node, NodeError
 from chatmemory.adapters.chain.positions import (
     ChainLiquidity,
     LiquidityPosition,
@@ -41,16 +41,11 @@ a bot, and the answer says the list was cut rather than pretending it is all."""
 
 EXPLORER_PAGES = 4
 
-LOG_WINDOW = 10_000
-"""Blocks per `eth_getLogs`: Infura's limit."""
+MAX_ARRIVALS = 5
+"""v4 positions the explorer missed that are looked for on-chain, per lookup.
 
-RECENT_LOG_WINDOWS = 24
-"""How far back to look for v4 positions the explorer has not indexed yet.
-
-The explorer lags: a position minted twenty minutes before the question was
-missing from Blockscout on Arbitrum. 24 windows is ~17 hours on Arbitrum,
-~5.5 days on Base, ~33 days on Ethereum -- and the scan stops as soon as it
-has found as many as the chain says exist."""
+Each costs a binary search over the chain's history (about 30 archive
+`eth_call`s) and one single-block `eth_getLogs`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,10 +189,11 @@ class UniswapReader:
             return []
         ids = await self._owned(manager, owner, await self._v4_ids(owner) or [])
         if len(ids) < count:
-            # The explorer is behind, down, or both: look for recent mints and
-            # transfers in directly, and still confirm each on-chain.
-            recent = await self._recent_transfers_in(owner, set(ids), count - len(ids))
-            ids += await self._owned(manager, owner, recent)
+            # The explorer is behind, down, or does not index this manager at
+            # all (Arbitrum returned nothing for a day-old position). Find
+            # where each missing position arrived, and still confirm it.
+            arrived = await self._arrivals(owner, set(ids), count)
+            ids += await self._owned(manager, owner, arrived)
         if len(ids) < count:
             notes.append(f"{count - len(ids)} Uniswap v4 position(s) could not be listed")
         return await self._v4_positions(ids)
@@ -215,21 +211,68 @@ class UniswapReader:
             if r and abi.as_address(abi.words(r)[0]) == me
         ]
 
-    async def _recent_transfers_in(self, owner: str, known: set[int], missing: int) -> list[int]:
-        """Token IDs transferred to `owner` in recent blocks, newest first."""
+    async def _arrivals(self, owner: str, known: set[int], count: int) -> list[int]:
+        """Token IDs of v4 positions that arrived at `owner`, found by history.
+
+        A recent-blocks log scan was the fallback before this, and on Arbitrum
+        (four blocks a second) it covered about 17 hours: a position a day old
+        was reported as "could not be listed" although the chain held it.
+
+        Instead: the owner's balance is binary-searched over archive state for
+        the last block where it was below `count`; the position arrived in the
+        next block, whose `Transfer` log names it. Then one lower, for the next.
+        """
+        manager = self._d.v4_position_manager
         topics: list[str | None] = [abi.TRANSFER_TOPIC, None, "0x" + abi.address(owner)]
         found: list[int] = []
         high = await self._node.block_number()
-        for _ in range(RECENT_LOG_WINDOWS):
-            low = max(0, high - LOG_WINDOW + 1)
-            for entry in await self._node.logs(self._d.v4_position_manager, topics, low, high):
+        target = count
+        for _ in range(min(MAX_ARRIVALS, count - len(known))):
+            below = await self._last_block_below(owner, target, high)
+            if below is None:
+                break
+            for entry in await self._node.logs(manager, topics, below + 1, below + 1):
                 token = _token_id(entry)
                 if token is not None and token not in known and token not in found:
                     found.append(token)
-            if len(found) >= missing or low == 0:
-                break
-            high = low - 1
+            target, high = target - 1, below
         return found
+
+    async def _last_block_below(self, owner: str, target: int, high: int) -> int | None:
+        """The last block at or before `high` where `owner` held fewer than `target`."""
+        if await self._balance_at(owner, high) < target:
+            return high
+        low = 0
+        if await self._balance_at(owner, low) >= target:
+            return None
+        # Invariant: balance(low) < target <= balance(high).
+        while high - low > 1:
+            middle = (low + high) // 2
+            if await self._balance_at(owner, middle) >= target:
+                high = middle
+            else:
+                low = middle
+        return low
+
+    async def _balance_at(self, owner: str, block: int) -> int:
+        """The balance then, or 0 where that state cannot be read.
+
+        Arbitrum refuses state from before its 2022 upgrade ("error creating
+        execution cursor"), long before v4 existed, so 0 is the true answer
+        there. A transient failure read as 0 can only make the search miss a
+        position (reported as not listed), never invent one: every candidate
+        is still confirmed with `ownerOf`.
+        """
+        try:
+            raw = await self._node.eth_call(
+                self._d.v4_position_manager,
+                abi.call(abi.BALANCE_OF, abi.address(owner)),
+                block=block,
+            )
+        except NodeError:
+            return 0
+        values = abi.words(raw)
+        return values[0] if values else 0
 
     async def _v4_ids(self, owner: str) -> list[int] | None:
         """Candidate token IDs from the explorer, or None if it failed."""

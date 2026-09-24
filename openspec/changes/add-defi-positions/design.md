@@ -16,9 +16,10 @@ outage is reported as "N v4 positions could not be listed", not as none.
 
 The explorer lags. A position minted twenty minutes before the question was
 missing from Blockscout on Arbitrum. So when the chain's `balanceOf` exceeds
-what the explorer confirmed, recent blocks are searched with `eth_getLogs` for
-`Transfer` events to the owner, newest first, in 10,000-block windows (up to
-24), stopping as soon as the count is met. Every ID found there is confirmed
+what the explorer confirmed, the owner's balance is binary-searched over
+archive state for the block each missing position arrived in, and that one
+block's `Transfer` log names it. A recent-blocks scan did this first and
+reached only about 17 hours back on Arbitrum. Every ID found there is confirmed
 with `ownerOf` like the explorer's.
 
 **Aave v3.** The pool addresses provider is the one hard-coded address per

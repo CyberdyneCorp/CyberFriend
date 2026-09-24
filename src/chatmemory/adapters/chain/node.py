@@ -66,13 +66,17 @@ class Node:
         """The endpoint URL carries the key; keep it out of every message."""
         return text.replace(self._secret, "***") if self._secret else text
 
-    async def eth_call(self, target: str, data: str, *, sender: str | None = None) -> bytes:
+    async def eth_call(
+        self, target: str, data: str, *, sender: str | None = None, block: int | None = None
+    ) -> bytes:
+        """`block` reads state as it was then; Infura serves archive state."""
         params: dict[str, str] = {"to": target, "data": data}
         if sender is not None:
             # Only to *simulate* as the owner (v3 `collect`); an `eth_call`
             # changes no state whoever it claims to be from.
             params["from"] = sender
-        result = await self._rpc("eth_call", [params, "latest"])
+        at = "latest" if block is None else hex(block)
+        result = await self._rpc("eth_call", [params, at])
         return abi.to_bytes(str(result))
 
     async def block_number(self) -> int:
