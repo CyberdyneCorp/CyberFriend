@@ -330,10 +330,12 @@ the asker's own last three questions, if one named an address.
 - **Uniswap v4**'s position manager cannot list an owner's tokens, and Infura
   limits `eth_getLogs` to 10,000 blocks. The token IDs come from Blockscout's
   public API (no key), and each is then confirmed with `ownerOf` on-chain. The
-  explorer is trusted for nothing else. It also lags: when the chain reports
-  more v4 positions than it returns, recent blocks are searched directly with
-  `eth_getLogs` (newest first, up to 24 windows of 10,000 blocks), and each
-  hit is confirmed with `ownerOf` too. Only what neither finds is reported as
+  explorer is trusted for nothing else. It also lags, and on Arbitrum it
+  did not index a v4 position at all: when the chain reports more v4
+  positions than it returns, the owner's `balanceOf` is binary-searched over
+  archive state for the block each missing position arrived in (about 30
+  `eth_call`s), that one block's `Transfer` log names it, and it is confirmed
+  with `ownerOf` too. There is no age limit. Only what neither finds is reported as
   "could not be listed".
 - **Aave v3** contracts are resolved from each chain's addresses provider, so
   an Aave upgrade is followed automatically.
