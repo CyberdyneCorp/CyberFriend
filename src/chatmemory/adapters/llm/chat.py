@@ -226,7 +226,10 @@ class OpenAICompatibleChat:
             )
         prompt_tokens, completion_tokens = self._usage(response)
         return JsonCompletion(
-            data=parsed, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+            data=parsed,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            model=self._model,
         )
 
     async def complete_text(self, system: str, user: str) -> TextCompletion:
@@ -236,6 +239,7 @@ class OpenAICompatibleChat:
             text=self._content(response),
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            model=self._model,
         )
 
     async def complete_with_tools(
@@ -269,6 +273,7 @@ class OpenAICompatibleChat:
                 text=answer.text,
                 prompt_tokens=answer.prompt_tokens,
                 completion_tokens=answer.completion_tokens,
+                model=answer.model,
             )
 
         offered = wire_names([tool.name for tool in tools])
@@ -286,6 +291,7 @@ class OpenAICompatibleChat:
             call=self._tool_call(response, offered),
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            model=self._model,
         )
 
     def _tool_param(self, wire: str, tool: ToolDefinition) -> ChatCompletionToolParam:

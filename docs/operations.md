@@ -305,6 +305,18 @@ Each trace is:
   run asked to call (names only, never arguments);
 - **in the environment** `LANGFUSE_ENVIRONMENT`.
 
+In the same ingestion request as the trace (no extra round-trip on the answer
+path), each run also sends:
+
+- **one generation per model call** (`generation-create`), named by its stage
+  (`plan`, `sufficiency`, `federation_call`, `synthesis`) with the model and
+  its input and output tokens. Langfuse computes the estimated cost from its
+  model price table (see "Model prices" below);
+- **one span per federated tool call** (`span-create`), named by the tool's
+  qualified name, with its outcome (`invoked`, `not_invoked`, `call_failed`;
+  anything but `invoked` is level `ERROR`) and latency. **Tool arguments are
+  never exported**: they can hold a wallet address or a query.
+
 Every read and delete this application makes against Langfuse is scoped by
 that environment and by our tag: a trace named by a feature is only ours if it
 also carries `app:cyberfriend`, and only the legacy `fixed` / `loop` names,
@@ -387,6 +399,30 @@ curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
 
 The bot logs `composition.tracing enabled=true` at startup when a destination
 is configured, and `reasoning.trace_failed` when an export is dropped.
+
+### Model prices
+
+Langfuse prices `gpt-4o`, `gpt-4o-mini` and `text-embedding-3-small` itself.
+For the models it does not know -- the self-hosted AminiLLM models (`chat-v1`,
+`vision-v1`, `embed-v1`) and `gpt-4o-mini-transcribe` -- prices live in the
+checked-in table `scripts/langfuse_model_prices.json` (USD per million
+tokens, reviewed like code). AminiLLM is on-prem and is listed at zero, so its
+calls are matched and counted without inventing a cost.
+
+Applying the table is a manual ops step, not run at startup. It is idempotent:
+a second run reports every model `unchanged`. A changed price deletes our
+definition for that model and creates a new one; models Langfuse manages
+itself are never touched.
+
+```bash
+LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
+  uv run python scripts/langfuse_models.py --dry-run   # report only
+LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
+  uv run python scripts/langfuse_models.py
+```
+
+Run it after changing the table or pointing the chat model at a new name.
+Costs are estimates from these tables, not a bill.
 
 ### Langfuse version: stay on v3
 

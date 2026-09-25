@@ -1,0 +1,29 @@
+{
+  "_comment": "Prices for models Langfuse does not ship a price for. USD per 1M tokens. Reviewed like code; apply with scripts/langfuse_models.py (docs/operations.md). gpt-4o, gpt-4o-mini and text-embedding-3-small are priced by Langfuse itself and are not listed. AminiLLM is self-hosted: its calls cost no per-token bill, so it is listed at zero to be matched (and counted) rather than left unpriced.",
+  "models": [
+    {
+      "model_name": "chat-v1",
+      "match_pattern": "(?i)^(chat-v1)$",
+      "input_per_million": 0.0,
+      "output_per_million": 0.0
+    },
+    {
+      "model_name": "vision-v1",
+      "match_pattern": "(?i)^(vision-v1)$",
+      "input_per_million": 0.0,
+      "output_per_million": 0.0
+    },
+    {
+      "model_name": "embed-v1",
+      "match_pattern": "(?i)^(embed-v1)$",
+      "input_per_million": 0.0,
+      "output_per_million": 0.0
+    },
+    {
+      "model_name": "gpt-4o-mini-transcribe",
+      "match_pattern": "(?i)^(openai/)?(gpt-4o-mini-transcribe)$",
+      "input_per_million": 3.0,
+      "output_per_million": 5.0
+    }
+  ]
+}

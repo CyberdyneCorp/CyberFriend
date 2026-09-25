@@ -80,6 +80,10 @@ def _relevant(prompt: str) -> list[tuple[int, str]]:
     ]
 
 
+MODEL = "e2e-chat"
+"""The model name the scripted chat answers as."""
+
+
 class ScriptedChat:
     """A `ToolCapableChat` whose every answer is derived from its prompt.
 
@@ -118,20 +122,28 @@ class ScriptedChat:
         self, system: str, user: str, schema: Mapping[str, object], schema_name: str
     ) -> JsonCompletion:
         self.calls.append((schema_name, user))
+        data = self._json(schema_name, user)
+        # Named and metered like the real adapter, so a trace carries usage.
+        return JsonCompletion(
+            data,
+            prompt_tokens=len(system + user) // 4,
+            completion_tokens=len(str(data)) // 4,
+            model=MODEL,
+        )
+
+    def _json(self, schema_name: str, user: str) -> dict[str, object]:
         if schema_name == "evidence_verdict":
             verdict = "sufficient" if _relevant(user) else "irrelevant"
-            return JsonCompletion({"verdict": verdict, "score": 0.9, "suggested_query": None})
+            return {"verdict": verdict, "score": 0.9, "suggested_query": None}
         if schema_name == "question_plan":
-            return JsonCompletion({"sub_questions": [_question(user)]})
+            return {"sub_questions": [_question(user)]}
         if schema_name == "grounded_answer":
-            return JsonCompletion(self._grounded(user))
+            return self._grounded(user)
         if schema_name == ASK_EXTRACTION:
-            return JsonCompletion(
-                {
-                    "asks": self._extracted(user, self._asks),
-                    "decisions": self._extracted(user, self._decisions),
-                }
-            )
+            return {
+                "asks": self._extracted(user, self._asks),
+                "decisions": self._extracted(user, self._decisions),
+            }
         raise UnscriptedCall(f"no script for schema {schema_name!r}")
 
     @staticmethod

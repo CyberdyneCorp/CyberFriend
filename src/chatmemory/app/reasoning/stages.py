@@ -417,6 +417,8 @@ class ModelCritic:
             score=_as_score(completion.data, "score"),
             model_calls=1,
             prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            model=completion.model,
             suggested_query=suggestion or None,
         )
 
@@ -447,6 +449,8 @@ class ModelPlanner:
             sub_questions=sub_questions[:max_steps],
             model_calls=1,
             prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            model=completion.model,
         )
 
 
@@ -479,6 +483,8 @@ class ModelSynthesizer:
             ),
             model_calls=1,
             prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            model=completion.model,
         )
 
 

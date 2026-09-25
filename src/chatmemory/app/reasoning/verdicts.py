@@ -51,6 +51,8 @@ class Assessment:
     model_calls: int = 0
     prompt_tokens: int = 0
     suggested_query: str | None = None
+    completion_tokens: int = 0
+    model: str = ""
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.score <= 1.0:

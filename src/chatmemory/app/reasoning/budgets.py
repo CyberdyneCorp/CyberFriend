@@ -17,6 +17,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 
 # Each attempt costs at most one retrieval, one evaluation and one synthesis
@@ -53,6 +54,41 @@ class Budget:
         return self.max_attempts * FRAMES_PER_ATTEMPT + RECURSION_MARGIN
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelUsage:
+    """One model call: which stage asked, which model answered, what it cost.
+
+    Carried so a trace can hold one generation per call, from which the trace
+    store prices the run. Counts and names only -- never a prompt or a reply.
+    """
+
+    stage: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    started_at: datetime
+    ended_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ToolUsage:
+    """One federated tool call: its name, how it ended and how long it took.
+
+    Deliberately without arguments: they can hold a wallet address or a
+    query, and nothing downstream of the run needs them.
+    """
+
+    name: str
+    outcome: str
+    failed: bool
+    started_at: datetime
+    ended_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class Spend:
     """What a run consumed. Reported on every outcome, including failures."""
@@ -62,22 +98,35 @@ class Spend:
     tool_calls: int = 0
     prompt_tokens: int = 0
     elapsed_seconds: float = 0.0
+    completion_tokens: int = 0
+    models: tuple[ModelUsage, ...] = ()
+    tools: tuple[ToolUsage, ...] = ()
 
 
 class BudgetLedger:
     """Mutable spend against a fixed budget, owned by the driver.
 
-    The clock is injected so a wall-clock test does not have to sleep.
+    The clock is injected so a wall-clock test does not have to sleep. The
+    wall clock only stamps usage records; limits run on the monotonic one.
     """
 
-    def __init__(self, budget: Budget, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        budget: Budget,
+        clock: Callable[[], float] = time.monotonic,
+        wall: Callable[[], datetime] = utc_now,
+    ) -> None:
         self._budget = budget
         self._clock = clock
+        self._wall = wall
         self._started = clock()
         self._attempts = 0
         self._model_calls = 0
         self._tool_calls = 0
         self._prompt_tokens = 0
+        self._completion_tokens = 0
+        self._models: list[ModelUsage] = []
+        self._tools: list[ToolUsage] = []
 
     @property
     def budget(self) -> Budget:
@@ -117,12 +166,58 @@ class BudgetLedger:
         self._attempts += 1
         return None
 
-    def charge_model_call(self, prompt_tokens: int = 0, calls: int = 1) -> None:
+    def now(self) -> datetime:
+        """Wall-clock time, for stamping the start of a call before it is made."""
+        return self._wall()
+
+    def charge_model_call(
+        self,
+        prompt_tokens: int = 0,
+        calls: int = 1,
+        *,
+        stage: str = "",
+        model: str = "",
+        completion_tokens: int = 0,
+        started_at: datetime | None = None,
+    ) -> None:
+        """Count a model call and, when one was made, record its usage.
+
+        `calls=0` is a stage that answered without a model (a heuristic): it
+        is charged nothing and leaves no usage record.
+        """
         self._model_calls += calls
         self._prompt_tokens += prompt_tokens
+        self._completion_tokens += completion_tokens
+        if calls < 1:
+            return
+        ended = self._wall()
+        self._models.append(
+            ModelUsage(
+                stage=stage,
+                model=model,
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+                started_at=started_at or ended,
+                ended_at=ended,
+            )
+        )
 
     def charge_tool_call(self, calls: int = 1) -> None:
         self._tool_calls += calls
+
+    def record_tool(
+        self, name: str, outcome: str, *, failed: bool, started_at: datetime
+    ) -> None:
+        """Record how a federated tool call ended. Its charge is taken separately."""
+        self._tools.append(
+            ToolUsage(
+                name=name,
+                outcome=outcome,
+                failed=failed,
+                started_at=started_at,
+                ended_at=self._wall(),
+            )
+        )
 
     def spend(self) -> Spend:
         return Spend(
@@ -131,4 +226,7 @@ class BudgetLedger:
             tool_calls=self._tool_calls,
             prompt_tokens=self._prompt_tokens,
             elapsed_seconds=self.elapsed_seconds,
+            completion_tokens=self._completion_tokens,
+            models=tuple(self._models),
+            tools=tuple(self._tools),
         )

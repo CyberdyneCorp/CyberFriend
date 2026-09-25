@@ -105,7 +105,11 @@ async def test_deleting_a_quoted_message_deletes_its_trace_through_fakeweb(
     )
     assert COFFEE in turn.text
     [export] = [r for r in bot.web.calls if r.method == "POST" and r.url.host == LANGFUSE]
-    [trace_id] = [e["body"]["id"] for e in json.loads(export.content)["batch"]]
+    [trace_id] = [
+        e["body"]["id"]
+        for e in json.loads(export.content)["batch"]
+        if e["type"] == "trace-create"
+    ]
 
     await bot.delete("general", COFFEE)
 
@@ -139,7 +143,11 @@ async def _ask_and_opt_out(
     bea = bot.person("Bea")
     await bot.channel("general", bea).say("when will the coffee maker be fixed?")
     [export] = [r for r in bot.web.calls if r.method == "POST" and r.url.host == LANGFUSE]
-    [asked] = [e["body"]["id"] for e in json.loads(export.content)["batch"]]
+    [asked] = [
+        e["body"]["id"]
+        for e in json.loads(export.content)["batch"]
+        if e["type"] == "trace-create"
+    ]
     user = str(bea.id)
     langfuse.held = [
         {"id": asked, "name": "fixed", "environment": "production", "userId": user},
