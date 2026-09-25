@@ -16,7 +16,7 @@ it. `purpose`, `link_code_hash` and `max_age` are there for the user area's
 0012; a test asserts UPDATE and DELETE are still refused.
 
 Revision ID: 0031
-Revises: 0027
+Revises: 0030
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0031"
-down_revision = "0027"
+down_revision = "0030"
 branch_labels = None
 depends_on = None
 
