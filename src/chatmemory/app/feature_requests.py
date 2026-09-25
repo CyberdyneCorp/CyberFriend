@@ -80,33 +80,78 @@ class SubmitResult:
 
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+_BRACKETED_AT = r"[\[({<]\s*(?:at|arroba)\s*[\])}>]"
+_BRACKETED_DOT = r"[\[({<]\s*(?:dot|ponto)\s*[\])}>]"
+_OBFUSCATED_EMAIL = re.compile(
+    # "leo[at]gmail.com", "leo (at) gmail [dot] com"
+    rf"[\w.+-]+\s*{_BRACKETED_AT}\s*[\w-]+(?:\s*(?:{_BRACKETED_DOT}|\.)\s*[\w-]+)+"
+    # "leo at gmail dot com", "leo arroba gmail ponto com": the spelled-out dot
+    # is required, so "look at coinbase.com" is not an address.
+    r"|[\w.+-]+\s+(?:at|arroba)\s+[\w-]+(?:\s+(?:dot|ponto)\s+[\w-]+)+",
+    re.IGNORECASE,
+)
 _BTC = re.compile(r"\b(?:bc1[a-z0-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b")
+_DATE_TIME = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b"
+)
+"""Dates and times, taken out before phones are looked for: "2026-09-25 10:00"
+is twelve digits in a row of digits and separators, and not a number to call."""
 _PHONE = re.compile(r"(?<![\w+])(\+?)\(?\d[\d\s().-]{5,}\d(?!\w)")
+_PHONE_WORD = re.compile(
+    r"\b(?:tel|phone|telefone|fone|cel|celular|whats(?:app)?|zap|wpp|sms|call|ligar|liga)\b",
+    re.IGNORECASE,
+)
 _PHONE_DIGITS_WITH_PLUS = 8
 """A number written "+55 11 ..." is a phone from eight digits on."""
+_PHONE_DIGITS_NAMED = 8
+"""So is one next to a word like "tel" or "whatsapp": "zap 98765-4321"."""
 _PHONE_DIGITS_BARE = 10
-"""Without a "+", ten: a date ("2026-09-25") has eight and is not a phone."""
+"""Without either, ten: a Brazilian mobile without its area code has nine,
+and so do too many ordinary numbers to refuse them all."""
 _PHONE_DIGITS_MAX = 15
+_HANDLE = re.compile(r"(?<![\w<@])@[A-Za-z0-9_.]{3,}|\b[\w.]{2,32}#\d{4}\b")
+_HANDLE_PLACE = re.compile(
+    r"\b(?:telegram|tg|twitter|x|instagram|insta|ig|signal|discord|whats(?:app)?|zap|"
+    r"contact|contato|dm|message|mensagem|reach|chama|fala)\b",
+    re.IGNORECASE,
+)
+"""A "@name" is only somebody's contact where they say where to find it:
+"like @everyone uses" is not."""
 
 
 def _has_phone(text: str) -> bool:
-    for match in _PHONE.finditer(text):
+    undated = _DATE_TIME.sub(" ", text)
+    named = _PHONE_WORD.search(undated) is not None
+    for match in _PHONE.finditer(undated):
         digits = sum(c.isdigit() for c in match.group(0))
-        least = _PHONE_DIGITS_WITH_PLUS if match.group(1) else _PHONE_DIGITS_BARE
-        if least <= digits <= _PHONE_DIGITS_MAX:
+        if _phone_minimum(plus=bool(match.group(1)), named=named) <= digits <= _PHONE_DIGITS_MAX:
             return True
     return False
 
 
+def _phone_minimum(*, plus: bool, named: bool) -> int:
+    if plus:
+        return _PHONE_DIGITS_WITH_PLUS
+    return _PHONE_DIGITS_NAMED if named else _PHONE_DIGITS_BARE
+
+
+def _has_handle(text: str) -> bool:
+    return _HANDLE.search(text) is not None and _HANDLE_PLACE.search(text) is not None
+
+
 def contact_in(text: str) -> ContactKind | None:
-    """The first kind of contact detail `text` carries, or None."""
-    if find_addresses(text) or _BTC.search(text):
+    """The first kind of contact detail `text` carries, or None.
+
+    NFKC first, so a fullwidth "＠" or digit is read as the ASCII one.
+    """
+    folded = unicodedata.normalize("NFKC", text)
+    if find_addresses(folded) or _BTC.search(folded):
         return ContactKind.WALLET
-    if _EMAIL.search(text):
+    if _EMAIL.search(folded) or _OBFUSCATED_EMAIL.search(folded):
         return ContactKind.EMAIL
-    if _has_phone(text):
+    if _has_phone(folded):
         return ContactKind.PHONE
-    if states_own_contact(text):
+    if _has_handle(folded) or states_own_contact(folded):
         return ContactKind.CONTACT
     return None
 

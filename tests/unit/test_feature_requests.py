@@ -80,8 +80,19 @@ def service(store: FakeStore) -> FeatureRequestService:
         ("track 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5 for me", ContactKind.WALLET),
         ("watch bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq please", ContactKind.WALLET),
         ("watch 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa please", ContactKind.WALLET),
-        # Too few digits to be a phone on its own, but stated as one.
-        ("my phone is 91234 5678", ContactKind.CONTACT),
+        # Nine digits: a phone only because it is called one.
+        ("my phone is 91234 5678", ContactKind.PHONE),
+        ("zap 98765-4321 when it ships", ContactKind.PHONE),
+        ("tel: 987654321", ContactKind.PHONE),
+        # Regressions: forms that were not caught.
+        ("email leo at gmail dot com", ContactKind.EMAIL),
+        ("leo arroba gmail ponto com", ContactKind.EMAIL),
+        ("write to leo[at]gmail.com", ContactKind.EMAIL),
+        ("leo (at) gmail (dot) com", ContactKind.EMAIL),
+        ("fullwidth leo＠gmail.com", ContactKind.EMAIL),
+        ("call +５５ １１ ９８７６５-４３２１", ContactKind.PHONE),
+        ("contact me on telegram @leoaraujo", ContactKind.CONTACT),
+        ("add me on discord leo#1234", ContactKind.CONTACT),
     ],
 )
 def test_contact_details_are_found(text: str, kind: ContactKind) -> None:
@@ -96,6 +107,12 @@ def test_contact_details_are_found(text: str, kind: ContactKind) -> None:
         "support v4 positions on Base",
         "avisar quando alguém me marcar",
         "a /remind command, like @everyone uses",
+        # Regressions: a date and time is not a phone number.
+        "remind me at 2026-09-25 10:00",
+        "remind me at 2026-09-25T10:00:00 to call",
+        "look at coinbase.com prices",
+        "a counter like 98765-4321 in the footer",
+        "fix issue #1234",
     ],
 )
 def test_ordinary_suggestions_carry_no_contact(text: str) -> None:

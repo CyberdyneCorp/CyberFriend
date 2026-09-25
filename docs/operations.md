@@ -759,8 +759,12 @@ triage fields the admin console will set. No message text, channel name or
 surrounding conversation is stored.
 
 - **Refused before storing**: text over 1000 characters, and text containing
-  an email address, a phone number, an ETH or BTC address, or a statement of
-  the person's own contact details. The reply names what was found.
+  an email address (also spelled out, "leo at gmail dot com" or "leo[at]..."),
+  a phone number (from eight digits when a word like "tel" or "whatsapp" is
+  there, otherwise ten; dates and times do not count), an ETH or BTC address,
+  a "@handle" or "name#1234" given with where to find it, or a statement of
+  the person's own contact details. Text is NFKC-normalised first, so
+  fullwidth forms count. The reply names what was found.
 - **Idempotent**: the same text (case, whitespace and punctuation ignored) from
   the same person is one row, and resubmitting answers with its number.
 - **Five a day**: at most five accepted per person in any rolling 24 hours,
