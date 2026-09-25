@@ -110,9 +110,18 @@ TOKEN_SCHEMA = (
     """,
 )
 
+# An opted-out person never authenticates, whatever row exists. Opt-out
+# deletes their tokens (`purge_person_derived`), but `issue` and `rotate` have
+# no guard, so a token written afterwards would otherwise work: the check sits
+# where the credential is honoured, as the scheduled-task sweep's does.
 LOOKUP_TOKEN = text("""
-SELECT platform, platform_user_id FROM mcp_token
-WHERE token_hash = :token_hash AND revoked_at IS NULL
+SELECT t.platform, t.platform_user_id FROM mcp_token t
+WHERE t.token_hash = :token_hash AND t.revoked_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM person_platform_id p
+      JOIN person_opt_out o ON o.person_id = p.person_id
+      WHERE p.platform = t.platform AND p.platform_user_id = t.platform_user_id
+  )
 """)
 
 INSERT_TOKEN = text("""

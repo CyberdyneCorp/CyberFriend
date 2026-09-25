@@ -42,6 +42,7 @@ class Outcome:
     rate_limited: bool = False
     retry_after_seconds: float = 0.0
     alert: None = None
+    suggestion: None = None
 
 
 @dataclass
@@ -49,7 +50,7 @@ class ScriptedAsks:
     text: str
     calls: int = 0
 
-    async def ask(self, request: object, confirm: object = None) -> Outcome:
+    async def ask(self, request: object, confirm: object = None, **_: object) -> Outcome:
         self.calls += 1
         citation = Citation(ChannelRef("discord", CHANNEL_ID), 9, "sam", "the fix", CITED)
         return Outcome(ScopedAnswer(Answer(self.text, (citation,)), frozenset()))

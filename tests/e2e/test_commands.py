@@ -28,7 +28,10 @@ from tests.e2e.harness.discord_wire import CommandNotOffered
 from tests.e2e.harness.process import GUILD_ID
 
 SNAPSHOT = Path(__file__).parent / "snapshots" / "commands.json"
-PERSONAL = {"ask", "resolve", "forget", "notifications", "channels", "schedule", "alert"}
+PERSONAL = {
+    "ask", "resolve", "forget", "notifications", "channels", "schedule", "alert",
+    "suggest", "suggestions",
+}
 GUILD_ONLY = {"index", "unindex"}
 _EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED, *ALERTS)
 _LISTED = re.compile(r"`/([a-z]+)")

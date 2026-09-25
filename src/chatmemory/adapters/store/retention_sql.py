@@ -182,6 +182,17 @@ WHERE d.author_person_id = :person_id
    )
 """)
 
+# Before their messages, because it reads them. The fetch log records which of
+# their messages linked which URL: a record of what they shared, keyed on a
+# message id with no foreign key, so nothing cascades it away.
+PURGE_PERSON_FETCHES = text("""
+DELETE FROM document_fetch f
+WHERE EXISTS (
+    SELECT 1 FROM message m
+    WHERE m.id = f.message_id AND m.author_person_id = :person_id
+)
+""")
+
 PURGE_PERSON_REACTIONS = text("""
 DELETE FROM ask_reaction WHERE person_id = :person_id
 """)
@@ -309,6 +320,7 @@ class PostgresRetentionStore:
             decisions = await conn.execute(
                 PURGE_PERSON_DECISIONS, {"person_id": person_id}
             )
+            fetches = await conn.execute(PURGE_PERSON_FETCHES, {"person_id": person_id})
             messages = await conn.execute(PURGE_PERSON_MESSAGES, {"person_id": person_id})
             asks = await conn.execute(PURGE_PERSON_ASKS, {"person_id": person_id})
             reactions = await conn.execute(
@@ -326,6 +338,7 @@ class PostgresRetentionStore:
                 reactions=reactions.rowcount or 0,
                 mentions=mentions.rowcount or 0,
                 decisions=decisions.rowcount or 0,
+                fetch_records=fetches.rowcount or 0,
             )
 
     async def _mark_dirty(

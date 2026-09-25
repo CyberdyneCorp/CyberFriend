@@ -23,6 +23,7 @@ from datetime import date, timedelta
 from typing import cast
 
 import discord
+import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.discord.gateway import GatewayEventHandler
@@ -40,12 +41,20 @@ from chatmemory.app.decisions.backfill import BackfillReport
 from chatmemory.app.ingest import IngestService
 from chatmemory.app.scope import LiveScope
 from chatmemory.app.windowing import WindowBuilder
-from chatmemory.composition import build_ask_pipeline, build_corpus_store
+from chatmemory.composition import (
+    build_ask_pipeline,
+    build_corpus_store,
+    build_trace_withdrawal,
+)
 from chatmemory.config import Settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
 from chatmemory.entrypoints.decisions_backfill import backfill, indexing_scope
-from chatmemory.entrypoints.ingest import ScopedExtractionLedger, live_loop
+from chatmemory.entrypoints.ingest import (
+    ScopedExtractionLedger,
+    live_loop,
+    trace_withdrawal_pass,
+)
 from chatmemory.health import HealthState
 from chatmemory.ports.sources import ChatSource
 from tests.e2e.harness.model import ASK_EXTRACTION, HashEmbeddings, ScriptedChat
@@ -95,6 +104,7 @@ class Ingest:
         engine: AsyncEngine,
         chat: ScriptedChat,
         embeddings: HashEmbeddings,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         # The ingest entrypoint's builder, so channel media is recorded from
         # the moment the settings say and not from whenever a copy says.
@@ -116,11 +126,19 @@ class Ingest:
                 gap=timedelta(seconds=settings.window_gap_seconds),
             ),
             indexed_channels=settings.indexed_channel_ids,
-            # As the ingest entrypoint passes it: a deletion withdraws the
-            # decisions resting on the deleted message.
+            # As the ingest entrypoint passes them: a deletion withdraws the
+            # traces quoting the deleted message and the decisions resting on
+            # it. The one difference is `transport`: the entrypoint has no
+            # Edges and passes none, so production deletes over httpx's
+            # default transport; here it is FakeWeb's, so the sealed network
+            # can see the deletion.
+            traces=build_trace_withdrawal(settings, engine, transport),
             decisions=self.asks.decisions,
         )
         self.asks.worker.records_through(store)
+        # The sweep's own instance, as the entrypoint builds a second one for
+        # `trace_withdrawal_loop`.
+        self._withdrawal = build_trace_withdrawal(settings, engine, transport)
 
     async def capture(self, raw: discord.Message) -> Message:
         """Run one gateway message through `live_loop`: persist, then submit."""
@@ -152,6 +170,11 @@ class Ingest:
     async def delete(self, message: int, channel: ChannelRef) -> None:
         """A user deleting a message, as the gateway's delete event reaches ingest."""
         await self.service.handle_delete(message, channel=channel)
+
+    async def sweep_traces(self) -> None:
+        """One pass of `trace_withdrawal_loop`: the Langfuse search, then deletions."""
+        assert self._withdrawal is not None, "tracing is not configured"
+        await trace_withdrawal_pass(self._withdrawal, HealthState())
 
     async def extract(self) -> int:
         """Run the extraction pass over everything captured, ready or not."""
