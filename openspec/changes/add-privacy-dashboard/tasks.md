@@ -1,9 +1,9 @@
 ## 1. Regression fixes (failing tests first)
 
-- [ ] 1.1 Migration: `purge_person_derived(person_id)` consolidating the 0013/0014/0015/0020 trigger bodies, plus `scheduled_task` and `mcp_token`; the `person_opt_out` trigger calls it; due sweep skips opted-out people
-- [ ] 1.2 Test: an opted-out person's scheduled task is deleted and never runs (real Postgres); existing opt-out purge tests still pass
-- [ ] 1.3 Test (e2e): trace deletion reaches FakeWeb -> build `LangfuseTraceDeleter` with `edges.http_transport`
-- [ ] 1.4 Test: opt-out revokes the person's MCP tokens and deletes `document_fetch` rows for purged messages
+- [x] 1.1 Migration: `purge_person_derived(person_id)` consolidating the 0013/0014/0015/0020 trigger bodies, plus `scheduled_task` and `mcp_token`; the `person_opt_out` trigger calls it; due sweep skips opted-out people
+- [x] 1.2 Test: an opted-out person's scheduled task is deleted and never runs (real Postgres); existing opt-out purge tests still pass
+- [x] 1.3 Test (e2e): trace deletion reaches FakeWeb -> build `LangfuseTraceDeleter` with `edges.http_transport`
+- [x] 1.4 Test: opt-out revokes the person's MCP tokens and deletes `document_fetch` rows for purged messages
 
 ## 2. Traces by asker
 

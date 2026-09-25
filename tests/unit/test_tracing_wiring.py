@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import httpx
 import pytest
 
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
@@ -144,3 +145,14 @@ def test_build_trace_withdrawal_returns_the_real_adapters_when_configured() -> N
     assert isinstance(withdrawal, TraceWithdrawal)
     assert isinstance(withdrawal._index, PostgresTraceIndex)  # noqa: SLF001
     assert isinstance(withdrawal._deleter, LangfuseTraceDeleter)  # noqa: SLF001
+
+
+def test_build_trace_withdrawal_deletes_over_the_process_transport() -> None:
+    """Regression: the deleter opened its own client over the real network,
+    so a deletion never went through `Edges.http_transport`."""
+    transport = httpx.MockTransport(lambda request: httpx.Response(200))
+    withdrawal = build_trace_withdrawal(
+        Settings(**CONFIGURED), object(), transport  # type: ignore[arg-type]
+    )
+    assert withdrawal is not None
+    assert withdrawal._deleter._transport is transport  # type: ignore[attr-defined]  # noqa: SLF001

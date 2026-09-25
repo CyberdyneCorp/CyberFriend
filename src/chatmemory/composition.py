@@ -1222,12 +1222,17 @@ def build_corpus_store(settings: Settings, engine: AsyncEngine) -> PostgresStore
 
 
 def build_trace_withdrawal(
-    settings: Settings, engine: AsyncEngine
+    settings: Settings,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> TraceWithdrawal | None:
     """The deletion side of tracing, for the ingest process.
 
     Built from the same three settings as the exporter, because a deployment
     that exports must withdraw and one that does not has nothing to withdraw.
+    `transport` is the process's `Edges.http_transport`, as for the exporter:
+    without it the deletion opened its own client over the real network, and
+    an end-to-end test could not see a trace being withdrawn.
     """
     if not settings.tracing_enabled or not settings.langfuse_host:
         return None
@@ -1240,6 +1245,7 @@ def build_trace_withdrawal(
             public_key=settings.langfuse_public_key.get_secret_value(),
             secret_key=settings.langfuse_secret_key.get_secret_value(),
             timeout=settings.tracing_timeout_seconds,
+            transport=transport,
         ),
     )
 
