@@ -42,6 +42,8 @@ from chatmemory.app.reasoning.fixed import SUFFICIENCY, SYNTHESIS_STAGE, write_a
 from chatmemory.app.reasoning.loop import FEDERATION_CALL, PLAN_STAGE, ToolOutcome
 from chatmemory.app.reasoning.ports import (
     JsonCompletion,
+    Plan,
+    PromptContext,
     TextCompletion,
     ToolCall,
     ToolCompletion,
@@ -52,7 +54,7 @@ from chatmemory.app.reasoning.tracing import OptOutAwareTracer
 from chatmemory.domain.search import SearchQuery
 from chatmemory.ports.answers import Answer
 from tests.unit.test_loop_invocation import ISSUES, ScriptedSurface, build_loop
-from tests.unit.test_reasoning_fixed import evidence, question
+from tests.unit.test_reasoning_fixed import FakePlanner, evidence, question
 from tests.unit.test_run_tracing import CapturingTracer, FakeOptOut
 from tests.unit.test_tool_calling import ScriptedCompletions, a_response
 from tests.unit.test_tool_calling import build as build_chat
@@ -93,6 +95,17 @@ class JsonChat:
         self, system: str, user: str, tools: Sequence[ToolDefinition]
     ) -> ToolCompletion:
         raise AssertionError("not used")
+
+
+class CostedPlanner(FakePlanner):
+    """A planner whose plan names its model and spends output tokens."""
+
+    async def plan(self, question_text: str, max_steps: int, context: PromptContext) -> Plan:
+        return replace(
+            await super().plan(question_text, max_steps, context),
+            completion_tokens=7,
+            model="planner-v1",
+        )
 
 
 # --- 2.5 the ledger and the stages -------------------------------------
@@ -151,11 +164,14 @@ async def test_the_critic_keeps_completion_tokens_and_model() -> None:
 
 
 async def test_the_chat_adapter_names_its_model_on_every_completion() -> None:
-    chat = build_chat(ScriptedCompletions(a_response(content="hi")), model="chat-v1")
+    chat = build_chat(ScriptedCompletions(a_response(content="{}")), model="chat-v1")
     text = await chat.complete_text("s", "u")
     tools = await chat.complete_with_tools("s", "u", [])
+    structured = await chat.complete_json("s", "u", {"type": "object"}, "plan")
     assert (text.model, text.completion_tokens) == ("chat-v1", 12)
     assert (tools.model, tools.completion_tokens) == ("chat-v1", 12)
+    # Every plan, sufficiency and synthesis call goes through this path.
+    assert (structured.model, structured.completion_tokens) == ("chat-v1", 12)
 
 
 async def test_write_answer_records_the_synthesis_call_with_its_completion_tokens() -> None:
@@ -184,7 +200,9 @@ async def test_a_loop_run_records_every_model_call_and_the_tool_span() -> None:
         completion_tokens=9,
         model="chat-v1",
     )
-    outcome = await build_loop(ScriptedSurface(ISSUES, completion=wants)).run(question())
+    outcome = await build_loop(
+        ScriptedSurface(ISSUES, completion=wants), planner=CostedPlanner("what is in the tracker")
+    ).run(question())
 
     spend = outcome.record.spend
     stages = [u.stage for u in spend.models]
@@ -192,6 +210,8 @@ async def test_a_loop_run_records_every_model_call_and_the_tool_span() -> None:
     assert stages[-1] == SYNTHESIS_STAGE
     assert spend.models[0].model == "chat-v1"
     assert spend.models[0].output_tokens == 9
+    plan = spend.models[1]
+    assert (plan.model, plan.input_tokens, plan.output_tokens) == ("planner-v1", 50, 7)
     assert [(t.name, t.outcome, t.failed) for t in spend.tools] == [
         ("issues:search", "invoked", False)
     ]

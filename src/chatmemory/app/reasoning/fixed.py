@@ -52,13 +52,14 @@ from chatmemory.ports.answers import Answer, Question
 DEFAULT_LIMIT = 20
 
 SUFFICIENCY = "sufficiency"
-#: The stage name a synthesis model call is recorded under.
-SYNTHESIS_STAGE = "synthesis"
 """Decision name under which every sufficiency judgement is recorded.
 
 Provenance is read back by this name, so the cheap-signal cases -- an empty
 result, the relevance gate -- are directly comparable with the model case.
 """
+
+SYNTHESIS_STAGE = "synthesis"
+"""Stage name under which every synthesis model call is recorded."""
 
 
 @dataclass(frozen=True, slots=True)
