@@ -24,6 +24,7 @@ from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.app.optout import OptOutService
 from chatmemory.domain.identity import PersonRef
 from chatmemory.mcp.auth import PostgresTokenStore
+from tests.integration.test_alert_kinds_store import alembic
 
 pytestmark = pytest.mark.asyncio
 
@@ -147,6 +148,38 @@ async def test_opting_out_removes_the_persons_mcp_tokens(clean: AsyncEngine) -> 
     ) == 0
 
 
+async def test_a_token_issued_after_the_opt_out_never_authenticates(
+    clean: AsyncEngine,
+) -> None:
+    """The bug: opt-out deleted the tokens, but `issue`/`rotate` had no guard
+    and the lookup no opt-out check, so an operator issuing one afterwards
+    handed out a credential that authenticated as the opted-out person."""
+    await _seed_person(clean, ALICE, "Alice")
+    await _seed_person(clean, BOB, "Bob")
+    await _service(clean).opt_out(ALICE)
+    tokens = PostgresTokenStore(clean)
+
+    issued = await tokens.issue(ALICE, "late")
+    rotated = await tokens.rotate(ALICE, "later")
+    his = await tokens.issue(BOB, "desktop")
+
+    assert await tokens.person_for_token(issued.token) is None
+    assert await tokens.person_for_token(rotated.token) is None
+    assert await tokens.person_for_token(his.token) == BOB
+
+
+async def test_a_token_for_somebody_never_seen_still_authenticates(
+    clean: AsyncEngine,
+) -> None:
+    """The opt-out check joins through `person_platform_id`; an identity with
+    no person row yet is not opted out and must not be locked out by it."""
+    stranger = PersonRef(PLATFORM, 8199)
+    tokens = PostgresTokenStore(clean)
+    issued = await tokens.issue(stranger, "")
+
+    assert await tokens.person_for_token(issued.token) == stranger
+
+
 # --- the fetch log ----------------------------------------------------------
 
 
@@ -211,3 +244,117 @@ async def test_person_opt_out_has_a_single_purge_trigger(clean: AsyncEngine) -> 
         )
         names = sorted(r[0] for r in rows)
     assert names == ["trg_person_opt_out_purges_derived"]
+
+
+# --- the migration ----------------------------------------------------------
+
+
+async def _seed_task_and_token(engine: AsyncEngine, person: PersonRef, person_id: int) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO scheduled_task (person_id, question, interval_hours, next_run_at) "
+                "VALUES (:p, 'q', 1, :at)"
+            ),
+            {"p": person_id, "at": NOW},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO mcp_token (token_hash, platform, platform_user_id) "
+                "VALUES (:h, :p, :u)"
+            ),
+            {"h": f"hash-{person_id}", "p": PLATFORM, "u": person.platform_user_id},
+        )
+
+
+async def test_upgrading_purges_what_earlier_opt_outs_left_behind(clean: AsyncEngine) -> None:
+    """The backfill, seeded at 0027 the way the old purge left things: the
+    task and token the triggers missed, and the fetch log of messages the old
+    opt-out had already hard-deleted -- rows nothing links to the person any
+    more. Everyone else's rows, including the fetch log of a message that was
+    only tombstoned by a Discord deletion, stay."""
+    await clean.dispose()
+    try:
+        alembic("downgrade", "0027")
+        alice_id = await _seed_person(clean, ALICE, "Alice")
+        bob_id = await _seed_person(clean, BOB, "Bob")
+        await _seed_task_and_token(clean, ALICE, alice_id)
+        await _seed_task_and_token(clean, BOB, bob_id)
+        await _seed_message(clean, 77, alice_id)
+        await _seed_message(clean, 78, bob_id)
+        await _record_fetch(clean, 77)
+        await _record_fetch(clean, 78)
+        async with clean.begin() as conn:
+            await conn.execute(
+                text("UPDATE message SET deleted_at = :at WHERE id = 78"), {"at": NOW}
+            )
+            await conn.execute(
+                text("INSERT INTO person_opt_out (person_id) VALUES (:p)"), {"p": alice_id}
+            )
+            # What the pre-0028 OptOutService did to their messages.
+            await conn.execute(
+                text("DELETE FROM message WHERE author_person_id = :p"), {"p": alice_id}
+            )
+        await clean.dispose()
+
+        alembic("upgrade", "0028")
+
+        assert await _count(
+            clean, "SELECT count(*) FROM scheduled_task WHERE person_id = :p", p=alice_id
+        ) == 0
+        assert await _count(
+            clean,
+            "SELECT count(*) FROM mcp_token WHERE platform_user_id = :u",
+            u=ALICE.platform_user_id,
+        ) == 0
+        assert await _count(clean, "SELECT count(*) FROM scheduled_task") == 1
+        assert await _count(clean, "SELECT count(*) FROM mcp_token") == 1
+        assert await _count(clean, "SELECT count(*) FROM document_fetch WHERE message_id = 77") == 0
+        assert await _count(clean, "SELECT count(*) FROM document_fetch WHERE message_id = 78") == 1
+    finally:
+        await clean.dispose()
+        alembic("upgrade", "head")
+
+
+LEGACY_TRIGGERS = [
+    "trg_person_opt_out_purges_facts",
+    "trg_person_opt_out_purges_memory",
+    "trg_person_opt_out_purges_notifications",
+    "trg_person_opt_out_purges_position_alerts",
+]
+
+
+async def test_downgrading_restores_the_per_table_triggers(clean: AsyncEngine) -> None:
+    await clean.dispose()
+    try:
+        alembic("downgrade", "0027")
+        async with clean.connect() as conn:
+            rows = await conn.execute(
+                text(
+                    "SELECT tgname FROM pg_trigger "
+                    "WHERE tgrelid = 'person_opt_out'::regclass AND NOT tgisinternal"
+                )
+            )
+            names = sorted(r[0] for r in rows)
+            gone = await conn.scalar(
+                text("SELECT count(*) FROM pg_proc WHERE proname = 'purge_person_derived'")
+            )
+        assert names == LEGACY_TRIGGERS
+        assert gone == 0
+
+        alice_id = await _seed_person(clean, ALICE, "Alice")
+        async with clean.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO person_fact (person_id, kind, value) "
+                    "VALUES (:p, 'preferred_name', 'Ali')"
+                ),
+                {"p": alice_id},
+            )
+            await conn.execute(
+                text("INSERT INTO person_opt_out (person_id) VALUES (:p)"), {"p": alice_id}
+            )
+        assert await _count(clean, "SELECT count(*) FROM person_fact") == 0
+    finally:
+        await clean.dispose()
+        alembic("upgrade", "head")

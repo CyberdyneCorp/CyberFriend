@@ -1,11 +1,14 @@
-"""A deleted message's traces are withdrawn over the process's HTTP edge.
+"""A deleted message's traces are withdrawn, and the harness can see it.
 
 The bot exports the run of a question that cited a message; the author then
 deletes it, and ingest asks Langfuse to delete every trace quoting it. The
-deleter used to open its own httpx client over the real network rather than
-`Edges.http_transport`, so this deletion never reached FakeWeb: the sealed
-network refused it, the trace stayed pending, and nothing an end-to-end test
-could see said so.
+deleter could only open its own httpx client over the real network, so in the
+harness this deletion never reached FakeWeb: the sealed network refused it,
+the trace stayed pending, and nothing an end-to-end test could see said so.
+The harness now hands the deleter FakeWeb's transport. The ingest entrypoint
+passes none, so production still deletes over httpx's default transport; what
+this covers is the withdrawal logic and its wiring into ingest, not the
+entrypoint's choice of transport.
 """
 
 from __future__ import annotations

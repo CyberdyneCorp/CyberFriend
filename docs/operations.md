@@ -88,9 +88,14 @@ conversation memory, personal facts, queued notifications, position alerts,
 scheduled tasks and MCP tokens. Self-service erasure calls the same function,
 so the two cannot drift apart: a new table holding person data adds its
 `DELETE` to the function in its own migration. The scheduled-task sweep also
-skips opted-out people, so a task written afterwards never runs. Before 0028
-scheduled tasks and MCP tokens survived an opt-out; the migration purges them
-for everyone already opted out.
+skips opted-out people, so a task written afterwards never runs, and MCP
+authentication refuses an opted-out person's token, so one issued afterwards
+never works. Before 0028 scheduled tasks, MCP tokens and the fetch log
+survived an opt-out; the migration purges the first two for everyone already
+opted out, and deletes fetch-log rows whose message no longer exists (the old
+opt-out had deleted those messages, so nothing else links the rows to the
+person). One store is still left behind: Langfuse copies of runs the person
+asked before opting out (see [Tracing](#tracing) below).
 
 **It survives re-ingestion.** Discord still holds their messages, and backfill
 re-reads history from Discord. The exclusion is therefore enforced by a database
@@ -265,13 +270,17 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   on the trace store, so a destination that is down delays the withdrawal
   without delaying the deletion. Unconfirmed withdrawals are retried by a sweep
   in the `ingest` process every five minutes.
-- **An opt-out is honoured.** Nothing is exported for a person who has opted
-  out of indexing. If the opt-out registry cannot be read, the run is withheld
-  rather than exported.
+- **An opt-out stops new exports.** Nothing is exported for a person who has
+  opted out of indexing. If the opt-out registry cannot be read, the run is
+  withheld rather than exported. Traces exported *before* the opt-out are not
+  yet withdrawn: a run of a question the person asked stays in Langfuse until
+  it is deleted there by hand (withdrawing them is task 2 of the
+  `add-privacy-dashboard` change).
 
 Neither of these makes the destination safe to share widely. They keep the
-project's deletion and opt-out guarantees true across the copy; they do not
-give the copy permissions of its own.
+deletion guarantee true across the copy, and the opt-out guarantee for
+everything exported after it; they do not give the copy permissions of its
+own.
 
 ### Checking it is working
 

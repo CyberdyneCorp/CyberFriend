@@ -1230,9 +1230,10 @@ def build_trace_withdrawal(
 
     Built from the same three settings as the exporter, because a deployment
     that exports must withdraw and one that does not has nothing to withdraw.
-    `transport` is the process's `Edges.http_transport`, as for the exporter:
-    without it the deletion opened its own client over the real network, and
-    an end-to-end test could not see a trace being withdrawn.
+    `transport` replaces httpx's default network transport. The ingest
+    entrypoint passes none; the end-to-end harness passes FakeWeb's, which
+    without this parameter it could not, so no test could see a trace being
+    withdrawn.
     """
     if not settings.tracing_enabled or not settings.langfuse_host:
         return None

@@ -37,8 +37,10 @@ Three things have to hold for this to be an opt-out rather than a gesture.
     tokens, live in one SQL function, `purge_person_derived(person_id)`, which
     the single `person_opt_out` trigger calls and erasure calls directly. A new
     table holding person data adds its DELETE there, in its own migration.
-    The fetch log (`document_fetch`) is keyed on message ids, so it goes with
-    the message purge below rather than with the function.
+    MCP authentication also refuses an opted-out person, so a token issued
+    after the purge never works. The fetch log (`document_fetch`) is keyed
+    on message ids, so it goes with the message purge below rather than with
+    the function.
 
 *   **The flag lands before the purge.** In the other order there is a window
     between "content deleted" and "exclusion recorded" in which a backfill page

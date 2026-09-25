@@ -123,8 +123,11 @@ class Ingest:
             ),
             indexed_channels=settings.indexed_channel_ids,
             # As the ingest entrypoint passes them: a deletion withdraws the
-            # traces quoting the deleted message, over the process's HTTP
-            # edge, and the decisions resting on it.
+            # traces quoting the deleted message and the decisions resting on
+            # it. The one difference is `transport`: the entrypoint has no
+            # Edges and passes none, so production deletes over httpx's
+            # default transport; here it is FakeWeb's, so the sealed network
+            # can see the deletion.
             traces=build_trace_withdrawal(settings, engine, transport),
             decisions=self.asks.decisions,
         )

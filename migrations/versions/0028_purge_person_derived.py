@@ -64,6 +64,21 @@ $$ LANGUAGE plpgsql
 
 TRIGGER = "trg_person_opt_out_purges_derived"
 
+#: Fetch-log rows whose message no longer exists. Before this revision an
+#: opt-out hard-deleted the person's messages and left the fetch log behind;
+#: with the message gone nothing links those rows to the person any more, so
+#: the backfill cannot pick them out by author. It removes every orphan
+#: instead. That is safe because only a hard delete of the message leaves an
+#: orphan -- a Discord deletion merely tombstones it (`deleted_at`), so its row
+#: stays and is untouched here -- and every hard delete (opt-out, channel
+#: purge, retention) removes content the fetch row describes. The worst an
+#: unexpected orphan costs is one audit row and one count towards a failing
+#: target's retry bound.
+PURGE_ORPHANED_FETCHES = """
+DELETE FROM document_fetch f
+WHERE NOT EXISTS (SELECT 1 FROM message m WHERE m.id = f.message_id)
+"""
+
 #: The triggers this replaces: (trigger, function, tables it purged).
 REPLACED = (
     ("trg_person_opt_out_purges_memory", "purge_memory_on_opt_out",
@@ -90,6 +105,7 @@ def upgrade() -> None:
     # People who opted out before this revision still have the rows the old
     # triggers missed. Purging them now is what makes the fix reach them.
     op.execute("SELECT purge_person_derived(person_id) FROM person_opt_out")
+    op.execute(PURGE_ORPHANED_FETCHES)
 
 
 def downgrade() -> None:
