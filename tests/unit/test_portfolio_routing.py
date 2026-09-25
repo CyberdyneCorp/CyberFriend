@@ -91,6 +91,10 @@ def _surface(*addresses: str) -> ScriptedSurface:
         "what's my wallet's total balance",
         "how much do I have in total?",
         "what is the total value of my wallets?",
+        # Asking to see it asks for the total, with no value word.
+        "show my portfolio",
+        "show me my crypto portfolio.",
+        "me mostra o meu portfólio?",
     ],
 )
 def test_totals_about_my_own_money_are_portfolio_questions(text: str) -> None:
@@ -130,6 +134,9 @@ def test_a_typed_address_is_read_for_that_address_only(text: str) -> None:
         # No total at all.
         "what is my balance?",
         "total value locked in uniswap",
+        # Showing something that is not the asker's holdings.
+        "show my portfolio of designs to Ana",
+        "show the team's portfolio",
     ],
 )
 def test_other_questions_are_not_portfolio_questions(text: str) -> None:

@@ -461,8 +461,10 @@ P&L and impermanent loss. History is the activity tool's (below). Adding a chain
 ## Portfolio total
 
 A fourth tool on the same server, `portfolio_summary`, answers "quanto eu tenho
-no total?", "what's my portfolio worth?", "what's my net worth on chain?" and
-"e no total?" after a wallet or positions question. It is recognised before
+no total?", "what's my portfolio worth?", "what's my net worth on chain?", the
+whole-message short forms "show my portfolio" / "show me my crypto portfolio" /
+"me mostra o meu portfólio", and "e no total?" after a wallet or positions
+question. It is recognised before
 retrieval (route label `PORTFOLIO`, ahead of the positions and balance routes)
 and needs no setting beyond the positions ones.
 
@@ -816,10 +818,25 @@ shut. Removing a person's data deletes their tasks with it.
 `/suggestions` lists theirs, newest first, with each one's status. Both are
 registered on every deployment and answer privately. Rows live in
 `feature_request` (migration 0030): the text, its language, how it arrived
-(`command` today), the guild and channel ids (none for a DM), a status and the
+(`command`, `dm` or `channel`), the guild and channel ids (none for a DM), a status and the
 triage fields the admin console will set. No message text, channel name or
 surrounding conversation is stored.
 
+- **In a message**: a mention or DM that starts with one of six explicit forms
+  ("tenho uma sugestão", "sugestão:", "seria legal se você", "I have a
+  feature request", "feature request:", "it would be nice if you could"; case
+  and accents ignored) is answered with a proposal and [Record suggestion] /
+  [No, answer it], for its author alone. It is checked last: when any other
+  route claims the message or the words after the form (`ROUTE_CLAIMS` in
+  `app/suggestion_intent.py`: facts, alerts, catch-up, said-by, capabilities,
+  obligations, decisions, market, time, chain, web search...), that route
+  answers and nothing is proposed, so "sugestão: me diga o preço do BTC" gets
+  the price. Nothing is stored without the press. [No, answer it], or two
+  minutes without an answer, answers the message as a question without
+  spending a second question from the person's allowance. A labelling form
+  ("sugestão: X") stores X; a sentence form ("it would be nice if you could X")
+  stores the whole sentence. `/ask` never proposes. A new route must be added
+  to `ROUTE_CLAIMS`, with its case in `tests/unit/test_suggestion_intent.py`.
 - **Refused before storing**: text over 1000 characters, and text containing
   an email address (also spelled out, "leo at gmail dot com" or "leo[at]..."),
   a phone number (from eight digits when a word like "tel" or "whatsapp" is

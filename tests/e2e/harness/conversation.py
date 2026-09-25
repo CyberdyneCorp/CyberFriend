@@ -247,6 +247,10 @@ class Conversation:
 
         return await self._bot.turn(run)
 
+    async def expire(self, sent: Sent) -> Turn:
+        """Nobody answers the buttons on `sent` before they time out."""
+        return await self._bot.turn(lambda: self._bot.discord.expire(sent))
+
     async def memory_turns(self) -> list[Row[Any]]:
         """The remembered turns of this conversation, by SQL."""
         async with self._bot.engine.connect() as conn:

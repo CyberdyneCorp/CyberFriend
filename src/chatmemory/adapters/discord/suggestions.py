@@ -1,4 +1,5 @@
-"""Feature requests on Discord: what `/suggest` and `/suggestions` say.
+"""Feature requests on Discord: what `/suggest`, `/suggestions` and a
+suggestion written as a message say.
 
 A recorded suggestion is acknowledged with its number, a plain statement that
 the team will see the text and the person's Discord name, and two buttons
@@ -7,7 +8,14 @@ press them (`RequesterOnlyView`), every press takes the buttons away, and
 after the window closes they go without changing anything: no answer means no
 messages, which is the default.
 
-Every reply is private, in the language of the suggestion, else the caller's.
+Every command reply is private, in the language of the suggestion, else the
+caller's.
+
+A suggestion written as a message ("tenho uma sugestão: ...") is proposed
+first, with [Record suggestion] and [No, answer it] for its author alone.
+Recording it turns the proposal into the same acknowledgement `/suggest`
+gives. Declining it, or letting it expire, answers the message as a question,
+so no message is ever left without a reply.
 """
 
 from __future__ import annotations
@@ -29,6 +37,9 @@ from chatmemory.ports.feature_requests import (
 )
 
 log = structlog.get_logger()
+
+PROPOSAL_WINDOW_SECONDS = 120.0
+"""How long [Record suggestion] [No, answer it] stay live."""
 
 NOTIFY_WINDOW_SECONDS = 300.0
 """How long the [Yes] [No] buttons stay live."""
@@ -104,6 +115,20 @@ _TEXT: dict[str, dict[Language, str]] = {
     "heading": {
         EN: "**Your suggestions ({count}):**",
         PT: "**Suas sugestões ({count}):**",
+    },
+    "record": {EN: "Record suggestion", PT: "Registrar sugestão"},
+    "answer_it": {EN: "No, answer it", PT: "Não, responda"},
+    "declined": {
+        EN: "Not recorded. Here's the answer instead.",
+        PT: "Não registrei. Segue a resposta.",
+    },
+    "proposal_expired": {
+        EN: "No answer, so I didn't record it. Here's the answer instead.",
+        PT: "Sem resposta, então não registrei. Segue a resposta.",
+    },
+    "failed": {
+        EN: "Something went wrong and nothing was recorded. `/suggest` takes it too.",
+        PT: "Algo deu errado e nada foi registrado. `/suggest` também registra.",
     },
     "yes": {EN: "Yes", PT: "Sim"},
     "no": {EN: "No", PT: "Não"},
@@ -275,3 +300,105 @@ class NotifyChoiceView(RequesterOnlyView):
             )
         except discord.HTTPException:
             log.info("suggestions.expiry_not_shown")
+
+
+# --- the proposal for a suggestion written as a message ----------------------------
+
+Record = Callable[[], Awaitable[SubmitResult]]
+"""Stores the proposed suggestion, as `/suggest` would."""
+
+AnswerIt = Callable[[], Awaitable[None]]
+"""Answers the message as a question, as if it had not been proposed."""
+
+
+class SuggestionProposalView(RequesterOnlyView):
+    """[Record suggestion] [No, answer it] under a proposal, for its author alone."""
+
+    def __init__(
+        self,
+        requester_id: int,
+        language: Language,
+        record: Record,
+        answer: AnswerIt,
+        set_notify: SetNotify,
+        timeout: float = PROPOSAL_WINDOW_SECONDS,
+    ) -> None:
+        super().__init__(requester_id, text("not_yours", language), timeout=timeout)
+        self._requester_id = requester_id
+        self._language = language
+        self._record = record
+        self._answer = answer
+        self._set_notify = set_notify
+        self._message: _EditableMessage | None = None
+        self._settled = False
+        self.record_button.label = text("record", language)
+        self.answer_button.label = text("answer_it", language)
+
+    def sent_as(self, message: _EditableMessage | None) -> None:
+        self._message = message
+
+    @discord.ui.button(label="Record suggestion", style=discord.ButtonStyle.primary)
+    async def record_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
+    ) -> None:
+        if not self._settle():
+            return
+        try:
+            result = await self._record()
+        except Exception:  # noqa: BLE001 - the press is answered whatever happened
+            log.exception("suggestions.record_failed")
+            await self._redraw(interaction, text("failed", self._language), self)
+            return
+        reply = submitted_message(result, self._language)
+        if not result.stored or result.request_id is None:
+            await self._redraw(interaction, reply, self)
+            return
+        notify = NotifyChoiceView(
+            self._requester_id, result.request_id, self._language, self._set_notify
+        )
+        await self._redraw(interaction, reply, notify)
+        notify.sent_as(interaction.message)
+
+    @discord.ui.button(label="No, answer it", style=discord.ButtonStyle.secondary)
+    async def answer_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
+    ) -> None:
+        if not self._settle():
+            return
+        await self._redraw(interaction, text("declined", self._language), self)
+        await self._answer()
+
+    def _settle(self) -> bool:
+        """Take the buttons away; False if they had already been answered."""
+        if self._settled:
+            return False
+        self._settled = True
+        self.disable_buttons()
+        self.stop()
+        return True
+
+    @staticmethod
+    async def _redraw(
+        interaction: discord.Interaction, note: str, view: discord.ui.View
+    ) -> None:
+        try:
+            await interaction.response.edit_message(
+                content=note, view=view, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except discord.HTTPException:
+            log.info("suggestions.proposal_not_redrawn")
+
+    async def on_timeout(self) -> None:
+        """No answer stores nothing, and the message is answered as a question."""
+        if self._settled:
+            return
+        self._settled = True
+        self.disable_buttons()
+        if self._message is not None:
+            try:
+                await self._message.edit(
+                    content=text("proposal_expired", self._language), view=self
+                )
+            except discord.HTTPException:
+                log.info("suggestions.proposal_expiry_not_shown")
+        await self._answer()
