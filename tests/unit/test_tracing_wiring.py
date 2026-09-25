@@ -149,10 +149,12 @@ def test_the_deletion_path_calls_the_trace_sink() -> None:
 
 
 def test_ingest_starts_the_retry_sweep() -> None:
-    main = _function(INGEST, "main")
+    assert _calls(_function(INGEST, "main"), "start_trace_sweeps"), (
+        "main must start the trace sweeps"
+    )
     started = [
         call
-        for call in _calls(main, "create_task")
+        for call in _calls(_function(INGEST, "start_trace_sweeps"), "create_task")
         if _calls(call, "trace_withdrawal_loop")
     ]
     assert started, "a deletion the destination refused must be retried by something"

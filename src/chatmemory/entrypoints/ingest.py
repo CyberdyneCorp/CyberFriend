@@ -60,7 +60,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import structlog
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from chatmemory import logging as log_setup
 from chatmemory.adapters.discord.gateway import GatewayEventHandler, IngestClient
@@ -527,9 +527,11 @@ async def trace_withdrawal_pass(withdrawal: TraceWithdrawal, state: HealthState)
     """One pass: search Langfuse for opted-out askers, then delete what is pending.
 
     The search first, so the traces it finds are deleted in the same pass.
+    Everything pending is drained, not one batch: a retention backlog must not
+    queue an opt-out behind it.
     """
     found = await withdrawal.search_askers()
-    retried = await withdrawal.retry_pending()
+    retried = await withdrawal.drain_pending()
     if found or retried:
         state.details["trace_withdrawal"] = {
             "found": found,
@@ -569,6 +571,22 @@ async def trace_retention_pass(
         "found": swept.found,
         "last_run_at": time.time(),
     }
+
+
+def start_trace_sweeps(
+    tasks: asyncio.TaskGroup, settings: Settings, engine: AsyncEngine, state: HealthState
+) -> None:
+    """Start the trace deletion and retention sweeps, when tracing is configured.
+
+    With no destination there is nothing exported and so nothing to withdraw
+    or expire; both builders return None exactly then.
+    """
+    withdrawal = build_trace_withdrawal(settings, engine)
+    if withdrawal is not None:
+        tasks.create_task(trace_withdrawal_loop(withdrawal, state))
+    retention = build_trace_retention(settings, engine)
+    if retention is not None:
+        tasks.create_task(trace_retention_loop(retention, state))
 
 
 async def memory_retention_loop(
@@ -774,14 +792,7 @@ async def main() -> None:
             memory_retention_loop(build_memory_retention(settings, engine), state)
         )
 
-        # Only when tracing is configured: with no destination there is
-        # nothing exported and so nothing to withdraw.
-        withdrawal = build_trace_withdrawal(settings, engine)
-        if withdrawal is not None:
-            tasks.create_task(trace_withdrawal_loop(withdrawal, state))
-        retention = build_trace_retention(settings, engine)
-        if retention is not None:
-            tasks.create_task(trace_retention_loop(retention, state))
+        start_trace_sweeps(tasks, settings, engine, state)
 
         if asks is not None:
             # The point of the whole ask pipeline: without these tasks the

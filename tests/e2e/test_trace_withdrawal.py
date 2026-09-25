@@ -247,6 +247,12 @@ async def test_traces_past_retention_are_deleted_and_foreign_ones_survive(
          "tags": [APP_TAG], "timestamp": old},
         {"id": "other-app-old", "name": "checkout", "environment": "production",
          "tags": [], "timestamp": old},
+        # Legacy names in our environment: one under another app's tag, one
+        # untagged but exported after our tag shipped, so not ours either.
+        {"id": "other-app-loop", "name": "loop", "environment": "production",
+         "tags": ["app:other"], "timestamp": old, "userId": "7"},
+        {"id": "other-app-fixed", "name": "fixed", "environment": "production",
+         "tags": [], "timestamp": old, "userId": "7"},
     ]
 
     await bot.ingest.expire_traces(later)

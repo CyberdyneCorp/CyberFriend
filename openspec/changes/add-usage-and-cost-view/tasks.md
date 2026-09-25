@@ -18,8 +18,8 @@
 ## 3. Retention
 
 - [x] 3.1 `TRACE_RETENTION_DAYS` (90); daily sweep marking old `trace_export` rows
-- [x] 3.2 Langfuse backstop scoped to our environment and `app:cyberfriend` tag (or our trace names for untagged older traces)
-- [x] 3.3 Tests: rows past the cutoff become pending; backstop deletes an unindexed old trace; a foreign-environment trace and a foreign-name trace survive
+- [x] 3.2 Langfuse backstop scoped to our environment and `app:cyberfriend` tag (or our trace names for untagged traces from before the tag shipped, with a Discord user id and no other `app:` tag)
+- [x] 3.3 Tests: rows past the cutoff become pending; backstop deletes an unindexed old trace; a foreign-environment trace, a foreign-name trace and another app's `fixed`/`loop` trace in our environment survive
 
 ## 4. Disclosure notice (after /privacy delete-everything ships)
 

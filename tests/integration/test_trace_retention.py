@@ -2,7 +2,8 @@
 
 Rows past the cutoff become pending and nothing else does; a trace Langfuse
 holds without an index row is still deleted; another environment's and another
-application's old traces are never asked to be deleted.
+application's old traces -- legacy-named ones in our environment included --
+are never asked to be deleted.
 """
 
 from __future__ import annotations
@@ -89,10 +90,10 @@ class FakeLangfuse:
 
 
 def _held(trace_id: str, name: str, environment: str = "production",
-          tags: tuple[str, ...] = (APP_TAG,)) -> dict[str, Any]:
+          tags: tuple[str, ...] = (APP_TAG,), user_id: str = "101") -> dict[str, Any]:
     stamp = (NOW - timedelta(days=120)).isoformat()
     return {"id": trace_id, "name": name, "environment": environment,
-            "tags": list(tags), "timestamp": stamp}
+            "tags": list(tags), "timestamp": stamp, "userId": user_id}
 
 
 async def test_the_backstop_deletes_an_unindexed_trace_and_nothing_foreign(
@@ -106,6 +107,10 @@ async def test_the_backstop_deletes_an_unindexed_trace_and_nothing_foreign(
         _held("legacy-untagged", "loop", tags=()),
         _held("foreign-env", "fixed", environment="staging"),
         _held("foreign-name", "checkout"),
+        # Legacy names in our environment that are not ours: another app's tag,
+        # and an untagged one whose user is not a Discord id.
+        _held("other-app-loop", "loop", tags=("app:other",)),
+        _held("other-app-fixed", "fixed", tags=(), user_id="checkout-bot"),
     ])
     transport = httpx.MockTransport(langfuse)
     index = PostgresTraceIndex(clean)
@@ -120,5 +125,7 @@ async def test_the_backstop_deletes_an_unindexed_trace_and_nothing_foreign(
 
     assert swept.expired == 1
     assert sorted(langfuse.deleted) == ["indexed-old", "legacy-untagged", "unindexed-old"]
-    assert sorted(r["id"] for r in langfuse.held) == ["foreign-env", "foreign-name"]
+    assert sorted(r["id"] for r in langfuse.held) == [
+        "foreign-env", "foreign-name", "other-app-fixed", "other-app-loop",
+    ]
     assert await index.pending_deletions(10) == []

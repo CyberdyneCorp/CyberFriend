@@ -157,6 +157,21 @@ class TraceWithdrawal:
             return 0
         return len(pending) if await self._flush(pending) else 0
 
+    async def drain_pending(self, batch: int = 100) -> int:
+        """`retry_pending` until the queue is empty or a deletion is refused.
+
+        The queue is shared: a retention sweep can mark a backlog of
+        thousands at once, and one batch per pass would leave an opt-out or a
+        deleted message marked after it waiting days behind that backlog.
+        Draining keeps every withdrawal within one pass of being marked.
+        """
+        total = 0
+        while True:
+            withdrawn = await self.retry_pending(batch)
+            total += withdrawn
+            if withdrawn < batch:
+                return total
+
     async def search_askers(self, limit: int = 10) -> int:
         """Find opted-out askers' traces the index never recorded; mark them.
 

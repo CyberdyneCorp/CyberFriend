@@ -56,6 +56,15 @@ LEGACY_TRACE_NAMES = frozenset(str(path) for path in AnswerPath)
 #: legacy path names. A feature id is a generic word (`time`, `portfolio`), so
 #: a row with one is ours only if it also carries `APP_TAG`.
 TRACE_NAMES = FEATURES | LEGACY_TRACE_NAMES
+#: No trace of ours is untagged after this: `APP_TAG` shipped on this day. The
+#: retention search only takes an untagged legacy-named trace from before it,
+#: because it has no asker to narrow by, and `fixed` / `loop` are names another
+#: application in the same environment may use as well. Set at the start of the
+#: day the tag was written, so it is never later than the first tagged export.
+LEGACY_UNTIL = datetime(2026, 9, 25, tzinfo=UTC)
+#: The prefix of an application tag. A row carrying one that is not `APP_TAG`
+#: belongs to that other application, whatever it is named.
+APP_TAG_PREFIX = "app:"
 #: Langfuse's largest page for the traces list.
 SEARCH_PAGE_SIZE = 100
 
@@ -235,7 +244,8 @@ class LangfuseTraceFinder:
     returned, so a server that ignores a filter still cannot widen a deletion
     to another application's traces. A row named by a feature must also carry
     `APP_TAG`: another application in a shared project may well name a trace
-    `time`. Only the legacy path names, which predate the tag, pass without it.
+    `time`. Only the legacy path names, which predate the tag, pass without it,
+    and never when another application's tag is on the row.
     """
 
     def __init__(
@@ -260,16 +270,17 @@ class LangfuseTraceFinder:
     async def find_traces_before(self, cutoff: datetime) -> Sequence[str] | None:
         """Our traces older than `cutoff`: tagged ones, then untagged legacy names.
 
-        Every row is also checked against the cutoff, for the same reason
-        every row is checked against the environment.
+        The legacy-name queries are bounded by `LEGACY_UNTIL` as well: with no
+        asker to narrow by, an untagged `fixed` / `loop` trace is only ours if
+        it predates the tag and names a Discord user. Every row is re-checked
+        against both bounds, as every row is checked against the environment.
         """
-        bound = {"toTimestamp": cutoff.astimezone(UTC).isoformat().replace("+00:00", "Z")}
-        queries = [{**bound, "tags": APP_TAG}] + [
-            {**bound, "name": name} for name in sorted(LEGACY_TRACE_NAMES)
+        legacy_cutoff = min(cutoff, LEGACY_UNTIL)
+        queries = [{"toTimestamp": _stamp(cutoff), "tags": APP_TAG}] + [
+            {"toTimestamp": _stamp(legacy_cutoff), "name": name}
+            for name in sorted(LEGACY_TRACE_NAMES)
         ]
-        return await self._search(
-            queries, lambda row: self._is_ours(row) and _before(row, cutoff)
-        )
+        return await self._search(queries, lambda row: self._expired(row, cutoff))
 
     async def _search(
         self,
@@ -319,10 +330,24 @@ class LangfuseTraceFinder:
     def _is_ours(self, row: dict[str, Any]) -> bool:
         if row.get("environment") != self._environment:
             return False
-        name = row.get("name")
-        if name in LEGACY_TRACE_NAMES:
+        tags = row.get("tags") or ()
+        if APP_TAG in tags:
+            return row.get("name") in TRACE_NAMES
+        if any(str(tag).startswith(APP_TAG_PREFIX) for tag in tags):
+            return False
+        return row.get("name") in LEGACY_TRACE_NAMES
+
+    def _expired(self, row: dict[str, Any], cutoff: datetime) -> bool:
+        """Ours and older than `cutoff`; untagged, also from before the tag."""
+        if not self._is_ours(row) or not _before(row, cutoff):
+            return False
+        if APP_TAG in (row.get("tags") or ()):
             return True
-        return name in FEATURES and APP_TAG in (row.get("tags") or ())
+        return _before(row, LEGACY_UNTIL) and str(row.get("userId") or "").isdigit()
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _before(row: dict[str, Any], cutoff: datetime) -> bool:
