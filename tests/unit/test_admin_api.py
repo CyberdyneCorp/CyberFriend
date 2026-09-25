@@ -152,6 +152,11 @@ class FakeDocumentPurge:
         return 1
 
 
+class FakePersonTraces:
+    async def request_deletion_for_person(self, person: PersonRef) -> int:
+        return 4
+
+
 @dataclass
 class FakeProbe:
     """What a federated server would say, without a federated server.
@@ -248,7 +253,7 @@ async def build_console(
         status=FakeCorpusStatus(status or _healthy()),
         channels=directory,
         optout_directory=FakeOptOutDirectory(optouts),
-        optouts=OptOutService(registry, FakeDocumentPurge()),
+        optouts=OptOutService(registry, FakeDocumentPurge(), FakePersonTraces()),
         mcp_tokens=ReviewAndRevokeOnly(mcp_tokens),
         probe=probe,
     )
@@ -808,6 +813,7 @@ async def test_an_opt_out_purges_and_reports_counts_only() -> None:
         "decisions": 0,
         "documents": 1,
         "total": 16,
+        "traces_scheduled": 4,
     }
     assert console.optouts.purged == [PersonRef("discord", 42)]
 

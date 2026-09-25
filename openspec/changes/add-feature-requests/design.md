@@ -43,12 +43,27 @@ should be able to tell me X" are never proposed as suggestions.
 
 The suggestion step runs last, just before the default corpus answer, after
 every existing step in `app/ask.py`: fact_intent, indexing_request,
-typed_command, viewer/ACL resolution, alert_intent, catch-up, said_by. It then
-asks the router (`routing.py`) for its decision on the remainder of the
-message (the text after the form). Any decision other than the default corpus
-answer wins: market, crypto (wallet balance, activity, portfolio, DeFi), web
-search, time, decisions, obligations, capabilities. The suggestion step is not
-a hand-kept deferral list, so a router added later wins automatically.
+typed_command, viewer/ACL resolution, alert_intent, catch-up, said_by. There is
+no single router to ask: the routes are chosen in several places (`app/ask.py`,
+the reasoning service's `_answer_outside_corpus`, and the said-by, decisions,
+obligations and self-description services). So the step asks
+`route_claiming` in `app/suggestion_intent.py`, which runs `ROUTE_CLAIMS`: a
+hand-kept list of every lexical route a message can take instead of the corpus
+answer (fact, indexing, typed command, alert, catch-up, said-by,
+self-description, obligations, decisions, MCP change, market, time, crypto
+(wallet balance, activity, portfolio, DeFi), web search), each with the
+asker's earlier questions for the follow-ups the market and chain routes read.
+Any claim wins. If the whole message is not claimed but the remainder (the
+text after the form) is, the message is asked again as the remainder, so
+"it would be nice if you could show my portfolio" reaches the portfolio route.
+
+The rule: **a new route must be added to `ROUTE_CLAIMS`**, or a suggestion
+would be proposed over what it can answer. Two tests hold it: one case per row,
+and a guard that reads the route predicates `app/ask.py` and
+`app/reasoning/service.py` import from the routing modules and fails when one
+is missing from `ROUTE_CLAIMS` (the fixed/loop `classify` is excluded, being
+the corpus answer either way). A route added inside a downstream service is
+not seen by that guard and must be added by hand.
 
 So:
 

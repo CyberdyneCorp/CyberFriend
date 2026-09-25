@@ -239,6 +239,45 @@
         }
       ],
       "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Suggest something I should do",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "suggest",
+      "nsfw": false,
+      "options": [
+        {
+          "description": "What you'd like me to be able to do",
+          "name": "text",
+          "required": true,
+          "type": 3
+        }
+      ],
+      "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Show your suggestions and their status",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "suggestions",
+      "nsfw": false,
+      "options": [],
+      "type": 1
     }
   ],
   "guild": [

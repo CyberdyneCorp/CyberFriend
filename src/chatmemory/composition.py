@@ -112,6 +112,7 @@ from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestStore
 from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
@@ -119,7 +120,11 @@ from chatmemory.adapters.store.postgres import HybridSearch, PostgresStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
-from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseTracer
+from chatmemory.adapters.tracing.langfuse import (
+    LangfuseTraceDeleter,
+    LangfuseTraceFinder,
+    LangfuseTracer,
+)
 from chatmemory.adapters.web.limits import CallBudget
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
@@ -159,6 +164,7 @@ from chatmemory.app.currency import PreferredCurrencies
 from chatmemory.app.decisions.answering import DecisionAnswerService
 from chatmemory.app.decisions.model import DecisionPolicy
 from chatmemory.app.facts import PersonalFactsService
+from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.notifications import (
     NotificationDelivery,
@@ -1066,6 +1072,15 @@ def build_alert_requests(
     )
 
 
+def build_feature_requests(engine: AsyncEngine, clock: Clock = utc_now) -> FeatureRequestService:
+    """`/suggest` and `/suggestions`, over the answer stack's engine.
+
+    Not behind a setting: a suggestion is the person's own words given on
+    purpose, and the command that takes them costs nothing to have.
+    """
+    return FeatureRequestService(PostgresFeatureRequestStore(engine), clock=clock)
+
+
 def build_schedules(settings: Settings, engine: AsyncEngine) -> ScheduleService | None:
     """The `/schedule` commands, or None when the feature is off.
 
@@ -1206,6 +1221,7 @@ def build_tracer(
             secret_key=settings.langfuse_secret_key.get_secret_value(),
             index=PostgresTraceIndex(engine),
             timeout=settings.tracing_timeout_seconds,
+            environment=settings.langfuse_environment,
             transport=transport,
         ),
         PostgresRetentionStore(engine),
@@ -1222,24 +1238,43 @@ def build_corpus_store(settings: Settings, engine: AsyncEngine) -> PostgresStore
 
 
 def build_trace_withdrawal(
-    settings: Settings, engine: AsyncEngine
+    settings: Settings,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> TraceWithdrawal | None:
     """The deletion side of tracing, for the ingest process.
 
     Built from the same three settings as the exporter, because a deployment
     that exports must withdraw and one that does not has nothing to withdraw.
+    `transport` replaces httpx's default network transport. The ingest
+    entrypoint passes none; the end-to-end harness passes FakeWeb's, which
+    without this parameter it could not, so no test could see a trace being
+    withdrawn.
     """
     if not settings.tracing_enabled or not settings.langfuse_host:
         return None
     if settings.langfuse_public_key is None or settings.langfuse_secret_key is None:
         return None
+    public_key = settings.langfuse_public_key.get_secret_value()
+    secret_key = settings.langfuse_secret_key.get_secret_value()
     return TraceWithdrawal(
         PostgresTraceIndex(engine),
         LangfuseTraceDeleter(
             host=settings.langfuse_host,
-            public_key=settings.langfuse_public_key.get_secret_value(),
-            secret_key=settings.langfuse_secret_key.get_secret_value(),
+            public_key=public_key,
+            secret_key=secret_key,
             timeout=settings.tracing_timeout_seconds,
+            transport=transport,
+        ),
+        # The backstop for traces exported before the index recorded who
+        # asked them: an opt-out queues a search by platform id, this runs it.
+        LangfuseTraceFinder(
+            host=settings.langfuse_host,
+            public_key=public_key,
+            secret_key=secret_key,
+            environment=settings.langfuse_environment,
+            timeout=settings.tracing_timeout_seconds,
+            transport=transport,
         ),
     )
 

@@ -69,6 +69,13 @@ from chatmemory.adapters.discord.schedule_replies import (
     schedule_listing,
 )
 from chatmemory.adapters.discord.schedule_replies import text as schedule_text
+from chatmemory.adapters.discord.suggestions import (
+    NotifyChoiceView,
+    SuggestionProposalView,
+    submitted_message,
+    suggestion_listing,
+)
+from chatmemory.adapters.discord.suggestions import text as suggestion_text
 from chatmemory.adapters.discord.views import RequesterOnlyView
 from chatmemory.app.alert_requests import AlertProposal, AlertRequests
 from chatmemory.app.ask import (
@@ -91,6 +98,7 @@ from chatmemory.app.authorization import ConfirmationPrompt
 from chatmemory.app.channel_listing import ChannelListing, ChannelListingService
 from chatmemory.app.confirmation import ConfirmationReply, Undeliverable
 from chatmemory.app.disclosure import ScopedAnswer, withheld_notice
+from chatmemory.app.feature_requests import FeatureRequestService, SubmitResult
 from chatmemory.app.indexing import (
     ChannelAccess,
     IndexAction,
@@ -114,6 +122,7 @@ from chatmemory.app.voice import (
 )
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Citation
+from chatmemory.ports.feature_requests import SourceKind, SuggestionSource
 from chatmemory.ports.notifications import (
     DeliveryResult,
     NotificationDraft,
@@ -1008,6 +1017,7 @@ class CyberFriendClient(discord.Client):
         self._channels: ChannelListingService | None = None
         self._schedules: ScheduleService | None = None
         self._alerts: AlertRequests | None = None
+        self._suggestions: FeatureRequestService | None = None
         self._voice: VoiceQuestions | None = None
         self._described = Capabilities()
 
@@ -1065,6 +1075,14 @@ class CyberFriendClient(discord.Client):
         """
         self._alerts = alerts
 
+    def attach_feature_requests(self, suggestions: FeatureRequestService) -> None:
+        """Give `/suggest` and `/suggestions` somewhere to read and write.
+
+        Attached after construction like the rest. Without it both commands are
+        still registered and say suggestions cannot be taken here.
+        """
+        self._suggestions = suggestions
+
     def attach_notifications(self, notifications: NotificationPreferences) -> None:
         """Give `/notifications` somewhere to write.
 
@@ -1110,6 +1128,10 @@ class CyberFriendClient(discord.Client):
             # group is how somebody sees and stops them, so it exists wherever
             # the bot does, like `/notifications`.
             self._build_alert_group(),
+            # Suggestions are the person's own words about the assistant, and
+            # listing them is keyed on the interaction's user, like `/forget`.
+            self._build_suggest_command(),
+            self._build_suggestions_command(),
         ):
             self.tree.add_command(_in_guild_and_dm(command))
         # Guild only: these act on a channel. No `default_permissions`: Manage
@@ -1244,6 +1266,83 @@ class CyberFriendClient(discord.Client):
             await interaction.followup.send(alert_word(note, language), ephemeral=True)
 
         return alert_group
+
+    def _build_suggest_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/suggest`: record a feature request, in the person's own words.
+
+        Explicit, so there is no proposal to confirm: the reply is the
+        acknowledgement, with [Yes] [No] for news of status changes. Private,
+        because what somebody asked for is theirs to announce.
+        """
+
+        @app_commands.command(name="suggest", description="Suggest something I should do")
+        @app_commands.describe(text="What you'd like me to be able to do")
+        async def suggest(interaction: discord.Interaction, text: str) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            language = await self._caller_language(interaction, text)
+            if self._suggestions is None:
+                await interaction.followup.send(
+                    suggestion_text("unavailable", language), ephemeral=True
+                )
+                return
+            person = _person(interaction.user)
+            result = await self._suggestions.submit(
+                person,
+                text,
+                _suggestion_source(interaction),
+                display_name=interaction.user.display_name,
+                language=language,
+            )
+            await self._acknowledge_suggestion(interaction, result, language)
+
+        return suggest
+
+    async def _acknowledge_suggestion(
+        self, interaction: discord.Interaction, result: SubmitResult, language: Language
+    ) -> None:
+        reply = submitted_message(result, language)
+        if not result.stored or result.request_id is None or self._suggestions is None:
+            await interaction.followup.send(
+                reply, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+            )
+            return
+        suggestions, person = self._suggestions, _person(interaction.user)
+
+        async def set_notify(request_id: int, notify: bool) -> bool:
+            return await suggestions.set_notify(person, request_id, notify)
+
+        view = NotifyChoiceView(interaction.user.id, result.request_id, language, set_notify)
+        sent = await interaction.followup.send(
+            reply,
+            view=view,
+            ephemeral=True,
+            wait=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.sent_as(sent)
+
+    def _build_suggestions_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/suggestions`: the caller's own suggestions and their status."""
+
+        @app_commands.command(
+            name="suggestions", description="Show your suggestions and their status"
+        )
+        async def suggestions(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            language = await self._caller_language(interaction)
+            if self._suggestions is None:
+                await interaction.followup.send(
+                    suggestion_text("unavailable", language), ephemeral=True
+                )
+                return
+            own = await self._suggestions.list_own(_person(interaction.user))
+            await interaction.followup.send(
+                suggestion_listing(own, language),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        return suggestions
 
     async def _confirm_alerts(self, proposal: AlertProposal) -> str:
         """What the Confirm button does: create what the prompt listed."""
@@ -1577,17 +1676,21 @@ class CyberFriendClient(discord.Client):
     async def _answer(self, message: discord.Message, text: str, *, heard: str = "") -> None:
         """Answer `text` as a question. `heard` quotes a voice question above it."""
         destination = ChannelRef(PLATFORM, message.channel.id) if message.guild else None
+        request = AskRequest(
+            asker=_person(message.author),
+            text=self.link_channel_names(text),
+            destination=destination,
+            location_id=message.channel.id,
+        )
         asking = self._asks.ask(
-            AskRequest(
-                asker=_person(message.author),
-                text=self.link_channel_names(text),
-                destination=destination,
-                location_id=message.channel.id,
-            ),
+            request,
             # A DM even when the question was asked in a channel: the
             # answer's destination is not the prompt's, because a prompt
             # in the channel would ask the room to decide for the asker.
             DirectMessageConfirmation(message.author),
+            # Only with somewhere to store it: without, the message is
+            # answered as it always was.
+            suggest=self._suggestions is not None,
         )
         outcome = await self._with_progress(message, text, asking)
 
@@ -1605,9 +1708,63 @@ class CyberFriendClient(discord.Client):
                 await self._reply_parts(message, [heard])
             await reply_with_confirmation(message, outcome.alert, self._confirm_alerts)
             return
+        if outcome.suggestion is not None:
+            if heard:
+                await self._reply_parts(message, [heard])
+            await self._propose_suggestion(message, request, outcome)
+            return
+        await self._deliver(message, outcome, heard)
+
+    async def _deliver(self, message: discord.Message, outcome: AskOutcome, heard: str) -> None:
+        """An answer, as replies to the message it answers."""
         assert outcome.scoped is not None
         await self._reply_parts(message, split_message(_with_heard(heard, _render(outcome.scoped))))
         await self._notify_if_withheld(outcome.scoped, message.author, message.channel)
+
+    async def _propose_suggestion(
+        self, message: discord.Message, request: AskRequest, outcome: AskOutcome
+    ) -> None:
+        """The proposal, with [Record suggestion] and [No, answer it].
+
+        Recording stores what `/suggest` would, from where the message was
+        written. Declining it, or not answering, answers the message as it
+        would have been without the proposal.
+        """
+        suggestions, person = self._suggestions, _person(message.author)
+        proposal = outcome.suggestion
+        assert suggestions is not None and proposal is not None and outcome.scoped is not None
+
+        async def record() -> SubmitResult:
+            return await suggestions.submit(
+                person,
+                proposal.text,
+                _message_source(message),
+                display_name=message.author.display_name,
+                language=proposal.language,
+            )
+
+        async def set_notify(request_id: int, notify: bool) -> bool:
+            return await suggestions.set_notify(person, request_id, notify)
+
+        async def answer() -> None:
+            answered = await self._asks.answer_without_suggestion(
+                request, DirectMessageConfirmation(message.author)
+            )
+            if answered.alert is not None:
+                await reply_with_confirmation(message, answered.alert, self._confirm_alerts)
+                return
+            await self._deliver(message, answered, "")
+
+        view = SuggestionProposalView(
+            message.author.id, proposal.language, record, answer, set_notify
+        )
+        sent = await message.reply(
+            outcome.scoped.answer.text,
+            view=view,
+            mention_author=False,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.sent_as(sent)
 
     async def _reply_parts(self, message: discord.Message, parts: Sequence[str]) -> None:
         for index, part in enumerate(parts):
@@ -1713,6 +1870,29 @@ class CyberFriendClient(discord.Client):
 
 
 _AnyCommand = app_commands.Command[Any, ..., None] | app_commands.Group
+
+
+def _suggestion_source(interaction: discord.Interaction) -> SuggestionSource:
+    """Where `/suggest` was run: ids only, and none for a DM."""
+    in_guild = interaction.guild_id is not None
+    return SuggestionSource(
+        kind=SourceKind.COMMAND,
+        platform=PLATFORM,
+        guild_id=interaction.guild_id if in_guild else None,
+        channel_id=interaction.channel_id if in_guild else None,
+    )
+
+
+def _message_source(message: discord.Message) -> SuggestionSource:
+    """Where a suggestion was written: the channel's ids, or none for a DM."""
+    if message.guild is None:
+        return SuggestionSource(kind=SourceKind.DM, platform=PLATFORM)
+    return SuggestionSource(
+        kind=SourceKind.CHANNEL,
+        platform=PLATFORM,
+        guild_id=message.guild.id,
+        channel_id=message.channel.id,
+    )
 
 
 def _in_guild_and_dm(command: _AnyCommand) -> _AnyCommand:

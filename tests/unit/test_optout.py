@@ -76,6 +76,29 @@ async def test_the_exclusion_is_recorded_before_the_purge() -> None:
     assert registry.calls == ["record", "purge"]
 
 
+class FakeTraces:
+    def __init__(self, registry: FakeRegistry) -> None:
+        self.registry = registry
+
+    async def request_deletion_for_person(self, person: PersonRef) -> int:
+        self.registry.calls.append("traces")
+        return 3
+
+
+async def test_traces_are_marked_after_the_flag_and_before_the_purge() -> None:
+    """The quoting traces are found through the person's message rows, so
+    marking them after the purge would find none."""
+    registry = FakeRegistry()
+    report = await OptOutService(
+        registry, FakeDocuments(), FakeTraces(registry)
+    ).opt_out(ALICE)
+
+    assert registry.calls == ["record", "traces", "purge"]
+    assert report.traces == 3
+    # Scheduled, not removed: not counted as purged.
+    assert report.total == 22
+
+
 async def test_it_covers_uploads_and_not_only_messages() -> None:
     """An opt-out that withdraws the message and leaves the attached PDF
     searchable has removed the index entry and kept the content."""
