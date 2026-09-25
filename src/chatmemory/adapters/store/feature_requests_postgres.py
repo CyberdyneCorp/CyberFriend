@@ -46,6 +46,11 @@ class PostgresFeatureRequestStore:
             # Created on miss, as memory and facts do: somebody may suggest
             # something before ingest has ever seen them post.
             person_id = await _person_id(conn, suggestion.person)
+            # One submission per person at a time, so the limit's count holds.
+            await conn.execute(sql.LOCK_PERSON, {"person_id": person_id})
+            # Before the name: nothing of an opted-out person is written.
+            if await conn.scalar(sql.IS_OPTED_OUT, {"person_id": person_id}):
+                return StoreResult(StoreVerdict.OPTED_OUT)
             await self._name(conn, person_id, suggestion)
             existing = await self._existing(conn, person_id, suggestion.normalized_hash)
             if existing is not None:

@@ -7,11 +7,17 @@ that reads or changes a row is keyed on the requester's own person id, bound in
 the WHERE clause, so reading or changing somebody else's suggestion is not a
 query this module can run.
 
-`INSERT_WITHIN_LIMIT` carries the daily limit as a predicate on the insert
-rather than a count read and then checked, as `schedules_sql` does for its cap:
-two submissions arriving together would each read the same count and both
-write. A BEFORE INSERT trigger (migration 0030) drops the row for a person who
-has opted out, and RETURNING then yields nothing.
+A submission first takes `LOCK_PERSON`, a row lock on the requester's person
+row held to the end of the transaction. That is what makes the daily limit
+hold: under READ COMMITTED the count in `INSERT_WITHIN_LIMIT` sees only
+committed rows, so without the lock parallel submissions would each count the
+same total and all write. With it they run one after another, and each count
+sees the rows the previous one committed. `FOR NO KEY UPDATE` does not block
+the key-share locks other tables' foreign keys take on the person row.
+
+A BEFORE INSERT trigger (migration 0030) also drops the row for a person who
+has opted out, and RETURNING then yields nothing; the adapter checks the
+opt-out itself first, so it writes nothing, not even their name.
 """
 
 from __future__ import annotations
@@ -21,6 +27,10 @@ from sqlalchemy import text
 #: Only a placeholder name is replaced -- the account id a person row is
 #: created with when somebody talks to the assistant before ingest has seen
 #: them. A name ingest already keeps current is left alone.
+LOCK_PERSON = text("""
+SELECT id FROM person WHERE id = :person_id FOR NO KEY UPDATE
+""")
+
 NAME_PLACEHOLDER_PERSON = text("""
 UPDATE person SET display_name = :display_name
 WHERE id = :person_id AND display_name = :placeholder

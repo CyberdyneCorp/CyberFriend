@@ -447,6 +447,10 @@ UNSCOPED: dict[str, str] = {
     #
     # The voice-question ledger: seconds per person and month, never content.
     # --- feature_requests_sql: the person's own suggestions ---------------
+    "feature_requests_sql.LOCK_PERSON": (
+        "row lock on the submitter's own person row, keyed on their person id, "
+        "so the daily limit's count holds. Returns the id only"
+    ),
     "feature_requests_sql.NAME_PLACEHOLDER_PERSON": (
         "write; replaces the account-id placeholder name of the submitter's own "
         "person row with their Discord name. Returns no row"

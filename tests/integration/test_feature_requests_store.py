@@ -8,6 +8,7 @@ no path that records an opt-out can keep a suggestion.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -100,6 +101,22 @@ async def test_the_sixth_in_24_hours_is_refused_and_not_stored(clean: AsyncEngin
     assert (await suggestions.submit(LEO, "idea 5", COMMAND)).stored
 
 
+async def test_parallel_submissions_cannot_pass_the_daily_limit(clean: AsyncEngine) -> None:
+    """Regression: the count in the insert saw only committed rows, so twenty
+    submissions at once were all stored."""
+    suggestions = service(clean)
+    assert (await suggestions.submit(LEO, "warm up", COMMAND)).stored
+
+    results = await asyncio.gather(
+        *(suggestions.submit(LEO, f"idea {n}", COMMAND) for n in range(20))
+    )
+
+    outcomes = [r.outcome for r in results]
+    assert outcomes.count(SubmitOutcome.RECORDED) == 4
+    assert outcomes.count(SubmitOutcome.LIMITED) == 16
+    assert len(await rows(clean)) == 5
+
+
 async def test_an_opted_out_person_stores_nothing(clean: AsyncEngine) -> None:
     await OptOutService(PostgresRetentionStore(clean)).opt_out(LEO, "test")
 
@@ -107,6 +124,18 @@ async def test_an_opted_out_person_stores_nothing(clean: AsyncEngine) -> None:
 
     assert result.outcome is SubmitOutcome.OPTED_OUT
     assert await rows(clean) == []
+
+
+async def test_an_opted_out_person_keeps_the_placeholder_name(clean: AsyncEngine) -> None:
+    """Regression: the Discord name was written before the opt-out was seen."""
+    await OptOutService(PostgresRetentionStore(clean)).opt_out(LEO, "test")
+
+    result = await service(clean).submit(LEO, "dark mode", COMMAND, display_name="Real Name")
+
+    assert result.outcome is SubmitOutcome.OPTED_OUT
+    async with clean.connect() as conn:
+        name = await conn.scalar(text("SELECT display_name FROM person"))
+    assert name == str(LEO.platform_user_id)
 
 
 async def test_opting_out_deletes_their_suggestions_and_only_theirs(clean: AsyncEngine) -> None:
@@ -160,13 +189,26 @@ async def test_notify_is_set_only_on_their_own_and_starts_from_the_current_statu
     suggestions = service(clean)
     mine = await suggestions.submit(LEO, "dark mode", COMMAND)
     assert mine.request_id is not None
+    # Ana is a known person, so the refusal below is the statement's person
+    # predicate and not the lookup finding nobody.
+    assert (await suggestions.submit(ANA, "light mode", COMMAND)).stored
 
     assert not await suggestions.set_notify(ANA, mine.request_id, True)
+    async with clean.connect() as conn:
+        untouched = await conn.scalar(
+            text("SELECT notify_on_change FROM feature_request WHERE id = :i"),
+            {"i": mine.request_id},
+        )
+    assert untouched is False
     assert await suggestions.set_notify(LEO, mine.request_id, True)
 
     async with clean.connect() as conn:
         found = await conn.execute(
-            text("SELECT notify_on_change, notified_status FROM feature_request")
+            text(
+                "SELECT notify_on_change, notified_status FROM feature_request "
+                "WHERE id = :i"
+            ),
+            {"i": mine.request_id},
         )
         assert tuple(found.one()) == (True, "new")
 

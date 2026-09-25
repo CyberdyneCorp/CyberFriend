@@ -764,11 +764,13 @@ surrounding conversation is stored.
 - **Idempotent**: the same text (case, whitespace and punctuation ignored) from
   the same person is one row, and resubmitting answers with its number.
 - **Five a day**: at most five accepted per person in any rolling 24 hours,
-  enforced inside the insert.
+  enforced inside the insert while holding a lock on the person's row, so
+  parallel submissions are counted one after another.
 - **Status news is opt-in**: the acknowledgement asks whether to DM them when
   the status changes; nothing is stored unless they press Yes. The sweep that
   sends those DMs arrives with the admin triage screen.
-- **Privacy**: an opt-out deletes a person's suggestions in the same
+- **Privacy**: nothing is written for an opted-out person, not even their
+  name; an opt-out deletes a person's suggestions in the same
   transaction, and deleting the person cascades. When `purge_person_derived`
   (add-privacy-dashboard) lands, its delete replaces 0030's trigger.
 

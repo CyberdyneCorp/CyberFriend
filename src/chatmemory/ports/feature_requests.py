@@ -3,8 +3,8 @@
 A suggestion is the person's own words and the ids of where they gave it, and
 nothing about the conversation around it. The store is where the bounds live
 that a command must not be the only thing enforcing: one row per person and
-normalised text, a rolling daily limit decided inside the insert, and no row
-at all for somebody who has opted out.
+normalised text, a rolling daily limit decided inside the insert under a lock
+on the person row, and no row at all for somebody who has opted out.
 """
 
 from __future__ import annotations
