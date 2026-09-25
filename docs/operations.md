@@ -289,7 +289,14 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   marks: it holds no Langfuse keys, and `bot` and `ingest` are the processes
   that hold the pair. A search or deletion Langfuse refuses or cannot receive
   (a 400 included) stays pending and is retried every five minutes. The
-  migration queues a search for everyone who had already opted out. A run
+  migration queues a search for everyone who had already opted out, which
+  finds the traces of questions they asked. It cannot find the traces that
+  *quote* their messages: that link runs through their `message` rows, and
+  the earlier opt-out deleted them, so for people who opted out before 0029
+  those traces stay in Langfuse. To withdraw them, mark every trace exported
+  before the 0029 deploy as pending and let the sweep delete it:
+  `UPDATE trace_export SET deletion_requested_at = now() WHERE deleted_at IS NULL AND created_at < '<0029 deploy time>';`
+  This deletes other people's older traces too; no narrower query exists. A run
   already answering when the opt-out lands is recorded as pending the moment
   it is exported. Langfuse deletes asynchronously, so "withdrawn" means the
   deletion was accepted.

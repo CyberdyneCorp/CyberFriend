@@ -14,8 +14,11 @@ records the opt-out, ingest holds the Langfuse keys, and this table is how one
 tells the other. A row stays open until the search has read every page, so a
 Langfuse outage delays the search rather than losing it.
 
-People who opted out before this revision are queued here too, which is what
-makes the fix reach them.
+People who opted out before this revision are queued here too, which reaches
+the traces of questions they asked. It does not reach traces quoting their
+messages: the earlier opt-out deleted their `message` rows, which is the only
+link from a quoted message to its author. docs/operations.md names the manual
+cleanup.
 
 Revision ID: 0029
 Revises: 0028
