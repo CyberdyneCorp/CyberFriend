@@ -5,7 +5,9 @@
 When an identity provider is configured, the console SHALL sign people in with
 the OIDC authorization code flow with PKCE (S256), performed by the admin API.
 The browser SHALL receive only an opaque, httpOnly, Secure, SameSite=Strict
-session cookie, and SHALL NOT receive an access, refresh or id token.
+session cookie, and SHALL NOT receive an access or refresh token. It SHALL
+receive the id token only as the id token hint of the end-session URL at
+sign-out, after the session is revoked.
 
 #### Scenario: Successful sign-in
 - WHEN a person completes sign-in at CyberdyneAuth and returns with a valid code
@@ -34,8 +36,9 @@ session cookie, and SHALL NOT receive an access, refresh or id token.
 - THEN the sign-in SHALL be refused and the userinfo email SHALL NOT be used
 
 #### Scenario: No identity provider configured
-- WHEN no issuer is configured
-- THEN the sign-in routes SHALL NOT be available
+- WHEN no issuer is configured, whether or not the other sign-in settings are
+- THEN the service SHALL start
+- AND the sign-in routes SHALL NOT be available
 - AND bearer tokens SHALL work as before
 
 ### Requirement: Access tokens are verified locally

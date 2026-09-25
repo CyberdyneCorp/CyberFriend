@@ -24,7 +24,9 @@ CyberdyneAuth's contract (from its team):
 
 **Goals:**
 
-- No token reaches the browser.
+- No access or refresh token reaches the browser. The id token reaches it
+  only as the `id_token_hint` of the end-session URL at sign-out, after our
+  session is revoked; RP-initiated logout needs it there.
 - One place decides which role each route needs, and it fails closed.
 - Every change stays attributable to a person.
 - Scripts that use `cfa_` tokens keep working.
@@ -243,10 +245,15 @@ added to the secret set that is never recorded or displayed.
   tokens are operator only and never read personal content. Admin writes need
   a CyberdyneAuth role.
 - [CyberdyneAuth down while an admin write is urgent] -> Break-glass is a
-  rollback: unset the issuer and `cfa_` tokens are admin again. This is
+  rollback: unset the issuer and `cfa_` tokens are admin again. The issuer
+  alone is the switch, so the other four may stay set (they are ignored with
+  a warning); an issuer set without them refuses to start. This is
   recorded in the operations docs.
 - [CyberdyneAuth unreachable] -> Login fails and existing sessions keep working
-  until their access token needs a refresh. Bearer tokens keep working.
+  until their access token needs a refresh, in a process that cached discovery
+  and the key set before the outage (both are in memory only; after a restart
+  during the outage every session request is a 401). Bearer tokens keep
+  working.
 - [Role claim semantics change on the provider side] -> Absent or unfamiliar
   claims deny. Tests pin that behaviour.
 
@@ -258,5 +265,5 @@ added to the secret set that is never recorded or displayed.
 3. Set the issuer, client id, secret, session key and public URL. Admins sign in
    with CyberdyneAuth, and scripts keep their tokens.
    From this point `cfa_` tokens are operator only.
-4. Rollback: unset the issuer. Sessions stop being accepted and tokens are
-   admin again.
+4. Rollback: unset the issuer (the other four may stay). Sessions stop being
+   accepted and tokens are admin again.

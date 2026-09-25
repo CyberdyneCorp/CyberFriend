@@ -33,7 +33,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
-from chatmemory.admin.auth import Operator
+from chatmemory.admin.oidc.config import SECRET_VARS
 
 SHELL_ACTOR = "cli:shell"
 """The actor for a change made from the operator CLI rather than the console.
@@ -50,6 +50,9 @@ SECRET_SETTINGS = frozenset(
         "discord_token",
         "llm_api_key",
         "database_url",
+        # The console's own sign-in secrets: the OIDC client secret and the key
+        # its sessions are encrypted under.
+        *(name.lower() for name in SECRET_VARS),
     }
 )
 """Settings the console may neither read nor write, and so may never record.
@@ -59,6 +62,20 @@ refusal recorded together with the value it refused would defeat the refusal:
 the secret would land in the one table built to be kept forever and read by
 operators. Raising here means such an entry cannot be written even by mistake.
 """
+
+
+class Acting(Protocol):
+    """Whoever a console change is attributed to: an `Operator` or an `auth.Actor`.
+
+    `name` is what the record's actor column holds (an operator name, or
+    `oidc:<sub>`); `display` is shown beside it (a signed-in person's email).
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def display(self) -> str | None: ...
 
 
 class SecretNeverRecorded(Exception):
@@ -98,6 +115,8 @@ class ConfigurationChange:
     before: str | None = None
     after: str | None = None
     reason: str | None = None
+    #: Shown beside the actor: a signed-in person's email. Never an identity.
+    operator_display: str | None = None
 
     def __post_init__(self) -> None:
         if not self.operator.strip():
@@ -122,6 +141,7 @@ class ChangeRecord:
     before: str | None
     after: str | None
     reason: str | None
+    operator_display: str | None = None
 
 
 class ChangeRecordStore(Protocol):
@@ -145,18 +165,19 @@ class ChangeRecordStore(Protocol):
 
 # --- constructors ------------------------------------------------------
 #
-# The console path takes an `Operator`, which only `auth.current_operator`
-# hands out, so a handler cannot attribute a change to a name it was given.
+# The console path takes an `Acting`, which only `auth.current_actor` hands
+# out, so a handler cannot attribute a change to a name it was given.
 # `by_shell` is the one way to write an entry that is not a named operator,
 # and it lives here where it is visible rather than in whatever calls it.
 
 
 def applied(
-    operator: Operator, setting: str, before: str | None, after: str | None
+    operator: Acting, setting: str, before: str | None, after: str | None
 ) -> ConfigurationChange:
     """An edit that took effect."""
     return ConfigurationChange(
         operator=operator.name,
+        operator_display=operator.display,
         setting=setting,
         kind=ChangeKind.APPLIED,
         before=before,
@@ -165,7 +186,7 @@ def applied(
 
 
 def refused(
-    operator: Operator,
+    operator: Acting,
     setting: str,
     reason: str,
     *,
@@ -181,6 +202,7 @@ def refused(
     """
     return ConfigurationChange(
         operator=operator.name,
+        operator_display=operator.display,
         setting=setting,
         kind=ChangeKind.REFUSED,
         before=before,
@@ -190,7 +212,7 @@ def refused(
 
 
 def escalation(
-    operator: Operator,
+    operator: Acting,
     setting: str,
     before: str | None,
     after: str | None,
@@ -199,6 +221,7 @@ def escalation(
     """A change that widened what the agent, or the console, may do."""
     return ConfigurationChange(
         operator=operator.name,
+        operator_display=operator.display,
         setting=setting,
         kind=ChangeKind.ESCALATION,
         before=before,
@@ -252,6 +275,7 @@ class InMemoryChangeRecord:
             before=change.before,
             after=change.after,
             reason=change.reason,
+            operator_display=change.operator_display,
         )
         self._entries.append(entry)
         return entry

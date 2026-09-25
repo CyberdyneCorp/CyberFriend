@@ -595,9 +595,15 @@ class ConfigurationEditor:
     # the same registry every caller resolves against.
     specs: Mapping[str, SettingSpec[Any]] = field(default_factory=lambda: SETTINGS)
 
-    async def set(self, key: str, raw: str, operator: str) -> object:
-        """Store a setting, returning the parsed value. Raises on refusal."""
-        spec = await self._require_editable(key, operator)
+    async def set(
+        self, key: str, raw: str, operator: str, *, display: str | None = None
+    ) -> object:
+        """Store a setting, returning the parsed value. Raises on refusal.
+
+        `display` is shown beside `operator` in the record: a signed-in
+        person's email next to `oidc:<sub>`.
+        """
+        spec = await self._require_editable(key, operator, display)
         try:
             parsed = spec.parse(raw)
         except (ValueError, TypeError) as exc:
@@ -608,31 +614,33 @@ class ConfigurationEditor:
             # operator's browser. Saying what would have been accepted is the
             # useful half of that message anyway.
             reason = f"malformed value; expected {spec.expects}"
-            await self.store.record_refusal(key, operator, reason)
+            await self.store.record_refusal(key, operator, reason, display=display)
             raise MalformedSetting(f"{key}: {reason}") from exc
-        await self.store.put(key, raw, operator)
+        await self.store.put(key, raw, operator, display=display)
         log.info("config.set", setting=key, operator=operator)
         return parsed
 
-    async def clear(self, key: str, operator: str) -> None:
+    async def clear(self, key: str, operator: str, *, display: str | None = None) -> None:
         """Remove a stored setting, handing it back to the environment."""
-        await self._require_editable(key, operator)
-        await self.store.clear(key, operator)
+        await self._require_editable(key, operator, display)
+        await self.store.clear(key, operator, display=display)
         log.info("config.cleared", setting=key, operator=operator)
 
-    async def _require_editable(self, key: str, operator: str) -> SettingSpec[Any]:
+    async def _require_editable(
+        self, key: str, operator: str, display: str | None
+    ) -> SettingSpec[Any]:
         secret = SECRETS.get(key)
         if secret is not None:
             reason = (
                 f"{key} is a credential ({secret.summary}); credentials are read from "
                 "the environment and cannot be stored"
             )
-            await self.store.record_refusal(key, operator, reason)
+            await self.store.record_refusal(key, operator, reason, display=display)
             raise SecretSetting(reason)
         spec = self.specs.get(key)
         if spec is None:
             reason = f"{key} is not a setting"
-            await self.store.record_refusal(key, operator, reason)
+            await self.store.record_refusal(key, operator, reason, display=display)
             raise UnknownSetting(reason)
         return spec
 

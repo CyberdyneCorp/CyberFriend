@@ -84,15 +84,20 @@ class ConfigurationStore(Protocol):
         """
         ...
 
-    async def put(self, key: str, raw: str, operator: str) -> None:
+    async def put(
+        self, key: str, raw: str, operator: str, *, display: str | None = None
+    ) -> None:
         """Store `raw` under `key`, recording the operator and what it replaced.
+
+        `display` is shown beside the operator in the record (a signed-in
+        person's email); it never identifies anyone.
 
         One transaction: the audit row and the setting move together or
         neither does.
         """
         ...
 
-    async def clear(self, key: str, operator: str) -> None:
+    async def clear(self, key: str, operator: str, *, display: str | None = None) -> None:
         """Remove a stored setting, so the environment takes it back.
 
         Records the removal with the value that was removed. Clearing a key
@@ -100,7 +105,9 @@ class ConfigurationStore(Protocol):
         """
         ...
 
-    async def record_refusal(self, key: str, operator: str, reason: str) -> None:
+    async def record_refusal(
+        self, key: str, operator: str, reason: str, *, display: str | None = None
+    ) -> None:
         """Record a change that was refused, and why.
 
         The attempted value is deliberately not part of this call. The most

@@ -150,14 +150,18 @@ class Failover:
     async def load(self) -> Sequence[StoredSetting]:
         return await self.inner.load()
 
-    async def put(self, key: str, raw: str, operator: str) -> None:
-        await self.inner.put(key, raw, operator)
+    async def put(
+        self, key: str, raw: str, operator: str, *, display: str | None = None
+    ) -> None:
+        await self.inner.put(key, raw, operator, display=display)
 
-    async def clear(self, key: str, operator: str) -> None:
-        await self.inner.clear(key, operator)
+    async def clear(self, key: str, operator: str, *, display: str | None = None) -> None:
+        await self.inner.clear(key, operator, display=display)
 
-    async def record_refusal(self, key: str, operator: str, reason: str) -> None:
-        await self.inner.record_refusal(key, operator, reason)
+    async def record_refusal(
+        self, key: str, operator: str, reason: str, *, display: str | None = None
+    ) -> None:
+        await self.inner.record_refusal(key, operator, reason, display=display)
 
 
 async def test_an_unreachable_database_keeps_the_stored_scope(clean: AsyncEngine) -> None:

@@ -20,6 +20,7 @@ from chatmemory.adapters.store import admin_postgres, admin_sql
 from chatmemory.admin.audit import (
     SECRET_SETTINGS,
     SHELL_ACTOR,
+    Acting,
     ChangeKind,
     ChangeRecordStore,
     ConfigurationChange,
@@ -30,7 +31,14 @@ from chatmemory.admin.audit import (
     escalation,
     refused,
 )
-from chatmemory.admin.auth import Operator
+from chatmemory.admin.auth import (
+    Operator,
+    Principal,
+    Role,
+    bind_principal,
+    current_actor,
+    unbind_principal,
+)
 
 ANA = Operator("ana")
 AT = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
@@ -106,18 +114,42 @@ async def test_the_returned_entries_cannot_be_edited_by_their_reader() -> None:
 # --- attribution ---------------------------------------------------------
 
 
-def test_the_console_constructors_take_an_operator_not_a_name() -> None:
+def test_the_console_constructors_take_an_actor_not_a_name() -> None:
     """A handler cannot attribute a change to a name it was handed.
 
-    `Operator` comes from `current_operator()`, which comes from the
-    credential. A `str` parameter here would be a place for a request field
-    to arrive, which is the whole failure this capability is built against.
+    The actor comes from `current_actor()`, which comes from the credential:
+    an `Operator` for a token, `oidc:<sub>` for a session. A `str` parameter
+    here would be a place for a request field to arrive, which is the whole
+    failure this capability is built against.
     """
     for constructor in (applied, refused, escalation):
         hints = get_type_hints(constructor)
         first = list(inspect.signature(constructor).parameters)[0]
         assert first == "operator"
-        assert hints["operator"] is Operator
+        assert hints["operator"] is Acting
+
+
+def test_a_signed_in_person_is_recorded_as_oidc_sub_with_their_email() -> None:
+    principal = Principal("ana-sub", "ana@cyberdyne.test", frozenset({Role.ADMIN}), "oidc")
+    handle = bind_principal(principal)
+    try:
+        change = applied(current_actor(), "ask_min_confidence", "0.6", "0.7")
+    finally:
+        unbind_principal(handle)
+
+    assert change.operator == "oidc:ana-sub"
+    assert change.operator_display == "ana@cyberdyne.test"
+
+
+def test_a_token_holder_is_recorded_exactly_as_before() -> None:
+    principal = Principal.for_token(ANA, oidc_configured=True)
+    handle = bind_principal(principal)
+    try:
+        change = applied(current_actor(), "ask_min_confidence", "0.6", "0.7")
+    finally:
+        unbind_principal(handle)
+
+    assert (change.operator, change.operator_display) == ("ana", None)
 
 
 def test_a_cli_change_is_attributed_to_the_shell_not_to_a_person() -> None:
@@ -155,8 +187,15 @@ def test_the_secret_check_is_not_defeated_by_spelling(setting: str) -> None:
         applied(ANA, setting, before=None, after="hunter2")
 
 
-def test_the_three_environment_only_secrets_are_the_ones_the_spec_names() -> None:
-    assert {"discord_token", "llm_api_key", "database_url"} == SECRET_SETTINGS
+def test_the_environment_only_secrets_are_the_ones_the_specs_name() -> None:
+    # The three the bot holds, and the console's own sign-in secrets.
+    assert {
+        "discord_token",
+        "llm_api_key",
+        "database_url",
+        "admin_oidc_client_secret",
+        "admin_session_key",
+    } == SECRET_SETTINGS
 
 
 # --- append-only ---------------------------------------------------------

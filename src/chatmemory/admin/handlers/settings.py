@@ -97,7 +97,7 @@ def routes(services: AdminServices) -> list[Route]:
             raise Refused(reason)
 
         try:
-            await services.editor.set(key, raw, operator.name)
+            await services.editor.set(key, raw, operator.name, display=operator.display)
         except ConfigurationRefused as exc:
             # The editor has already recorded this refusal, with the reason
             # and without the attempted value -- the most likely bad value is

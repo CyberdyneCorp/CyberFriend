@@ -273,6 +273,21 @@ def test_the_console_serves_its_interface_from_the_same_container() -> None:
     assert "ADMIN_CONSOLE_DIR=" in service_block("admin")
 
 
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "ADMIN_OIDC_ISSUER",
+        "ADMIN_OIDC_CLIENT_ID",
+        "ADMIN_OIDC_CLIENT_SECRET",
+        "ADMIN_SESSION_KEY",
+        "ADMIN_PUBLIC_URL",
+    ],
+)
+def test_the_console_accepts_the_sign_in_settings(variable: str) -> None:
+    """Undeclared, Coolify refuses them and sign-in can never be switched on."""
+    assert f"{variable}=" in service_block("admin")
+
+
 def test_the_console_runs_exactly_one_replica() -> None:
     """Two replicas make editing a list-shaped setting a read-modify-write
     race between operators, and the losing edit is silent."""

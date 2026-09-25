@@ -51,6 +51,8 @@ def _view(entry: ChangeRecord) -> dict[str, Any]:
     return {
         "sequence": entry.sequence,
         "operator": entry.operator,
+        # A signed-in person's email beside `oidc:<sub>`; null for a token.
+        "operator_display": entry.operator_display,
         "setting": entry.setting,
         "before": entry.before,
         "after": entry.after,

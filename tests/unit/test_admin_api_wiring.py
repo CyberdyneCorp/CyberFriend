@@ -27,6 +27,10 @@ from chatmemory.adapters.store.admin_postgres import (
     PostgresChangeRecord,
     PostgresOperatorTokens,
 )
+from chatmemory.adapters.store.admin_session_postgres import (
+    PostgresLoginStore,
+    PostgresSessionStore,
+)
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
 from chatmemory.admin.auth import Operator
@@ -35,9 +39,13 @@ from chatmemory.admin.handlers.queries import (
     PostgresCorpusStatus,
     PostgresOptOutDirectory,
 )
+from chatmemory.admin.oidc.config import MisconfiguredSignIn
 from chatmemory.entrypoints import admin
 from chatmemory.mcp.auth import PostgresTokenStore
 from chatmemory.ports.configuration import SettingSource
+from tests.e2e.harness.oidc import FakeOIDC
+from tests.unit.oidc_support import ENVIRON as SIGN_IN
+from tests.unit.oidc_support import PUBLIC_URL
 
 ENTRYPOINT = Path(admin.__file__)
 
@@ -338,11 +346,66 @@ def _opt_out_as_a_token(environ: dict[str, str]) -> tuple[int, object]:
 
 
 @pytest.mark.usefixtures("any_token_is_ana")
-def test_setting_the_issuer_makes_every_token_operator_only() -> None:
-    """The production path: the variable, through build(), to the middleware."""
-    status, body = _opt_out_as_a_token({**ENVIRON, "ADMIN_OIDC_ISSUER": "https://idp"})
+def test_configuring_sign_in_makes_every_token_operator_only() -> None:
+    """The production path: the variables, through build(), to the middleware."""
+    status, body = _opt_out_as_a_token({**ENVIRON, **SIGN_IN})
 
     assert (status, body) == (403, {"error": "requires admin"})
+
+
+@pytest.mark.parametrize("missing", sorted(set(SIGN_IN) - {"ADMIN_OIDC_ISSUER"}))
+def test_sign_in_partly_configured_refuses_to_start(missing: str) -> None:
+    """The issuer without the rest would leave nobody able to sign in as admin."""
+    environ = {**ENVIRON, **{k: v for k, v in SIGN_IN.items() if k != missing}}
+
+    with pytest.raises(MisconfiguredSignIn, match=missing):
+        admin.build(environ)
+
+
+@pytest.mark.usefixtures("any_token_is_ana")
+def test_unsetting_only_the_issuer_is_the_break_glass_rollback() -> None:
+    """The documented rollback: the other four stay set, and the console starts
+    with sign-in off and `cfa_` tokens admin again, rather than refusing to
+    start at the moment an urgent change is needed."""
+    environ = {**ENVIRON, **{k: v for k, v in SIGN_IN.items() if k != "ADMIN_OIDC_ISSUER"}}
+
+    process = admin.build(environ)
+    status, _ = _opt_out_as_a_token(environ)
+
+    assert process.sign_in is None
+    assert status == 400  # past the admin check
+    login = TestClient(process.app, base_url=PUBLIC_URL).get(
+        "/auth/login", follow_redirects=False
+    )
+    assert login.status_code == 404
+
+
+def test_sign_in_is_wired_to_postgres_and_the_injected_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def no_database(_self: object, *_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(PostgresLoginStore, "begin", no_database)
+    fake = FakeOIDC()
+    process = admin.build({**ENVIRON, **SIGN_IN}, transport=fake.transport)
+
+    assert process.sign_in is not None
+    assert isinstance(process.sign_in._sessions, PostgresSessionStore)  # noqa: SLF001
+    assert isinstance(process.sign_in._logins, PostgresLoginStore)  # noqa: SLF001
+    response = TestClient(process.app, base_url=PUBLIC_URL).get(
+        "/auth/login", follow_redirects=False
+    )
+    # Discovery went through the injected transport: the redirect names the
+    # fake issuer's authorization endpoint.
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("https://auth.test/authorize?")
+
+
+def test_sign_in_secrets_are_never_recorded() -> None:
+    from chatmemory.admin.audit import SECRET_SETTINGS
+
+    assert {"admin_oidc_client_secret", "admin_session_key"} <= SECRET_SETTINGS
 
 
 @pytest.mark.usefixtures("any_token_is_ana")

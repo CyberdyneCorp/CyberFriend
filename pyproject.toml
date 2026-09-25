@@ -27,6 +27,11 @@ dependencies = [
     # Keccak-256 for Uniswap v4 pool IDs (add-defi-positions). Hashing only:
     # nothing in this project signs.
     "pycryptodome>=3.20",
+    # Console sign-in through CyberdyneAuth (add-console-cyberdyneauth-login):
+    # RS256 verification against the issuer's JWKS, and AES-GCM for the
+    # session tokens kept at rest. Server-side only; no browser SDK.
+    "pyjwt[crypto]>=2.8",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

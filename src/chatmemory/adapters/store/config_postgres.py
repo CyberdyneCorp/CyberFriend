@@ -50,22 +50,31 @@ class PostgresConfigurationStore:
             result = await conn.execute(config_sql.LOAD_SETTINGS)
             return [_setting_from_row(row) for row in result.mappings()]
 
-    async def put(self, key: str, raw: str, operator: str) -> None:
+    async def put(
+        self, key: str, raw: str, operator: str, *, display: str | None = None
+    ) -> None:
         # `begin()` rather than `connect()`: the setting and its audit row are
         # one statement, and this is what commits it.
         async with self._engine.begin() as conn:
             await conn.execute(
                 config_sql.UPSERT_SETTING,
-                {"key": key, "value": raw, "operator": operator, "at": datetime.now(UTC)},
+                {
+                    "key": key,
+                    "value": raw,
+                    "operator": operator,
+                    "display": display,
+                    "at": datetime.now(UTC),
+                },
             )
 
-    async def clear(self, key: str, operator: str) -> None:
+    async def clear(self, key: str, operator: str, *, display: str | None = None) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
                 config_sql.CLEAR_SETTING,
                 {
                     "key": key,
                     "operator": operator,
+                    "display": display,
                     # Said in the record rather than left to be inferred from
                     # an empty "after": a cleared setting and a setting set to
                     # nothing read identically a year later.
@@ -74,9 +83,17 @@ class PostgresConfigurationStore:
                 },
             )
 
-    async def record_refusal(self, key: str, operator: str, reason: str) -> None:
+    async def record_refusal(
+        self, key: str, operator: str, reason: str, *, display: str | None = None
+    ) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
                 config_sql.RECORD_REFUSAL,
-                {"key": key, "operator": operator, "reason": reason, "at": datetime.now(UTC)},
+                {
+                    "key": key,
+                    "operator": operator,
+                    "display": display,
+                    "reason": reason,
+                    "at": datetime.now(UTC),
+                },
             )

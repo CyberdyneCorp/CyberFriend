@@ -20,7 +20,11 @@ What is authenticated and what is not:
     route reveals configuration.
 *   The interface bundle is open. It is code, not configuration: it contains
     no credential, holds nothing in local storage, and is useless without a
-    token typed into it.
+    token typed into it or a session cookie.
+*   `/auth/login`, `/auth/callback` and `/auth/logout` are open: they are how
+    a CyberdyneAuth session is obtained and ended (see `admin.oidc`). With
+    sign-in off they answer 404.
+*   Every response carries the security headers in `headers.py`.
 
 The last route is a refusal. Anything under `/api` that no handler claimed
 gets a written "this console configures the agent and returns no message,
@@ -54,6 +58,9 @@ from chatmemory.admin.handlers import (
 )
 from chatmemory.admin.handlers.services import AdminServices
 from chatmemory.admin.handlers.support import Refused, refusal
+from chatmemory.admin.headers import SecurityHeaders
+from chatmemory.admin.oidc import routes as sign_in_routes
+from chatmemory.admin.oidc.service import SignIn
 
 log = structlog.get_logger()
 
@@ -117,6 +124,14 @@ ROUTE_ACCESS: Mapping[RouteKey, Access] = {
     ("GET", "/ready"): _PUBLIC,
     ("GET", "/"): _PUBLIC,  # the "bundle missing" placeholder
     ("GET", "/{path:path}"): _PUBLIC,  # the static bundle, mounted at /
+    # Sign-in: how a session is obtained and ended. Logout is the one non-read
+    # outside `admin`: it only ever narrows access, checks the CSRF header
+    # itself, and must work for an operator (see LOGOUT below).
+    ("GET", "/auth/login"): _PUBLIC,
+    ("GET", "/auth/callback"): _PUBLIC,
+    ("POST", "/auth/logout"): _PUBLIC,
+    # Who is signed in, and with which role: any console principal.
+    ("GET", "/api/session"): _OPERATOR,
     # Status and the change record.
     ("GET", "/api/status"): _OPERATOR,
     ("GET", "/api/audit"): _OPERATOR,
@@ -161,12 +176,17 @@ exists.
 """
 
 
+LOGOUT: RouteKey = ("POST", "/auth/logout")
+"""The only non-read route that is not `admin`, named so the test can say so."""
+
+
 def build_app(
     services: AdminServices,
     tokens_store: OperatorTokens,
     console_dir: Path | None = None,
     *,
     oidc_configured: bool = False,
+    sign_in: SignIn | None = None,
     route_access: Mapping[RouteKey, Access] = ROUTE_ACCESS,
 ) -> Starlette:
     """The console application: ports in, one ASGI app out.
@@ -176,10 +196,12 @@ def build_app(
     forgets to pass something fails to construct the app rather than serving a
     screen that silently does nothing.
 
-    `oidc_configured` is whether an identity provider issuer is set; it
-    downscopes `cfa_` tokens from admin to operator. `route_access` is
-    injectable so a test can prove that a route without a row is refused.
+    `oidc_configured` is whether CyberdyneAuth sign-in is configured; it
+    downscopes `cfa_` tokens from admin to operator, and is implied by
+    `sign_in`. `route_access` is injectable so a test can prove that a route
+    without a row is refused.
     """
+    oidc_configured = oidc_configured or sign_in is not None
 
     async def health(_: Request) -> JSONResponse:
         # Liveness: dependency-free, so a database blip cannot restart the one
@@ -200,6 +222,7 @@ def build_app(
     routes: list[Route | Mount] = [
         Route("/health", health, methods=["GET"], name="health"),
         Route("/ready", ready, methods=["GET"], name="ready"),
+        *sign_in_routes.routes(sign_in),
         *api_routes(services),
         # Last under /api, so it claims only what no handler did. It also
         # answers a wrong method with this refusal rather than a 405, which
@@ -226,10 +249,17 @@ def build_app(
     # the router always agree on which route a request is.
     app.add_middleware(
         AdminAuthMiddleware,
-        authenticator=AdminAuthenticator(tokens_store, oidc_configured=oidc_configured),
+        authenticator=AdminAuthenticator(
+            tokens_store,
+            oidc_configured=oidc_configured,
+            sessions=sign_in,
+            public_origin=sign_in.settings.public_origin if sign_in else None,
+        ),
         access=RouteAccess(route_access, app.router.routes),
         protected_prefix=API_PREFIX,
     )
+    # Outermost, so the refusals the guard writes carry the headers too.
+    app.add_middleware(SecurityHeaders, issuer=sign_in.settings.issuer if sign_in else None)
     return app
 
 

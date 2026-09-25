@@ -94,14 +94,18 @@ class FakeConfigurationStore:
             raise ConnectionError("database went away")
         return [stored(key, raw) for key, raw in self.rows.items()]
 
-    async def put(self, key: str, raw: str, operator: str) -> None:  # pragma: no cover
+    async def put(  # pragma: no cover
+        self, key: str, raw: str, operator: str, *, display: str | None = None
+    ) -> None:
         self.rows[key] = raw
 
-    async def clear(self, key: str, operator: str) -> None:  # pragma: no cover
+    async def clear(  # pragma: no cover
+        self, key: str, operator: str, *, display: str | None = None
+    ) -> None:
         self.rows.pop(key, None)
 
     async def record_refusal(  # pragma: no cover
-        self, key: str, operator: str, reason: str
+        self, key: str, operator: str, reason: str, *, display: str | None = None
     ) -> None:
         return None
 
