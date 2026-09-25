@@ -210,3 +210,56 @@ enough to the question's topic.
 #### Scenario: The topic cannot be embedded
 - WHEN embedding the topic fails
 - THEN the question SHALL be answered by ordinary retrieval
+
+### Requirement: History extracted before the decision log can be backfilled
+
+The system SHALL provide an operator command (`just decisions-backfill
+--since YYYY-MM-DD [--until YYYY-MM-DD]`) that marks pending for extraction
+only the messages that are live, created on or after the `--since` day and,
+when `--until` is given, before the `--until` day (both midnight UTC), in a
+channel in indexing scope read as ingest reads it (stored configuration, then
+the environment), and matched by the candidate filter's own `DECISION_MARKERS`
+pattern; it SHALL print how many it reset and extract nothing itself, leaving
+the reset messages to the existing backlog worker and its rate bound. The days
+SHALL reach the database only as bound parameters.
+
+#### Scenario: Only marker-bearing messages inside the window are reset
+- WHEN the command runs over history that holds, besides marker-bearing live
+  messages in scope inside the window, a message without a marker, one
+  before the window, one in a channel outside scope and a deleted one
+- THEN only the marker-bearing live messages in scope inside the window
+  SHALL become pending
+- AND a second run SHALL reset nothing still pending
+
+#### Scenario: The window ends where decision extraction began
+- WHEN the command runs with `--until` the day decision extraction was
+  deployed
+- THEN no message created on or after that day SHALL be reset
+- AND an `--until` not later than `--since` SHALL be refused
+
+#### Scenario: Stored scope narrows the environment's
+- WHEN stored configuration lists fewer indexed channels than the environment
+- THEN only messages in the stored channels SHALL be reset
+
+#### Scenario: Stored scope cannot be read
+- WHEN stored configuration cannot be read
+- THEN the command SHALL stop without resetting anything
+
+#### Scenario: Re-extraction keeps the asks already recorded
+- WHEN the backlog worker re-extracts a reset message that carries asks
+- THEN every ask the new pass reports with the same kind and addressee SHALL
+  keep its key and status
+- AND a corrected ask SHALL be kept, with its correction, even if the new
+  pass does not find it
+
+#### Scenario: Re-extraction reclassifies an uncorrected ask
+- WHEN the new pass reports an uncorrected ask with a different kind or
+  addressee
+- THEN the old ask SHALL be withdrawn, whatever its status, and the new one
+  SHALL be recorded open under its own key
+
+#### Scenario: Old history becomes answerable
+- WHEN history captured and extracted before decisions existed is backfilled
+  and the backlog worker drains it
+- THEN a decision question about it SHALL get a dated answer citing the
+  message that settled it

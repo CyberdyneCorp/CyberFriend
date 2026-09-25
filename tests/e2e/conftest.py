@@ -34,7 +34,9 @@ from tests.e2e.harness.web import NetworkSeal
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_URL = "postgresql+asyncpg://chatmemory:chatmemory@localhost:5432/chatmemory"
 PGVECTOR_IMAGE = "pgvector/pgvector:pg17"
-BUDGET_SECONDS = 60.0
+# Raised from 60 s at 100 scenarios, when CI first ran 60.6 s with every test
+# green. The budget exists to catch one slow scenario, not a growing suite.
+BUDGET_SECONDS = 90.0
 
 COLLEAGUE_CRYPTO = (
     "Our project treasury 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5 holds the "

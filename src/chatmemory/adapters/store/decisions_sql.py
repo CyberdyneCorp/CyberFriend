@@ -116,6 +116,39 @@ ORDER BY decided_at DESC, source_message_id DESC
 """)
 
 
+# --- the backfill -------------------------------------------------------
+#
+# An operator's one-off, not a read anybody can reach from a question. The
+# scan returns text so `app/decisions/backfill.py` can match it with the
+# candidate filter's own compiled pattern; the text is matched in-process and
+# discarded. Scope is the operator's configured channel list, bound, for the
+# reason `sql.MESSAGES_PENDING_EXTRACTION` gives: `channel.is_indexed` is never
+# unset, so a predicate on it excludes nothing.
+
+BACKFILL_SCAN = text("""
+SELECT m.id, m.content
+FROM message m
+WHERE m.deleted_at IS NULL
+  AND m.created_at >= :since
+  AND (CAST(:until AS timestamptz) IS NULL OR m.created_at < CAST(:until AS timestamptz))
+  AND m.channel_id = ANY(CAST(:indexed_channel_ids AS bigint[]))
+  AND m.id > :after_id
+ORDER BY m.id
+LIMIT :limit
+""")
+
+# Only messages the pass has already read: one still pending is drained
+# anyway, and counting it would overstate what the backfill will cost. The
+# deletion check is repeated because a message may be deleted between the scan
+# and this statement.
+BACKFILL_RESET = text("""
+UPDATE message m
+SET asks_extracted_seq = NULL
+WHERE m.id = ANY(CAST(:ids AS bigint[]))
+  AND m.deleted_at IS NULL
+  AND m.asks_extracted_seq IS NOT DISTINCT FROM m.asks_extraction_seq
+""")
+
 def statements() -> Sequence[TextClause]:
     """Every statement that reads decisions, for the test that audits them."""
     return (SEARCH_DECISIONS,)

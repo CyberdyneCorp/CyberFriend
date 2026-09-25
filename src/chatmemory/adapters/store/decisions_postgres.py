@@ -9,6 +9,7 @@ backfill before it can rank anything.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import structlog
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from chatmemory.adapters.store import decisions_sql
 from chatmemory.adapters.store.sql import vector_literal
+from chatmemory.app.decisions.backfill import BackfillLedger, ScannedMessage
 from chatmemory.app.decisions.model import (
     Decision,
     DecisionRequest,
@@ -181,6 +183,38 @@ class PostgresDecisionStore:
         return person_id
 
 
+class PostgresDecisionBackfill:
+    """Implements `BackfillLedger` over the message table."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+
+    async def live_messages_since(
+        self,
+        since: datetime,
+        until: datetime | None,
+        channel_ids: frozenset[int],
+        after_id: int,
+        limit: int,
+    ) -> Sequence[ScannedMessage]:
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                decisions_sql.BACKFILL_SCAN,
+                {
+                    "since": since,
+                    "until": until,
+                    "indexed_channel_ids": sorted(channel_ids),
+                    "after_id": after_id,
+                    "limit": limit,
+                },
+            )
+            return [ScannedMessage(int(r.id), str(r.content)) for r in rows]
+
+    async def reset_extraction(self, message_ids: Sequence[int]) -> int:
+        async with self._engine.begin() as conn:
+            result = await conn.execute(decisions_sql.BACKFILL_RESET, {"ids": list(message_ids)})
+            return result.rowcount or 0
+
 if TYPE_CHECKING:  # pragma: no cover - exists to fail type-checking, not to run
 
     def _conforms(store: PostgresDecisionStore) -> DecisionStore:
@@ -188,3 +222,6 @@ if TYPE_CHECKING:  # pragma: no cover - exists to fail type-checking, not to run
 
     def _searches(store: PostgresDecisionStore) -> DecisionSearch:
         return store
+
+    def _backfills(ledger: PostgresDecisionBackfill) -> BackfillLedger:
+        return ledger

@@ -350,6 +350,12 @@ class E2EBot:
         await self.ingest.extract()
         return tuple(schema for schema, _ in self.chat.calls[calls:])
 
+    async def drain_backlog(self) -> tuple[str, ...]:
+        """Run one backlog extraction pass; returns the model stages it called."""
+        calls = len(self.chat.calls)
+        await self.ingest.drain_backlog()
+        return tuple(schema for schema, _ in self.chat.calls[calls:])
+
     async def seed_corpus(self, windows: Sequence[tuple[str, str, datetime]]) -> None:
         """Archived messages, each its own window, written the way ingest writes them.
 

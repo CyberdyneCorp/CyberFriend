@@ -162,7 +162,7 @@ ran, and the memory and fact rows, read by SQL. Every `/name` the bot says is
 checked against the commands Discord offers where it said it.
 
 - `E2E_REQUIRE_DB=1` turns "no database" from a skip into a failure. CI sets it.
-- The suite fails the run if it takes more than 60 seconds.
+- The suite fails the run if it takes more than 90 seconds.
 - `E2E_UPDATE_SNAPSHOTS=1` rewrites `tests/e2e/snapshots/commands.json`, the
   exact command payload the bot syncs; review the diff like code.
 - discord.py is pinned to `~=2.7.1` in the dev extras because the fake wire
@@ -608,6 +608,71 @@ a retrieval answer, never as a claim that nothing was settled.
 
 **Cost.** One topic embedding (none without a topic), no chat-model call.
 Logged as `decisions.looked_up` with `found` and `model_calls=0`.
+
+### Backfilling history captured before the decision log
+
+History the ask pass read before decisions were extracted is recorded as
+extracted (`message.asks_extracted_seq` equals `asks_extraction_seq`), so the
+backlog worker never reads it again and the decisions in it cannot be
+answered. To put it back in the queue:
+
+```
+just decisions-backfill --since 2026-06-01 --until 2026-09-01
+```
+
+(`python -m chatmemory.entrypoints.decisions_backfill --since YYYY-MM-DD
+[--until YYYY-MM-DD]` in a container.) It resets `asks_extracted_seq` to NULL
+only for messages that are
+
+- live (not deleted),
+- created on or after `--since` and, with `--until`, before it, both from
+  midnight UTC,
+- in a channel in indexing scope, read as ingest reads it (stored
+  configuration, then the environment; if stored configuration cannot be read
+  the command stops and resets nothing),
+- matching `DECISION_MARKERS`, the candidate filter's own pattern, matched in
+  Python so the command resets exactly what the filter will send to the model.
+
+It prints how many it reset, how many matched but were already pending, and
+how many it scanned, then exits. Nothing is extracted by the command: the
+ingest process's `BacklogExtractionWorker` drains the reset messages at its
+usual rate bound (100 messages a pass), and `pending` on the ingest health
+endpoint shows it draining. Running it twice is harmless; the second run
+resets nothing still pending.
+
+**Cost.** One extraction call per reset message, on `EXTRACTION_MODEL`,
+metered in the usual ask usage. Pick the window deliberately. The reset does
+not tell history read before the decision log shipped from history read
+after it: every already-extracted marker-bearing message in the window is
+reset, and one the pass has already read for decisions is paid for again for
+nothing. Pass `--until` the day decision extraction was deployed; without it
+the window runs to now.
+
+**Warning: asks on those messages are re-extracted too.** The model reads
+asks and decisions in one call, so every reset message has its asks
+extracted again. What stays and what can move:
+
+- **Keys and statuses are kept for asks the new pass reports with the same
+  kind and addressee.** An ask's key is derived from its source message, kind
+  and addressee, never from generated text, so such an ask updates its row in
+  place, and the upsert never touches `status`, `closed_at` or `closed_by`:
+  an answered or stale ask stays so.
+- **Corrections are kept, and outrank the new pass.** A corrected ask is
+  exempt from pruning even if the model no longer finds it or reclassifies
+  it, and the correction row is untouched.
+- **A reclassified uncorrected ask comes back open.** Models disagree across
+  runs. If the new pass reports an uncorrected ask with a different kind or
+  addressee, its key changes: the old row, answered or not, is withdrawn, and
+  a new one is inserted `open`. The observed-event refresh re-closes it only
+  where the reply or reaction evidence applies to the new addressee;
+  otherwise it can be listed, and notified if recent enough, again.
+- **What else can change:** a re-found ask's text, confidence and thread are
+  refreshed from the new reply; an *uncorrected* ask the model no longer finds
+  is withdrawn; and an ask the first pass missed can appear. A new ask older
+  than `NOTIFICATION_MAX_AGE_HOURS` is never notified.
+
+`tests/integration/test_decisions_backfill.py` holds the first three, the
+window, and the command's scope and refusal.
 
 ## Scheduled tasks
 

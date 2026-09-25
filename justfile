@@ -159,6 +159,13 @@ admin-tokens:
 mcp-token DISCORD_USER_ID LABEL="laptop":
     {{ py }} -m chatmemory.mcp.issue_token issue {{ DISCORD_USER_ID }} --label {{ LABEL }}
 
+# Resets live messages since that day (UTC), and before --until if given, that
+# carry a decision marker, in indexed channels; the ingest backlog worker
+# drains them. See docs/operations.md before running it.
+# Re-extract pre-decision-log history: `just decisions-backfill --since 2026-06-01 --until 2026-09-01`
+decisions-backfill *ARGS:
+    {{ py }} -m chatmemory.entrypoints.decisions_backfill {{ ARGS }}
+
 # Opting a person out is done from the admin console (/api/optouts); there is
 # no CLI for it.
 
