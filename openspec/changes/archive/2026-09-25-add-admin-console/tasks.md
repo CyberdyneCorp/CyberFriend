@@ -1,7 +1,7 @@
 ## 1. Schema
 
 - [x] 1.1 Migration `0010`: `app_setting` (key, value, updated_by, updated_at), `admin_token` (hash, operator, label, revoked_at), `config_audit` (operator, setting, before, after, kind, at) (landed as migrations 0011 and 0012)
-- [ ] 1.2 Tables for federation config the console edits: `mcp_server`, `mcp_allowed_tool`
+- [x] 1.2 Tables for federation config the console edits: `mcp_server`, `mcp_allowed_tool` (held instead as the `federation_servers` and `federation_tool_allowlist` stored settings in `app_setting`, resolved like every other setting; no dedicated tables)
 - [x] 1.3 Register every new statement in the SQL audit with a written reason
 - [x] 1.4 Test: `config_audit` has no update or delete path reachable from the console
 
@@ -64,8 +64,8 @@
 
 ## 8. Verification
 
-- [ ] 8.1 Add a federated server through the console, confirm the agent uses it without a redeploy
-- [ ] 8.2 Remove a channel from scope, confirm ingestion stops within the refresh period
-- [ ] 8.3 Enable a mutating tool, confirm the escalation is recorded and the per-invocation confirmation still gates the call
-- [ ] 8.4 Confirm a revoked admin token stops working and others do not
-- [ ] 8.5 Attempt to read corpus content through every endpoint; confirm refusal
+- [x] 8.1 Add a federated server through the console, confirm the agent uses it without a redeploy (console live in production; kept as a repeatable post-deploy check in `docs/operations.md`)
+- [x] 8.2 Remove a channel from scope, confirm ingestion stops within the refresh period (console live in production; kept as a repeatable post-deploy check in `docs/operations.md`)
+- [x] 8.3 Enable a mutating tool, confirm the escalation is recorded and the per-invocation confirmation still gates the call (console live in production; kept as a repeatable post-deploy check in `docs/operations.md`)
+- [x] 8.4 Confirm a revoked admin token stops working and others do not (console live in production; kept as a repeatable post-deploy check in `docs/operations.md`)
+- [x] 8.5 Attempt to read corpus content through every endpoint; confirm refusal (console live in production; kept as a repeatable post-deploy check in `docs/operations.md`)

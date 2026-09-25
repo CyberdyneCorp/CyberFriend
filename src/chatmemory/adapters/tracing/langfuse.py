@@ -25,7 +25,7 @@ from typing import Any
 import httpx
 import structlog
 
-from chatmemory.app.reasoning.contract import RunTrace
+from chatmemory.app.reasoning.contract import AnswerPath, RunTrace
 from chatmemory.ports.tracing import TraceIndex
 
 log = structlog.get_logger()
@@ -33,6 +33,12 @@ log = structlog.get_logger()
 DEFAULT_TIMEOUT = 5.0
 #: Enough to study a retrieval, far short of a database dump in a JSON field.
 MAX_EVIDENCE_CHARS = 4000
+
+#: The names this application gives its traces (`_batch` names a trace after
+#: its path). A search of a shared Langfuse project deletes nothing else.
+TRACE_NAMES = frozenset(str(path) for path in AnswerPath)
+#: Langfuse's largest page for the traces list.
+SEARCH_PAGE_SIZE = 100
 
 
 def _now() -> str:
@@ -72,7 +78,9 @@ class LangfuseTracer:
             # Only after the destination accepted it. Recording the mapping
             # for a trace that was never stored would leave a deletion chasing
             # something that does not exist.
-            await self._index.record_export(trace_id, _message_ids(run))
+            await self._index.record_export(
+                trace_id, _message_ids(run), run.question.asker.person
+            )
 
     # --- building ------------------------------------------------------
 
@@ -194,6 +202,77 @@ class LangfuseTraceDeleter:
         except Exception as exc:  # noqa: BLE001 - a deletion retries, never raises
             log.warning("tracing.delete_failed", count=len(trace_ids), error=str(exc))
             return False
+
+
+class LangfuseTraceFinder:
+    """Implements `TraceFinder` over `GET /api/public/traces`.
+
+    Filtered twice: the query asks for our environment, and every row is
+    checked for our environment and one of our trace names before its id is
+    returned, so a server that ignores a filter still cannot widen a deletion
+    to another application's traces.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        public_key: str,
+        secret_key: str,
+        environment: str = "production",
+        timeout: float = DEFAULT_TIMEOUT,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._url = host.rstrip("/") + "/api/public/traces"
+        self._auth = (public_key, secret_key)
+        self._environment = environment
+        self._timeout = timeout
+        self._transport = transport
+
+    async def find_traces_by_user(self, platform_user_id: int) -> Sequence[str] | None:
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, transport=self._transport
+            ) as client:
+                return await self._all_pages(client, platform_user_id)
+        except Exception as exc:  # noqa: BLE001 - the search retries, never raises
+            log.warning("tracing.search_failed", error=str(exc))
+            return None
+
+    async def _all_pages(
+        self, client: httpx.AsyncClient, platform_user_id: int
+    ) -> list[str]:
+        found: list[str] = []
+        page = 1
+        while True:
+            response = await client.get(
+                self._url, auth=self._auth, params=self._query(platform_user_id, page)
+            )
+            response.raise_for_status()
+            body = response.json()
+            rows = body.get("data") or []
+            found.extend(self._ours(rows))
+            total_pages = int((body.get("meta") or {}).get("totalPages") or 0)
+            if not rows or page >= total_pages:
+                return found
+            page += 1
+
+    def _query(self, platform_user_id: int, page: int) -> dict[str, str | int]:
+        return {
+            "userId": str(platform_user_id),
+            "environment": self._environment,
+            "fields": "core",
+            "limit": SEARCH_PAGE_SIZE,
+            "page": page,
+        }
+
+    def _ours(self, rows: Sequence[dict[str, Any]]) -> list[str]:
+        return [
+            str(row["id"])
+            for row in rows
+            if row.get("environment") == self._environment
+            and row.get("name") in TRACE_NAMES
+            and row.get("id")
+        ]
 
 
 def _evidence(item: Any) -> dict[str, Any]:

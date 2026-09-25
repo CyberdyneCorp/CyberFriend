@@ -1,17 +1,17 @@
 ## 1. Regression fixes (failing tests first)
 
-- [ ] 1.1 Migration: `purge_person_derived(person_id)` consolidating the 0013/0014/0015/0020 trigger bodies, plus `scheduled_task` and `mcp_token`; the `person_opt_out` trigger calls it; due sweep skips opted-out people
-- [ ] 1.2 Test: an opted-out person's scheduled task is deleted and never runs (real Postgres); existing opt-out purge tests still pass
-- [ ] 1.3 Test (e2e): trace deletion reaches FakeWeb -> build `LangfuseTraceDeleter` with `edges.http_transport`
-- [ ] 1.4 Test: opt-out revokes the person's MCP tokens and deletes `document_fetch` rows for purged messages
+- [x] 1.1 Migration: `purge_person_derived(person_id)` consolidating the 0013/0014/0015/0020 trigger bodies, plus `scheduled_task` and `mcp_token`; the `person_opt_out` trigger calls it; due sweep skips opted-out people
+- [x] 1.2 Test: an opted-out person's scheduled task is deleted and never runs (real Postgres); existing opt-out purge tests still pass
+- [x] 1.3 Test (e2e): trace deletion reaches FakeWeb -> build `LangfuseTraceDeleter` with `edges.http_transport`
+- [x] 1.4 Test: opt-out revokes the person's MCP tokens and deletes `document_fetch` rows for purged messages
 
 ## 2. Traces by asker
 
-- [ ] 2.1 Migration: `trace_export.asker_platform_user_id` + index; written by `record_export`
-- [ ] 2.2 `TraceIndex.request_deletion_for_asker(ids)`
-- [ ] 2.3 Langfuse backstop: page traces by `userId` scoped to our environment and trace names, insert pending ids (ingest process)
-- [ ] 2.4 `OptOutService` withdraws quoted and asked traces (admin opt-out too)
-- [ ] 2.5 Tests: asked and quoting traces marked; unindexed trace found by backstop; foreign-environment trace untouched; v4-style 400 keeps it pending
+- [x] 2.1 Migration: `trace_export.asker_platform_user_id` + index; written by `record_export`
+- [x] 2.2 `TraceIndex.request_deletion_for_asker(ids)`
+- [x] 2.3 Langfuse backstop: page traces by `userId` scoped to our environment and trace names, insert pending ids (ingest process)
+- [x] 2.4 `OptOutService` withdraws quoted and asked traces (admin opt-out too)
+- [x] 2.5 Tests: asked and quoting traces marked; unindexed trace found by backstop; foreign-environment trace untouched; v4-style 400 keeps it pending
 
 ## 3. `/privacy` dashboard (after trace retention ships)
 

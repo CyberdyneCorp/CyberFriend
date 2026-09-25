@@ -23,10 +23,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import httpx
 import pytest
 
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
-from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseTracer
+from chatmemory.adapters.tracing.langfuse import (
+    LangfuseTraceDeleter,
+    LangfuseTraceFinder,
+    LangfuseTracer,
+)
 from chatmemory.app.reasoning.tracing import OptOutAwareTracer, TraceWithdrawal
 from chatmemory.composition import build_trace_withdrawal, build_tracer
 from chatmemory.config import Settings
@@ -144,3 +149,38 @@ def test_build_trace_withdrawal_returns_the_real_adapters_when_configured() -> N
     assert isinstance(withdrawal, TraceWithdrawal)
     assert isinstance(withdrawal._index, PostgresTraceIndex)  # noqa: SLF001
     assert isinstance(withdrawal._deleter, LangfuseTraceDeleter)  # noqa: SLF001
+
+
+def test_build_trace_withdrawal_deletes_over_the_process_transport() -> None:
+    """Regression: the deleter opened its own client over the real network,
+    so a deletion never went through `Edges.http_transport`."""
+    transport = httpx.MockTransport(lambda request: httpx.Response(200))
+    withdrawal = build_trace_withdrawal(
+        Settings(**CONFIGURED), object(), transport  # type: ignore[arg-type]
+    )
+    assert withdrawal is not None
+    assert withdrawal._deleter._transport is transport  # type: ignore[attr-defined]  # noqa: SLF001
+
+
+def test_build_trace_withdrawal_searches_langfuse_in_our_environment() -> None:
+    """The backstop for traces exported before the asker was recorded: an
+    opt-out queues a search, and only a withdrawal with a finder runs it."""
+    transport = httpx.MockTransport(lambda request: httpx.Response(200))
+    withdrawal = build_trace_withdrawal(
+        Settings(**CONFIGURED, langfuse_environment="staging"),
+        object(),  # type: ignore[arg-type]
+        transport,
+    )
+    assert withdrawal is not None
+    finder = withdrawal._finder  # noqa: SLF001
+    assert isinstance(finder, LangfuseTraceFinder)
+    assert finder._environment == "staging"  # noqa: SLF001
+    assert finder._transport is transport  # noqa: SLF001
+
+
+def test_the_tracer_exports_to_the_configured_environment() -> None:
+    tracer = build_tracer(
+        Settings(**CONFIGURED, langfuse_environment="staging"), object()  # type: ignore[arg-type]
+    )
+    assert tracer is not None
+    assert tracer._inner._environment == "staging"  # type: ignore[attr-defined]  # noqa: SLF001

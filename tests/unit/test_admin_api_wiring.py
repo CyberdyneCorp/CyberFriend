@@ -28,6 +28,7 @@ from chatmemory.adapters.store.admin_postgres import (
     PostgresOperatorTokens,
 )
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
 from chatmemory.admin.auth import Operator
 from chatmemory.admin.handlers.queries import (
     PostgresChannelDirectory,
@@ -105,6 +106,16 @@ def test_the_opt_out_service_covers_documents() -> None:
     process = built()
 
     assert process.services.optouts._documents is not None  # noqa: SLF001
+
+
+def test_the_opt_out_service_withdraws_traces() -> None:
+    """An admin opt-out that left the person's exported runs in Langfuse kept
+    their questions and the messages they quoted."""
+    process = built()
+
+    assert isinstance(
+        process.services.optouts._traces, PostgresTraceIndex  # noqa: SLF001
+    )
 
 
 def test_the_console_authenticates_with_the_postgres_operator_tokens() -> None:

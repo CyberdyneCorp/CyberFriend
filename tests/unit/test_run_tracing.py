@@ -9,10 +9,16 @@ exercised with the destination both working and down.
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime
 
 import httpx
 
-from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseTracer
+from chatmemory.adapters.tracing.langfuse import (
+    LangfuseTraceDeleter,
+    LangfuseTraceFinder,
+    LangfuseTracer,
+)
 from chatmemory.app.reasoning.budgets import Budget
 from chatmemory.app.reasoning.contract import (
     AnswerPath,
@@ -196,10 +202,30 @@ class FakeIndex:
         self.by_message = by_message or {}
         self.requested: list[str] = []
         self.confirmed: list[str] = []
+        self.askers: dict[str, int | None] = {}
+        self.searches: list[int] = []
+        self.found: dict[int, list[str]] = {}
 
-    async def record_export(self, trace_id: str, message_ids: list[int]) -> None:
+    async def record_export(
+        self, trace_id: str, message_ids: list[int], asker: PersonRef | None = None
+    ) -> None:
         for m in message_ids:
             self.by_message.setdefault(m, []).append(trace_id)
+        self.askers[trace_id] = asker.platform_user_id if asker else None
+
+    async def request_deletion_for_asker(self, platform_user_ids: list[int]) -> list[str]:
+        ids = [t for t, a in self.askers.items() if a in platform_user_ids]
+        self.requested.extend(ids)
+        return ids
+
+    async def open_asker_searches(self, limit: int) -> list[int]:
+        return [s for s in self.searches if s not in self.found][:limit]
+
+    async def record_found_traces(
+        self, platform_user_id: int, trace_ids: list[str], started: datetime
+    ) -> None:
+        self.found[platform_user_id] = list(trace_ids)
+        self.requested.extend(trace_ids)
 
     async def request_deletion_for_message(self, message_id: int) -> list[str]:
         ids = list(self.by_message.get(message_id, []))
@@ -286,6 +312,134 @@ async def test_only_corpus_evidence_is_recorded_for_deletion() -> None:
     )
     await tracer.trace(_trace())
     assert set(index.by_message) == {101, 102}
+
+
+async def test_the_asker_is_recorded_with_the_export() -> None:
+    """Without it an opt-out cannot find the traces of the person's questions."""
+    def accept(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(207, json={"successes": [], "errors": []})
+
+    index = FakeIndex()
+    tracer = LangfuseTracer(
+        host="http://langfuse.invalid",
+        public_key="pk",
+        secret_key="sk",
+        index=index,  # type: ignore[arg-type]
+        client=httpx.AsyncClient(transport=httpx.MockTransport(accept)),
+    )
+    await tracer.trace(_trace(person_id=7))
+    assert list(index.askers.values()) == [7]
+
+
+# --- the Langfuse search backstop ---------------------------------------
+
+
+def _row(trace_id: str, name: str = "fixed", environment: str = "production") -> dict:
+    return {"id": trace_id, "name": name, "environment": environment, "userId": "7"}
+
+
+def _finder(handler: object) -> LangfuseTraceFinder:
+    return LangfuseTraceFinder(
+        host="http://langfuse.invalid",
+        public_key="pk",
+        secret_key="sk",
+        transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
+    )
+
+
+async def test_the_search_returns_only_this_apps_traces_in_this_environment() -> None:
+    """A shared project holds other apps' and environments' traces under the
+    same user id; the server's filter is not trusted to exclude them."""
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={
+            "data": [
+                _row("ours-fixed"),
+                _row("ours-loop", name="loop"),
+                _row("foreign-env", environment="staging"),
+                _row("foreign-name", name="checkout"),
+            ],
+            "meta": {"page": 1, "totalPages": 1},
+        })
+
+    assert await _finder(handle).find_traces_by_user(7) == ["ours-fixed", "ours-loop"]
+    [request] = seen
+    assert request.method == "GET"
+    assert request.url.path == "/api/public/traces"
+    assert request.url.params["userId"] == "7"
+    assert request.url.params["environment"] == "production"
+
+
+async def test_the_search_reads_every_page() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["page"])
+        return httpx.Response(200, json={
+            "data": [_row(f"trace-{page}")], "meta": {"page": page, "totalPages": 3},
+        })
+
+    assert await _finder(handle).find_traces_by_user(7) == [
+        "trace-1", "trace-2", "trace-3",
+    ]
+
+
+async def test_a_refused_search_reports_failure_rather_than_raising() -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"message": "Invalid request data"})
+
+    assert await _finder(refuse).find_traces_by_user(7) is None
+
+
+class FakeFinder:
+    def __init__(self, by_user: dict[int, list[str] | None]) -> None:
+        self.by_user = by_user
+
+    async def find_traces_by_user(self, platform_user_id: int) -> list[str] | None:
+        return self.by_user.get(platform_user_id, [])
+
+
+async def test_found_traces_are_marked_and_then_deleted() -> None:
+    index = FakeIndex()
+    index.searches = [7]
+    deleter = FakeDeleter()
+    withdrawal = TraceWithdrawal(index, deleter, FakeFinder({7: ["old-a", "old-b"]}))
+
+    assert await withdrawal.search_askers() == 2
+    assert await withdrawal.retry_pending() == 2
+    assert deleter.deleted == ["old-a", "old-b"]
+
+
+async def test_a_search_the_destination_refused_stays_open() -> None:
+    index = FakeIndex()
+    index.searches = [7]
+    withdrawal = TraceWithdrawal(index, FakeDeleter(), FakeFinder({7: None}))
+
+    assert await withdrawal.search_askers() == 0
+    assert await index.open_asker_searches(10) == [7]
+
+
+async def test_a_refused_deletion_leaves_the_traces_pending() -> None:
+    """A newer Langfuse that answers the DELETE with a 400 has not deleted
+    anything; confirming it would lose the deletion for good."""
+    bodies: list[dict] = []
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(400, json={"message": "Invalid request data"})
+
+    index = FakeIndex({42: ["trace-a"]})
+    deleter = LangfuseTraceDeleter(
+        host="http://langfuse.invalid",
+        public_key="pk",
+        secret_key="sk",
+        transport=httpx.MockTransport(refuse),
+    )
+    await TraceWithdrawal(index, deleter).withdraw_message(42)
+
+    assert bodies == [{"traceIds": ["trace-a"]}]
+    assert index.confirmed == []
+    assert await index.pending_deletions(10) == ["trace-a"]
 
 
 # --- helpers ----------------------------------------------------------
