@@ -288,6 +288,9 @@ services:
       - ADMIN_OIDC_CLIENT_SECRET=${ADMIN_OIDC_CLIENT_SECRET:-}
       - ADMIN_SESSION_KEY=${ADMIN_SESSION_KEY:-}
       - ADMIN_PUBLIC_URL=${ADMIN_PUBLIC_URL:-}
+      # The host only, no keys: read at startup to warn when Langfuse is not
+      # on v3 (docs/operations.md, "Langfuse version").
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
       # Its own domain. Separate from the MCP one so the console can be closed
       # to the internet without taking retrieval with it.
       - SERVICE_FQDN_ADMIN_8083

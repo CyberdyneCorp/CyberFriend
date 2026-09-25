@@ -63,6 +63,7 @@ from chatmemory.adapters.store.admin_session_postgres import (
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
+from chatmemory.adapters.tracing.langfuse import warn_unless_supported
 from chatmemory.admin.handlers.federation import make_probe
 from chatmemory.admin.handlers.queries import (
     PostgresChannelDirectory,
@@ -319,6 +320,8 @@ async def main() -> None:
         sign_in="cyberdyneauth" if built.sign_in else "off",
     )
     await warm_up(built.sign_in)
+    if langfuse_host := os.environ.get("LANGFUSE_HOST"):
+        await warn_unless_supported(langfuse_host)
     config = uvicorn.Config(
         built.app, host="0.0.0.0", port=built.port, log_level="warning"
     )

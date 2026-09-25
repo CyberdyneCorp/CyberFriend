@@ -178,7 +178,7 @@ from chatmemory.app.reasoning.capabilities import (
     ModelCapability,
     Stage,
 )
-from chatmemory.app.reasoning.contract import RunTracer
+from chatmemory.app.reasoning.contract import NoRunTracer, RunTracer
 from chatmemory.app.reasoning.errors import ConfigurationError
 from chatmemory.app.reasoning.evidence import SOURCE_WEB
 from chatmemory.app.reasoning.loop import FederatedSurface, ToolOutcome
@@ -198,7 +198,11 @@ from chatmemory.app.reasoning.retrieval import (
 )
 from chatmemory.app.reasoning.service import ReasoningAnswerService, build_answer_service
 from chatmemory.app.reasoning.stages import ModelSynthesizer, ModelToolProposer
-from chatmemory.app.reasoning.tracing import OptOutAwareTracer, TraceWithdrawal
+from chatmemory.app.reasoning.tracing import (
+    OptOutAwareTracer,
+    TracedAnswerService,
+    TraceWithdrawal,
+)
 from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import (
     ScheduledTaskRunner,
@@ -1166,7 +1170,6 @@ def build_answers(
     retrieval: RetrievalTool,
     chat: ChatModel,
     tools: ToolSurface | FederatedSurface | None = None,
-    tracer: RunTracer | None = None,
     clock: Clock = utc_now,
 ) -> ReasoningAnswerService:
     """The real answer service: both paths, over one retrieval tool.
@@ -1175,13 +1178,10 @@ def build_answers(
     reaches the loop as one object that offers, proposes and invokes, so the
     thing that decides what a run may call is the thing that calls it.
 
-    `tracer` is None for a deployment that configured no destination, and a
-    no-op tracer is then used rather than a branch at the call site.
-
     `clock` is what the time route answers from and what the prompt's clock
     notice states -- the process's `Edges.clock`.
     """
-    return build_answer_service(retrieval, chat, tools=tools, tracer=tracer, clock=clock)
+    return build_answer_service(retrieval, chat, tools=tools, clock=clock)
 
 
 def build_tracer(
@@ -1677,7 +1677,6 @@ async def build_answer_stack(
         retrieval,
         chat,
         tools=federation.surface if federation else None,
-        tracer=tracer,
         clock=edges.clock,
     )
     capabilities = deployment_capabilities(
@@ -1696,19 +1695,24 @@ async def build_answer_stack(
         # rows exist. Decisions sit behind it for the same reason, and hand
         # back to reasoning whatever they find nothing for. Everything neither
         # claims reaches `reasoning` unchanged.
-        # Outermost, so "what can you do" is answered from configuration
-        # before anything can search the corpus for it.
-        answers=SelfDescriptionAnswerService(
-            # The same clock as the reasoning service, so "this week" and
-            # the time route agree on when now is.
-            ObligationAnswerService(
-                obligations,
-                build_decision_answers(
-                    settings, engine, embeddings, reasoning, clock=edges.clock
+        # The tracer outermost of all, so every answer the chain gives is
+        # traced, named by the feature of whichever service gave it.
+        answers=TracedAnswerService(
+            # Next, so "what can you do" is answered from configuration
+            # before anything can search the corpus for it.
+            SelfDescriptionAnswerService(
+                # The same clock as the reasoning service, so "this week" and
+                # the time route agree on when now is.
+                ObligationAnswerService(
+                    obligations,
+                    build_decision_answers(
+                        settings, engine, embeddings, reasoning, clock=edges.clock
+                    ),
+                    clock=edges.clock,
                 ),
-                clock=edges.clock,
+                capabilities,
             ),
-            capabilities,
+            tracer or NoRunTracer(),
         ),
         capabilities=capabilities,
         reasoning=reasoning,

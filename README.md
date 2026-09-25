@@ -41,7 +41,7 @@ internet said.
 | **Channel media (recording only)** | From `MEDIA_ENABLED_AT`, voice notes and images posted in indexed channels are recorded as pending rows: metadata and a CDN link, nothing downloaded and nothing searchable yet. Transcribing voice notes and reading images come later. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
-| **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |
+| **Tracing** | Each answer — question, answer, feature and references to the evidence behind it (never its text) — exported to Langfuse for study. Off by default |
 
 ### Every feature at a glance
 
@@ -504,13 +504,14 @@ Further reading:
 channels.** That needs a retention window, disclosure to the team, and an
 opt-out. All three exist; the policy is a decision, not a default.
 
-**Tracing copies retrieved content into a store with no permission rules.**
-With `TRACING_ENABLED` on, each run's question, answer and evidence are sent to
-Langfuse, which has no notion of who may read a channel. Anyone with access to
-it can read everything the assistant has retrieved, from every channel. Deleting
-a message does follow — the tombstone deletes the traces quoting it, and a
-failed deletion is retried — but the destination still has to be protected the
-way the database is. It is off by default for this reason.
+**Tracing copies questions and answers into a store with no permission rules.**
+With `TRACING_ENABLED` on, each question and the answer sent are exported to
+Langfuse, which has no notion of who may read a channel. Evidence leaves as
+references only (window, channel, source, score), never its text, but an answer
+can still paraphrase what it drew on. Deleting a message does follow — the
+tombstone deletes the traces built from it, and a failed deletion is retried —
+but Langfuse logins are limited to the console admins and the destination has
+to be protected the way the database is. It is off by default for this reason.
 
 **No bot can read direct messages between people, on any platform.** Questions
 like "what did people ask me today" cover indexed channels and DMs sent to the

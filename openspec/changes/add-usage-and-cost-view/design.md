@@ -40,7 +40,8 @@ item, `langfuse.py` `_evidence`). The tracer already sends an `environment`
 and the answer service), not inferred from strings in the adapter. The trace
 `name` is the feature, and the path stays in metadata. The initial set:
 `corpus.fixed`, `corpus.loop`, `market.price`, `market.other`,
-`wallet.balance`, `wallet.activity`, `portfolio`, `web.search`, `time`,
+`wallet.balance`, `wallet.activity`, `portfolio`, `defi.positions`,
+`web.search`, `time`,
 `obligations`, `decisions`, `capabilities`, `federation`. New features add a
 constant, and a test asserts that every route decision maps to one.
 

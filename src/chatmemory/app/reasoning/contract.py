@@ -17,14 +17,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import structlog
 
 from chatmemory.app.reasoning.budgets import Spend
 from chatmemory.app.reasoning.evidence import Evidence
 from chatmemory.app.reasoning.policy import BlockedAction
-from chatmemory.ports.answers import Answer, Question
+from chatmemory.ports.answers import Answer, AnswerService, Question
 
 log = structlog.get_logger()
 
@@ -125,6 +125,9 @@ class RunRecord:
     sub_questions: tuple[str, ...] = ()
     evidence_window_ids: tuple[int, ...] = ()
     blocked_actions: tuple[BlockedAction, ...] = ()
+    #: What the run was for (`features`), set where the route is decided.
+    #: Empty only on a record no answer service has named yet.
+    feature: str = ""
 
     @property
     def model_calls(self) -> int:
@@ -142,9 +145,10 @@ class RunOutcome:
     record: RunRecord
     # The evidence the run held, carried for tracing and read by nothing else.
     # `RunRecord` keeps ids only because it is what gets logged, and message
-    # text in an application log is a leak nobody asked for. A tracer needs the
-    # text, and re-reading it from the store later would be a second query
-    # against content the run may no longer be entitled to.
+    # text in an application log is a leak nobody asked for. A tracer needs
+    # the messages each item came from, to withdraw the trace when one is
+    # deleted, and re-reading them from the store later would be a second
+    # query against content the run may no longer be entitled to.
     evidence: tuple[Evidence, ...] = ()
 
 
@@ -166,6 +170,8 @@ class RunTrace:
     answer: Answer
     record: RunRecord
     evidence: tuple[Evidence, ...] = ()
+    #: The language the answer is given in, as a short code (`en`, `pt`).
+    language: str = ""
 
 
 class RunTracer(Protocol):
@@ -202,6 +208,50 @@ class LoggingRunRecorder:
             evidence=len(run.evidence_window_ids),
             blocked=[str(b.action) for b in run.blocked_actions],
         )
+
+
+@runtime_checkable
+class RunAnswerService(Protocol):
+    """An `AnswerService` that also returns the record behind the answer.
+
+    Every answer service in the chain implements it, so the outermost one --
+    the tracer's seam -- sees the run whichever service answered it.
+    """
+
+    async def answer(self, question: Question) -> Answer: ...
+
+    async def answer_run(self, question: Question) -> RunOutcome: ...
+
+
+async def run_of(service: AnswerService, question: Question) -> RunOutcome:
+    """The run behind `service`'s answer, recorded or, failing that, built.
+
+    A service that records no run (a test double, say) still answers; its
+    record is then unnamed, which is what an unnamed record means.
+    """
+    if isinstance(service, RunAnswerService):
+        return await service.answer_run(question)
+    return answered(await service.answer(question), feature="")
+
+
+def answered(
+    answer: Answer,
+    feature: str,
+    cause: TerminalCause = TerminalCause.EVIDENCE_SUFFICIENT,
+) -> RunOutcome:
+    """The outcome of an answer given without either reasoning path.
+
+    Obligations, decisions and the self-description are answered from rows or
+    configuration: no retrieval, no model, so nothing is spent and the record
+    carries only what the run was for and how it ended.
+    """
+    status = RunStatus.ABSTAINED if answer.abstained else RunStatus.ANSWERED
+    return RunOutcome(
+        answer=answer,
+        record=RunRecord(
+            path=AnswerPath.FIXED, status=status, cause=cause, feature=feature
+        ),
+    )
 
 
 def abstention_answer() -> Answer:

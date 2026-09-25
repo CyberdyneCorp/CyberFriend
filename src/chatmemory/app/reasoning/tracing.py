@@ -13,11 +13,67 @@ from datetime import UTC, datetime
 
 import structlog
 
+from chatmemory.app.language import Language, detect
 from chatmemory.app.optout import OptOutRegistry
-from chatmemory.app.reasoning.contract import RunTrace, RunTracer
+from chatmemory.app.reasoning.contract import (
+    RunAnswerService,
+    RunOutcome,
+    RunTrace,
+    RunTracer,
+)
+from chatmemory.ports.answers import Answer, Question
 from chatmemory.ports.tracing import TraceDeleter, TraceFinder, TraceIndex
 
 log = structlog.get_logger()
+
+LANGUAGE_CODES = {Language.ENGLISH: "en", Language.PORTUGUESE: "pt"}
+"""The short code a trace is tagged with; anything else is `unknown`."""
+
+
+def language_code(text: str) -> str:
+    """The language an answer to `text` is given in, as a tag value.
+
+    Answers are written in the question's language, so the question decides.
+    """
+    return LANGUAGE_CODES.get(detect(text), "unknown")
+
+
+class TracedAnswerService:
+    """Implements `AnswerService`: answers through `inner`, then traces the run.
+
+    The tracer's seam, and the outermost answer service in composition, so
+    that every answer the chain gives is traced -- the self-description,
+    obligations and decisions as well as both reasoning paths -- each named by
+    the feature the service that answered it recorded. Who is exported is
+    still the tracer's decision (`OptOutAwareTracer`), not this class's.
+    """
+
+    def __init__(self, inner: RunAnswerService, tracer: RunTracer) -> None:
+        self._inner = inner
+        self._tracer = tracer
+
+    async def answer(self, question: Question) -> Answer:
+        return (await self.answer_run(question)).answer
+
+    async def answer_run(self, question: Question) -> RunOutcome:
+        outcome = await self._inner.answer_run(question)
+        # Guarded here as well as in the adapter. `RunTracer` says an
+        # implementation must not raise, and the Langfuse one does not -- but
+        # "must not" is a comment, and the cost of one being wrong is a person
+        # losing their answer to a bookkeeping error.
+        try:
+            await self._tracer.trace(
+                RunTrace(
+                    question=question,
+                    answer=outcome.answer,
+                    record=outcome.record,
+                    evidence=outcome.evidence,
+                    language=language_code(question.text),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - tracing never costs a reply
+            log.warning("reasoning.trace_failed", error=str(exc))
+        return outcome
 
 
 class OptOutAwareTracer:

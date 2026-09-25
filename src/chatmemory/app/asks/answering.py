@@ -24,8 +24,10 @@ import structlog
 
 from chatmemory.app.asks.obligations import ObligationService
 from chatmemory.app.clock import Clock, utc_now
+from chatmemory.app.reasoning import features
+from chatmemory.app.reasoning.contract import RunOutcome, answered, run_of
 from chatmemory.app.reasoning.scope import retrieval_viewer
-from chatmemory.app.routing import ObligationIntent, obligation_question
+from chatmemory.app.routing import ObligationIntent, ObligationQuestion, obligation_question
 from chatmemory.ports.answers import Answer, AnswerService, Question
 
 log = structlog.get_logger()
@@ -49,9 +51,15 @@ class ObligationAnswerService:
         self._clock = clock
 
     async def answer(self, question: Question) -> Answer:
+        return (await self.answer_run(question)).answer
+
+    async def answer_run(self, question: Question) -> RunOutcome:
         asked = obligation_question(question.text)
         if asked is None:
-            return await self._fallback.answer(question)
+            return await run_of(self._fallback, question)
+        return answered(await self._from_records(question, asked), features.OBLIGATIONS)
+
+    async def _from_records(self, question: Question, asked: ObligationQuestion) -> Answer:
 
         # The viewer for the whole answer: the asker intersected with the
         # audience that will receive it. Taken from the question rather than
