@@ -120,3 +120,36 @@ jobs:
       # Type-checks, then bundles: the same build the image runs.
       - name: Build
         run: npm run build
+
+  # The Svelte rewrite of the console, built, linted and tested while it grows
+  # beside console/. Nothing here reaches the image: the Dockerfile copies
+  # console/ only, and the swap folds this job into the one above.
+  console-svelte:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console-svelte
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console-svelte/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # Includes the cognitive-complexity limit (12 per function).
+      - name: Lint
+        run: npm run lint
+
+      # The layer rule and the browser-storage guard are tests, so they run here.
+      - name: Test
+        run: npm test
+
+      # svelte-check, then the bundle.
+      - name: Build
+        run: npm run build

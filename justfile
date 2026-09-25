@@ -132,6 +132,10 @@ console-build:
 console-test:
     cd console && npm run test
 
+# The Svelte rewrite (console-svelte/): lint, tests, then svelte-check and build.
+console-svelte-check:
+    cd console-svelte && npm run lint && npm test && npm run build
+
 # --- images --------------------------------------------------------------
 
 # Build the production image, exactly as the platform builds it.
