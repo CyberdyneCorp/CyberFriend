@@ -8,7 +8,10 @@ Privacy follows the pattern of 0013 and 0014. A suggestion from an opted-out
 person is dropped before it is stored, and recording an opt-out deletes every
 suggestion the person made, in the same transaction as the flag. Deleting the
 person cascades. When the shared `purge_person_derived` function lands
-(add-privacy-dashboard), its body takes over this trigger's delete.
+(0028 on fix/opt-out-leftovers), this revision must be re-chained onto it,
+its DELETE added to that function, and the purge trigger here dropped:
+self-service erasure calls the function directly, not the opt-out trigger,
+so until then erasure without opt-out relies on the person-row cascade.
 
 Revision ID: 0030
 Revises: 0027

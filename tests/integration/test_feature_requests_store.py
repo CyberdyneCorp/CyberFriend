@@ -150,7 +150,8 @@ async def test_opting_out_deletes_their_suggestions_and_only_theirs(clean: Async
 
 
 async def test_deleting_the_person_deletes_their_suggestions(clean: AsyncEngine) -> None:
-    """Erasure removes the person row; the suggestions go with it."""
+    """The person-row cascade. Erasure through `purge_person_derived` is not
+    on this base yet; see tasks 1.1/1.5 of add-feature-requests."""
     suggestions = service(clean)
     await suggestions.submit(LEO, "dark mode", COMMAND)
     await suggestions.submit(ANA, "light mode", COMMAND)
