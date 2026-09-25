@@ -59,6 +59,10 @@ DELETE FROM scheduled_task WHERE id = :task_id AND person_id = :person_id
 #: keeps two sweeps from claiming the same row even though one replica is the
 #: intended deployment: the statement should not be correct only by
 #: configuration.
+#:
+#: Opted-out people are skipped as well as purged. `purge_person_derived`
+#: deletes their tasks when they opt out; the filter is what keeps a task
+#: written afterwards (the table has no insert guard) from ever running.
 CLAIM_DUE = text("""
 UPDATE scheduled_task s
    SET next_run_at = CAST(:now AS timestamptz)
@@ -66,6 +70,9 @@ UPDATE scheduled_task s
   FROM (
       SELECT id FROM scheduled_task
       WHERE disabled_at IS NULL AND next_run_at <= CAST(:now AS timestamptz)
+        AND NOT EXISTS (
+            SELECT 1 FROM person_opt_out o WHERE o.person_id = scheduled_task.person_id
+        )
       ORDER BY next_run_at
       LIMIT :limit
       FOR UPDATE SKIP LOCKED

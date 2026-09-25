@@ -32,6 +32,25 @@ Three things have to hold for this to be an opt-out rather than a gesture.
     belongs to the database, so no path that records an opt-out can keep an
     email address.
 
+*   **One delete path for everything derived from the person.** Since
+    migration 0028 the per-table purges above, and scheduled tasks and MCP
+    tokens, live in one SQL function, `purge_person_derived(person_id)`, which
+    the single `person_opt_out` trigger calls and erasure calls directly. A new
+    table holding person data adds its DELETE there, in its own migration.
+    MCP authentication also refuses an opted-out person, so a token issued
+    after the purge never works. The fetch log (`document_fetch`) is keyed
+    on message ids, so it goes with the message purge below rather than with
+    the function.
+
+*   **It covers the traces of what they asked and wrote.** An exported run
+    holds the question as asked and the text of every message it quoted, in
+    a store with no viewer scoping. The opt-out marks every trace the person
+    asked and every trace quoting a message they wrote as pending deletion,
+    and queues a Langfuse search by their platform id for traces exported
+    before the asker was recorded. Marking, not deleting: the admin console
+    holds no Langfuse keys, and a destination that is down must delay the
+    deletion rather than lose it. The ingest process performs both.
+
 *   **The flag lands before the purge.** In the other order there is a window
     between "content deleted" and "exclusion recorded" in which a backfill page
     re-imports exactly what was just removed, and the opt-out reports success.
@@ -65,6 +84,7 @@ class PersonPurge:
     reactions: int = 0
     mentions: int = 0
     decisions: int = 0
+    fetch_records: int = 0
 
     @property
     def total(self) -> int:
@@ -75,6 +95,7 @@ class PersonPurge:
             + self.reactions
             + self.mentions
             + self.decisions
+            + self.fetch_records
         )
 
 
@@ -83,6 +104,8 @@ class OptOutReport:
     person: PersonRef
     corpus: PersonPurge = PersonPurge()
     documents: int = 0
+    #: Scheduled for deletion, not removed: the ingest process deletes them.
+    traces: int = 0
 
     @property
     def total(self) -> int:
@@ -118,35 +141,42 @@ class PersonDocumentPurge(Protocol):
     async def purge_person_documents(self, person: PersonRef) -> int: ...
 
 
+class PersonTraces(Protocol):
+    """The trace store's half of an opt-out. Satisfied by the trace index."""
+
+    async def request_deletion_for_person(self, person: PersonRef) -> int:
+        """Mark the traces they asked or that quote them; queue the search.
+
+        Returns how many traces were marked. Must run before their messages
+        are purged: the message rows are what say who wrote what a trace
+        quotes.
+        """
+        ...
+
+
 class OptOutService:
     def __init__(
         self,
         registry: OptOutRegistry,
         documents: PersonDocumentPurge | None = None,
+        traces: PersonTraces | None = None,
     ) -> None:
         self._registry = registry
         self._documents = documents
+        self._traces = traces
 
     async def opt_out(self, person: PersonRef, reason: str = "") -> OptOutReport:
         # Flag first, purge second. The reverse order leaves a window between
         # the delete and the flag in which a backfill page re-imports exactly
         # what was just removed -- and the opt-out still reports success.
         await self._registry.record_opt_out(person, reason)
+        traces = await self._withdraw_traces(person)
         corpus = await self._registry.purge_person(person)
+        documents = await self._purge_documents(person)
 
-        documents = 0
-        if self._documents is None:
-            # Loud, because "messages only" is not an opt-out and an operator
-            # reading a success line has no other way to find that out.
-            log.error(
-                "optout.documents_not_covered",
-                person=str(person),
-                hint="no document store wired; uploads by this person remain indexed",
-            )
-        else:
-            documents = await self._documents.purge_person_documents(person)
-
-        report = OptOutReport(person=person, corpus=corpus, documents=documents)
+        report = OptOutReport(
+            person=person, corpus=corpus, documents=documents, traces=traces
+        )
         log.info(
             "optout.recorded",
             person=str(person),
@@ -156,9 +186,33 @@ class OptOutService:
             reactions=corpus.reactions,
             mentions=corpus.mentions,
             decisions=corpus.decisions,
+            fetch_records=corpus.fetch_records,
             documents=documents,
+            traces=traces,
         )
         return report
+
+    async def _withdraw_traces(self, person: PersonRef) -> int:
+        if self._traces is None:
+            log.error(
+                "optout.traces_not_covered",
+                person=str(person),
+                hint="no trace index wired; exported runs of this person remain",
+            )
+            return 0
+        return await self._traces.request_deletion_for_person(person)
+
+    async def _purge_documents(self, person: PersonRef) -> int:
+        if self._documents is None:
+            # Loud, because "messages only" is not an opt-out and an operator
+            # reading a success line has no other way to find that out.
+            log.error(
+                "optout.documents_not_covered",
+                person=str(person),
+                hint="no document store wired; uploads by this person remain indexed",
+            )
+            return 0
+        return await self._documents.purge_person_documents(person)
 
     async def opt_in(self, person: PersonRef) -> None:
         """Clear the exclusion. Nothing purged comes back."""

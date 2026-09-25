@@ -16,7 +16,10 @@ import pytest
 from chatmemory.adapters.discord.bot import CyberFriendClient
 
 GUILD_ID = 1
-PERSONAL = {"ask", "resolve", "forget", "notifications", "channels", "schedule", "alert"}
+PERSONAL = {
+    "ask", "resolve", "forget", "notifications", "channels", "schedule", "alert",
+    "suggest", "suggestions",
+}
 CHANNEL_ACTIONS = {"index", "unindex"}
 
 

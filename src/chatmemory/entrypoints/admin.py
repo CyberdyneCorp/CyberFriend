@@ -49,6 +49,7 @@ from chatmemory.adapters.store.admin_postgres import (
 )
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
+from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
 from chatmemory.admin.handlers.federation import make_probe
 from chatmemory.admin.handlers.queries import (
     PostgresChannelDirectory,
@@ -208,8 +209,12 @@ def build(environ: Mapping[str, str]) -> ConsoleProcess:
         optout_directory=PostgresOptOutDirectory(engine),
         # With the document store, not without it: an opt-out that covers
         # messages and leaves the PDF somebody attached fully searchable has
-        # withdrawn the index entry and kept the content.
-        optouts=OptOutService(retention, PostgresDocumentStore(engine)),
+        # withdrawn the index entry and kept the content. With the trace
+        # index too: the opt-out marks the person's exported runs, and ingest,
+        # which holds the Langfuse keys, deletes them.
+        optouts=OptOutService(
+            retention, PostgresDocumentStore(engine), PostgresTraceIndex(engine)
+        ),
         mcp_tokens=PostgresTokenStore(engine),
         probe=make_probe(),
     )

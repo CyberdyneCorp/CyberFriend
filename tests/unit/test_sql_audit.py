@@ -42,6 +42,7 @@ SQL_MODULES = (
     "memory_sql",
     "facts_sql",
     "media_sql",
+    "feature_requests_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -310,6 +311,7 @@ UNSCOPED: dict[str, str] = {
     "retention_sql.PURGE_PERSON_MESSAGES": "write; opt-out",
     "retention_sql.PURGE_PERSON_ASKS": "write; opt-out",
     "retention_sql.PURGE_PERSON_DECISIONS": "write; opt-out",
+    "retention_sql.PURGE_PERSON_FETCHES": "write; opt-out, the fetch log of their messages",
     "retention_sql.PURGE_PERSON_REACTIONS": "write; opt-out",
     "retention_sql.PURGE_PERSON_MENTIONS": "write; opt-out",
     # --- admin_sql -------------------------------------------------------
@@ -445,6 +447,33 @@ UNSCOPED: dict[str, str] = {
     # --- media_sql -------------------------------------------------------
     #
     # The voice-question ledger: seconds per person and month, never content.
+    # --- feature_requests_sql: the person's own suggestions ---------------
+    "feature_requests_sql.LOCK_PERSON": (
+        "row lock on the submitter's own person row, keyed on their person id, "
+        "so the daily limit's count holds. Returns the id only"
+    ),
+    "feature_requests_sql.NAME_PLACEHOLDER_PERSON": (
+        "write; replaces the account-id placeholder name of the submitter's own "
+        "person row with their Discord name. Returns no row"
+    ),
+    "feature_requests_sql.EXISTING_BY_HASH": (
+        "the id of the submitter's own earlier suggestion with the same "
+        "normalised text, keyed on their person id. No content"
+    ),
+    "feature_requests_sql.INSERT_WITHIN_LIMIT": (
+        "write; stores the submitter's own words against the person id the "
+        "adapter resolved from their platform identity. Returns the id only"
+    ),
+    "feature_requests_sql.IS_OPTED_OUT": "a flag for the submitter's own person id",
+    "feature_requests_sql.FOR_PERSON": (
+        "returns suggestions, but only the requester's own: the person id is "
+        "resolved from their platform identity and bound in the WHERE clause. "
+        "A suggestion is the person's own words, never channel content"
+    ),
+    "feature_requests_sql.SET_NOTIFY": (
+        "write; the requester's answer to 'tell you when its status changes?', "
+        "keyed on their person id as well as the row id. Returns no row"
+    ),
     "media_sql.LOCK_LEDGER": "advisory lock; reads no table",
     "media_sql.PERSON_OF": (
         "identity lookup; the asker's own person id and whether they opted "
