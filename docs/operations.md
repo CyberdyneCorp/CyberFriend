@@ -336,7 +336,7 @@ exactly one from the question, so the model's only job is to copy the address:
 It uses the same address rules as balances: the address must be in the question
 or be the asker's saved wallet, and a question with neither is answered by
 asking for one. A question needs an address or a first-person reference ("my
-pools") to route here — "what did we decide about the pool" stays a corpus
+pools") to route here — "what did we decide about the pool" is a decision
 question. A follow-up such as "show me the v4 position" uses the address from
 the asker's own last three questions, if one named an address.
 
@@ -564,6 +564,50 @@ route.
 replies cost no model call. Migration `0023` adds `ix_message_author_time`,
 a partial index on `message(author_person_id, created_at)` that serves both
 statements.
+
+## What we decided
+
+"o que decidimos sobre o deploy?", "o que ficou decidido semana passada?",
+"qual foi a decisão sobre o banco?", "what did we decide about pricing?",
+"what was decided last week?". Decisions are read out of conversation by the
+ask extraction pass (one model call per candidate message, both arrays in
+one reply) and stored in the `decision` table (migration `0024`); this is the
+read side.
+
+**Recognised without a model call** (`routing.decision_question`), in the
+answer chain after obligations and before the ordinary answer. Only what a
+group settled: "we", "a gente", the passive. "What did you decide" (asks the
+bot), "o que o João decidiu" (one person), "decide between A and B" (asks
+for help choosing), a pronoun topic ("sobre isso"), compound questions and
+market or fact questions keep their own routes.
+
+**When.** `app/timespan.py` in `ANSWER_TIMEZONE`, as for said-by: calendar
+days and Monday-to-Monday weeks. A range or an unreadable day falls through.
+A question with no topic lists the period's decisions; with neither topic nor
+period, the last 30 days, and the heading says so.
+
+**Scope.** The asker intersected with the room (`retrieval_viewer`), bound
+into `decisions_sql.SEARCH_DECISIONS` itself: the decision's channel, the
+source message alive, and every evidence message (the source plus what the
+model was shown with it) existing, alive and in a channel the viewer may
+read. A deletion also withdraws the rows at ingest; the read predicate covers
+one that lands in between.
+
+**Ranking.** An exact scan: `0.7 * cosine(topic embedding) + 0.3 * ts_rank`
+over the `'simple'` tsvector, confidence at or above the policy's 0.7. A row
+is listed only if its cosine reaches `DECISION_MIN_SIMILARITY` (default 0.4)
+or, for a row stored without an embedding, all of the topic's meaningful
+words occur in it. The best five are listed newest first, each dated in
+local time and citing the message that settled it with its original words.
+Decisions are not merged or superseded; the dates show the order.
+
+**No "nothing was decided".** Nothing above the floor, no readable channel,
+or a failed topic embedding: the question is answered by ordinary retrieval,
+which has its own single "found nothing" reply. A missed extraction reads as
+a retrieval answer, never as a claim that nothing was settled.
+
+**Cost.** One topic embedding (none without a topic), no chat-model call.
+Logged as `decisions.looked_up` with `found` and `model_calls=0`.
 
 ## Scheduled tasks
 

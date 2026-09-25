@@ -66,9 +66,69 @@ class DecisionPolicy:
     """
 
     min_confidence: float = 0.7
+    #: The cosine a decision's embedding must reach against the question's
+    #: topic to be reported. Below it the question goes to retrieval, never
+    #: to "nothing was decided": a missed extraction is not a non-decision.
+    min_similarity: float = 0.4
+    #: How many decisions one answer lists.
+    limit: int = 5
+    excerpt_chars: int = 240
+    #: The window a question with neither topic nor time is answered over.
+    default_days: int = 30
 
     def presentable(self, confidence: float) -> bool:
         return confidence >= self.min_confidence
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionRequest:
+    """What a decision question asks the store for.
+
+    Like `ObligationRequest`, it has no channel or viewer field: whose view the
+    search runs under is the store's required `Viewer` argument, never
+    something a request can carry. The thresholds come from policy, never
+    from a caller.
+    """
+
+    #: Embedded by the caller; the words also rank lexically. Empty lists the
+    #: period's decisions, newest first.
+    topic: str
+    since: datetime | None
+    until: datetime | None
+    min_confidence: float
+    min_similarity: float
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReportedDecision:
+    """A stored decision with what a reader needs to check it."""
+
+    source_message_id: int
+    channel: ChannelRef
+    summary: str
+    topic: str
+    decided_at: datetime
+    author_display: str
+    #: The source message's own words, which the citation quotes.
+    source_excerpt: str
+
+
+#: Words that name no topic. A lexical match on "o" or "the" is a match on
+#: every summary, so they are left out of the words ranked by `ts_rank`.
+_FILLER = frozenset(
+    {
+        *("o", "a", "os", "as", "um", "uma", "de", "do", "da", "dos", "das", "no", "na"),
+        *("nos", "nas", "em", "e", "que", "com", "para", "pra", "pro", "por"),
+        *("the", "an", "of", "on", "in", "to", "and", "for", "with", "our", "we"),
+    }
+)
+
+
+def search_terms(topic: str) -> str:
+    """The topic's words that carry meaning, for a `'simple'` text query."""
+    words = re.findall(r"[^\W_]+", topic.casefold())
+    return " ".join(w for w in words if w not in _FILLER)
 
 
 def topic_slug(topic: str) -> str:

@@ -566,6 +566,22 @@ def test_the_answer_stack_puts_obligations_in_front_of_retrieval() -> None:
     )
 
 
+def test_the_answer_stack_puts_decisions_behind_obligations() -> None:
+    """Obligation -> decision -> reasoning: the decision path is what the
+    obligation path hands everything it does not claim to."""
+    stack = _function(SRC / "composition.py", "build_answer_stack")
+    for node in ast.walk(stack):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == (
+            "ObligationAnswerService"
+        ):
+            fallback = node.args[1]
+            assert isinstance(fallback, ast.Call)
+            assert getattr(fallback.func, "id", None) == "build_decision_answers"
+            assert _calls(fallback, "build_decision_answers", keyword="clock")
+            return
+    pytest.fail("build_answer_stack never constructs an ObligationAnswerService")
+
+
 def test_obligation_periods_are_measured_on_the_graphs_clock() -> None:
     """"This week" is bounded by `edges.clock`, like every other route.
 

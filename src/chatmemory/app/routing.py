@@ -21,7 +21,8 @@ rather than by `classify`: obligation questions leave both retrieval paths
 entirely and are answered from the `ask` rows. It is kept separate so that
 `classify` still answers exactly one question -- fixed or loop -- for every
 caller that asks it, including the one that runs after an obligation question
-has already been declined.
+has already been declined. `decision_question` is a fourth, answered from the
+`decision` rows the same way.
 """
 
 from __future__ import annotations
@@ -29,9 +30,11 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from enum import StrEnum
 
+from chatmemory.app.language import Language
+from chatmemory.app.timespan import Span, cut_span, cut_topic, fold
 from chatmemory.domain.chain import find_addresses
 from chatmemory.ports.facts import FactKind
 
@@ -759,6 +762,206 @@ def obligation_question(text: str) -> ObligationQuestion | None:
     ):
         return ObligationQuestion(ObligationIntent.MY_OBLIGATIONS, named_period(text))
     return None
+
+
+# --- decision questions ---------------------------------------------------
+#
+# "O que decidimos sobre o deploy?" is answered from the `decision` rows, as an
+# obligation question is from the `ask` rows, and claimed here for the same
+# reasons: lexically, with no model call, and narrowly. A question this misses
+# is answered by retrieval as before. One it claims and finds nothing for is
+# handed back to retrieval too, so a wrong claim costs an embedding, never a
+# "nothing was decided".
+#
+# Every shape is about what a group settled: "we", "a gente", the passive.
+# "What did you decide" asks the bot, "o que o João decidiu" asks about one
+# person, and "decide between A and B" asks for help deciding; none of them is
+# a lookup of the log.
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionQuestion:
+    """A decision question, what it was about, and when.
+
+    `topic` is as typed ("o deploy"), empty when none was named. `span` is
+    None when no time was named. `language` is the shape's, which the reply is
+    written in. `model_calls` is zero by construction, like `RoutingDecision`.
+    """
+
+    topic: str
+    span: Span | None
+    language: Language
+    model_calls: int = 0
+
+
+_DECISION_END = r"\s*[?.!]*\s*$"
+_PT_WHAT = r"(?:e\s+)?(?:o\s*que|oq|o\s+q)(?:\s+(?:e\s+)?que)?"
+_PT_GROUP = r"(?:a\s+gente|agente|o\s+time|a\s+equipe|o\s+pessoal|a\s+galera)"
+_PT_WE = rf"(?:(?:nos|{_PT_GROUP})\s+)?"
+_PT_DECIDED = (
+    r"(?:decidimos|decidiram|combinamos|combinaram|definimos|definiram"
+    r"|fechamos|acordamos|se\s+decidiu"
+    r"|(?:foi|foram|ficou|ficaram|tinha\s+ficado)\s+"
+    r"(?:decidid|combinad|definid|acordad|fechad)[oa]s?)"
+)
+#: The singular only after a group: Portuguese drops the subject, and a bare
+#: "o que decidiu?" is "what did you decide?".
+_PT_GROUP_DECIDED = rf"{_PT_GROUP}\s+(?:decidiu|combinou|definiu)"
+_PT_DECISION = r"decis(?:ao|oes)(?:\s+tomadas?)?"
+_PT_TOPIC = (
+    r"(?:\s+(?:sobre|a\s+respeito\s+d[aeo]s?|acerca\s+d[aeo]s?|(?:em|com)\s+relacao\s+a[os]?"
+    r"|quanto\s+a[os]?|pr[ao]s?|para\s+[ao]s?|d[aeo]s?|n[ao]s?)\s+(?P<topic>.+?))?"
+)
+_EN_WE = r"(?:we|the\s+team|the\s+group|everyone)"
+_EN_DECIDED = r"(?:decide|decided|agree|agreed|settle|settled)(?:\s+to\s+do)?"
+_EN_TOPIC = (
+    r"(?:\s+(?:(?:on|upon)\s+)?(?:about|on|upon|regarding|concerning|for|with)"
+    r"\s+(?P<topic>.+?)|\s+(?:on|upon))?"
+)
+_EN_DECISION = r"decisions?(?:\s+(?:we\s+made|made|taken))?"
+
+_DECISION_SHAPES: tuple[tuple[re.Pattern[str], Language], ...] = tuple(
+    (re.compile(rf"^{head}{topic}{_DECISION_END}"), language)
+    for head, topic, language in (
+        # "o que decidimos (sobre Y)", "o que ficou decidido do Y", "o que a gente combinou"
+        (
+            rf"{_PT_WHAT}\s+(?:{_PT_GROUP_DECIDED}|{_PT_WE}{_PT_DECIDED})",
+            _PT_TOPIC,
+            Language.PORTUGUESE,
+        ),
+        # "qual foi a decisão sobre Y", "quais as decisões do Y"
+        (
+            rf"(?:e\s+)?(?:qual|quais)(?:\s+(?:foi|foram|e|sao|era|eram))?"
+            rf"(?:\s+(?:a|as))?\s+{_PT_DECISION}",
+            _PT_TOPIC,
+            Language.PORTUGUESE,
+        ),
+        # "que decisões tomamos sobre Y", "quais decisões foram tomadas"
+        (
+            r"(?:e\s+)?(?:que|quais)\s+decisoes\s+"
+            r"(?:tomamos|tomaram|a\s+gente\s+tomou|foram\s+tomadas)",
+            _PT_TOPIC,
+            Language.PORTUGUESE,
+        ),
+        # "teve alguma decisão sobre Y", "houve decisões sobre Y"
+        (
+            rf"(?:e\s+)?(?:teve|tem|houve|ha|rolou)\s+(?:alguma\s+)?{_PT_DECISION}",
+            _PT_TOPIC,
+            Language.PORTUGUESE,
+        ),
+        # "decisões sobre Y?" -- only with a topic, which the shape requires.
+        (r"(?:as\s+)?decisoes", _PT_TOPIC.removesuffix("?"), Language.PORTUGUESE),
+        # "what did we decide (about Y)", "what have we agreed on"
+        (
+            rf"(?:so\s+|and\s+)?what\s+(?:did|have|had)\s+{_EN_WE}\s+{_EN_DECIDED}",
+            _EN_TOPIC,
+            Language.ENGLISH,
+        ),
+        # "what was decided (about Y)", "what has been agreed on Y"
+        (
+            r"(?:so\s+|and\s+)?what\s+(?:was|were|has\s+been|have\s+been|got|had\s+been)\s+"
+            r"(?:decided|agreed|settled)",
+            _EN_TOPIC,
+            Language.ENGLISH,
+        ),
+        # "what was the decision on Y", "what were our decisions about Y"
+        (
+            rf"(?:so\s+|and\s+)?what(?:'s|\s+is|\s+was|\s+were|\s+are)\s+(?:the|our)\s+{_EN_DECISION}",
+            _EN_TOPIC,
+            Language.ENGLISH,
+        ),
+        # "what decisions did we make about Y", "which decisions were made"
+        (
+            r"(?:what|which)\s+decisions\s+(?:did\s+we\s+(?:make|take)|have\s+we\s+(?:made|taken)"
+            r"|were\s+(?:made|taken)|have\s+been\s+made)",
+            _EN_TOPIC,
+            Language.ENGLISH,
+        ),
+        # "did we decide anything about Y" -- only with a topic.
+        (
+            rf"(?:did|have)\s+{_EN_WE}\s+{_EN_DECIDED}(?:\s+(?:anything|something))?",
+            _EN_TOPIC.removesuffix("?"),
+            Language.ENGLISH,
+        ),
+        # "were there any decisions about Y", "any decisions on Y"
+        (
+            r"(?:(?:were|was)\s+there\s+)?any\s+decisions?(?:\s+(?:made|taken))?",
+            _EN_TOPIC,
+            Language.ENGLISH,
+        ),
+        # "decisions about Y?" -- only with a topic.
+        (r"(?:the\s+)?decisions", _EN_TOPIC.removesuffix("?"), Language.ENGLISH),
+    )
+)
+
+#: Asking for help choosing, not for what was chosen.
+_CHOOSING = re.compile(r"\b(?:between|entre)\b")
+
+#: A topic that is a pronoun needs the conversation to resolve it, which
+#: retrieval has and this route does not.
+_PRONOUN_TOPICS = frozenset(
+    {"it", "that", "this", "those", "these", "me", "you", "isso", "isto", "aquilo", "ele",
+     "ela", "esse", "essa", "este", "esta", "mim", "voce", "vc"}
+)
+
+#: "E o que decidimos?" continues a conversation about something, which
+#: retrieval has and this route does not; with no topic it would list every
+#: recent decision instead.
+_FOLLOW_UP_OPENING = re.compile(r"^(?:e|and|so)\s")
+
+#: A channel is a place, not a topic: ranking decisions against "#leadership"
+#: lists other channels' decisions under that heading. Retrieval takes these,
+#: in both languages.
+_CHANNEL_MENTION = re.compile(r"<#\d+>|(?:^|\s)#[\w-]")
+
+
+def _decision_deferred(text: str, folded: str) -> bool:
+    """Whether the question asks for more than one lookup, or belongs elsewhere."""
+    return (
+        not single_lookup(text)
+        or _CHOOSING.search(folded) is not None
+        or market_question(text) is not None
+        or fact_intent(text) is not None
+    )
+
+
+def _decision_shape(folded: str) -> tuple[re.Match[str], Language] | None:
+    for pattern, language in _DECISION_SHAPES:
+        match = pattern.match(folded)
+        if match is not None:
+            return match, language
+    return None
+
+
+def decision_question(text: str, now: datetime, tz: tzinfo) -> DecisionQuestion | None:
+    """The decision question being asked, or None for everything else.
+
+    `now` and `tz` resolve the time it names ("semana passada" is Sao Paulo's
+    last calendar week), through `timespan`, as said-by resolves its own. A
+    time that cannot be read as one span is None rather than dropped, for the
+    reason `timespan.cut_span` gives.
+    """
+    if _decision_deferred(text, fold(text)):
+        return None
+    cut = cut_span(text, now, tz)
+    if cut is None:
+        return None
+    found = _decision_shape(cut.folded)
+    if found is None:
+        return None
+    match, language = found
+    typed = cut.typed[match.start("topic") : match.end("topic")] if match["topic"] else ""
+    topic = cut_topic(typed)
+    if _topic_needs_context(topic, cut.folded):
+        return None
+    return DecisionQuestion(topic, cut.span, language)
+
+
+def _topic_needs_context(topic: str, folded: str) -> bool:
+    """Whether the topic, or its absence, is something only retrieval can read."""
+    if not topic:
+        return _FOLLOW_UP_OPENING.match(folded) is not None
+    return fold(topic) in _PRONOUN_TOPICS or _CHANNEL_MENTION.search(topic) is not None
 
 
 # --- questions that must not be answered from the corpus ----------------

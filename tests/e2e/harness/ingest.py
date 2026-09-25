@@ -38,6 +38,7 @@ from chatmemory.app.ingest import IngestService
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import build_ask_pipeline
 from chatmemory.config import Settings
+from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
 from chatmemory.entrypoints.ingest import live_loop
 from chatmemory.health import HealthState
@@ -81,6 +82,9 @@ class Ingest:
         embeddings: HashEmbeddings,
     ) -> None:
         store = PostgresStore(engine)
+        self.asks = build_ask_pipeline(
+            settings, engine, extractor=ChatAskExtractor(chat), embeddings=embeddings
+        )
         self.service = IngestService(
             # Only backfill reads the source, and no scenario backfills.
             source=cast(ChatSource, None),
@@ -91,9 +95,9 @@ class Ingest:
                 gap=timedelta(seconds=settings.window_gap_seconds),
             ),
             indexed_channels=settings.indexed_channel_ids,
-        )
-        self.asks = build_ask_pipeline(
-            settings, engine, extractor=ChatAskExtractor(chat), embeddings=embeddings
+            # As the ingest entrypoint passes it: a deletion withdraws the
+            # decisions resting on the deleted message.
+            decisions=self.asks.decisions,
         )
         self.asks.worker.records_through(store)
 
@@ -108,6 +112,10 @@ class Ingest:
         # only when the store took the message.
         assert state.last_message_ingested_at is not None, f"not captured: {raw.content!r}"
         return message
+
+    async def delete(self, message: int, channel: ChannelRef) -> None:
+        """A user deleting a message, as the gateway's delete event reaches ingest."""
+        await self.service.handle_delete(message, channel=channel)
 
     async def extract(self) -> int:
         """Run the extraction pass over everything captured, ready or not."""

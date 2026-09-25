@@ -147,6 +147,8 @@ from chatmemory.app.conversation import (
     MemoryPolicy,
     MemoryRetention,
 )
+from chatmemory.app.decisions.answering import DecisionAnswerService
+from chatmemory.app.decisions.model import DecisionPolicy
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.notifications import (
@@ -1357,6 +1359,34 @@ def build_obligations(settings: Settings, engine: AsyncEngine) -> ObligationServ
     )
 
 
+def build_decision_answers(
+    settings: Settings,
+    engine: AsyncEngine,
+    embeddings: EmbeddingClient,
+    fallback: AnswerService,
+    clock: Clock = utc_now,
+) -> DecisionAnswerService:
+    """"What did we decide about Y?", answered from the decision rows.
+
+    Over the engine and embeddings client the answer stack already holds: the
+    store only reads here, and its one outbound call is the topic's embedding.
+    `clock` and `ANSWER_TIMEZONE` decide what "semana passada" means, as for
+    said-by. Everything it does not claim, or finds nothing for, reaches
+    `fallback` unchanged.
+    """
+    return DecisionAnswerService(
+        PostgresDecisionStore(engine, embeddings),
+        embeddings,
+        fallback,
+        tz=ZoneInfo(settings.answer_timezone),
+        clock=clock,
+        policy=DecisionPolicy(min_similarity=settings.decision_min_similarity),
+        # The same one-click citation obligations give: a decision is a claim
+        # the system made about a conversation.
+        message_url=discord_message_url(settings.discord_guild_id),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class AskPipeline:
     """The ingest-side half of the feature, assembled as one piece.
@@ -1561,14 +1591,21 @@ async def build_answer_stack(
         # than inside it. "What did people ask me today" is a filter over rows
         # by addressee and time; embedding that sentence and hoping the right
         # windows surface is exactly how this feature fails, and it is why the
-        # rows exist. Everything it does not claim reaches `reasoning`
-        # unchanged.
+        # rows exist. Decisions sit behind it for the same reason, and hand
+        # back to reasoning whatever they find nothing for. Everything neither
+        # claims reaches `reasoning` unchanged.
         # Outermost, so "what can you do" is answered from configuration
         # before anything can search the corpus for it.
         answers=SelfDescriptionAnswerService(
             # The same clock as the reasoning service, so "this week" and
             # the time route agree on when now is.
-            ObligationAnswerService(obligations, reasoning, clock=edges.clock),
+            ObligationAnswerService(
+                obligations,
+                build_decision_answers(
+                    settings, engine, embeddings, reasoning, clock=edges.clock
+                ),
+                clock=edges.clock,
+            ),
             external_tools=(
                 sorted(federation.federation.permits) if federation is not None else ()
             ),

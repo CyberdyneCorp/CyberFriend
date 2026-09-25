@@ -83,6 +83,7 @@ Set at **runtime** scope, not build scope — the image must contain no secrets.
 | `EMBEDDING_DIMENSIONS` | `1536`. Changing this later is a reindex, not a swap. |
 | `MCP_TOKENS` | Bearer tokens, each bound to one person. See below. |
 | `ANSWER_TIMEZONE` | Optional. IANA zone whose days "ontem" and "semana passada" mean; defaults to `America/Sao_Paulo`. An unknown name stops the bot at boot. |
+| `DECISION_MIN_SIMILARITY` | Optional. Cosine a stored decision must reach against the topic of "o que decidimos sobre Y?" to be listed; defaults to `0.4`. Lower it if a multilingual embedding model misses cross-language matches. |
 
 ### MCP tokens are bound to a person
 
