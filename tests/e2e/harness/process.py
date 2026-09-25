@@ -101,5 +101,5 @@ async def start(settings: Settings, engine: AsyncEngine, seal: NetworkSeal) -> E
     process = await assemble(settings, edges)
     wire = FakeDiscord(process.graph.client, layout())
     await wire.start()
-    ingest = Ingest(settings, engine, chat, embeddings)
+    ingest = Ingest(settings, engine, chat, embeddings, web.transport)
     return E2EBot(process, wire, chat, web, embeddings, seal, ingest)

@@ -9,12 +9,13 @@ layer's decision.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import structlog
 
 from chatmemory.app.optout import OptOutRegistry
 from chatmemory.app.reasoning.contract import RunTrace, RunTracer
-from chatmemory.ports.tracing import TraceDeleter, TraceIndex
+from chatmemory.ports.tracing import TraceDeleter, TraceFinder, TraceIndex
 
 log = structlog.get_logger()
 
@@ -54,9 +55,15 @@ class TraceWithdrawal:
     confirmed deletion clears the mark.
     """
 
-    def __init__(self, index: TraceIndex, deleter: TraceDeleter) -> None:
+    def __init__(
+        self,
+        index: TraceIndex,
+        deleter: TraceDeleter,
+        finder: TraceFinder | None = None,
+    ) -> None:
         self._index = index
         self._deleter = deleter
+        self._finder = finder
 
     async def withdraw_message(self, message_id: int) -> None:
         trace_ids = await self._index.request_deletion_for_message(message_id)
@@ -75,6 +82,27 @@ class TraceWithdrawal:
         if not pending:
             return 0
         return len(pending) if await self._flush(pending) else 0
+
+    async def search_askers(self, limit: int = 10) -> int:
+        """Find opted-out askers' traces the index never recorded; mark them.
+
+        The backstop for traces exported before the index recorded who asked
+        them. The deletion itself is left to `retry_pending`, so a search and
+        a deletion fail and retry independently. A search the destination
+        could not answer stays open for the next pass.
+        """
+        if self._finder is None:
+            return 0
+        found = 0
+        for platform_user_id in await self._index.open_asker_searches(limit):
+            started = datetime.now(UTC)
+            trace_ids = await self._finder.find_traces_by_user(platform_user_id)
+            if trace_ids is None:
+                log.warning("tracing.asker_search_deferred")
+                continue
+            await self._index.record_found_traces(platform_user_id, trace_ids, started)
+            found += len(trace_ids)
+        return found
 
     async def _flush(self, trace_ids: Sequence[str]) -> bool:
         if not await self._deleter.delete_traces(trace_ids):

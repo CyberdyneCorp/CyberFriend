@@ -140,4 +140,6 @@ def _removed(report: OptOutReport) -> dict[str, Any]:
         "decisions": report.corpus.decisions,
         "documents": report.documents,
         "total": report.total,
+        # Not in the total: scheduled for deletion by ingest, not removed yet.
+        "traces_scheduled": report.traces,
     }

@@ -78,7 +78,25 @@ evidence they wrote (a decision somebody else stated in reply to their
 proposal may restate it), their reactions, the mention index rows pointing at
 them — **and the documents they uploaded**. An opt-out that covers
 messages and leaves the attached PDF searchable has withdrawn the index entry
-and kept the content, which is the wrong half.
+and kept the content, which is the wrong half. The fetch log (`document_fetch`,
+which of their messages linked which URL) goes with their messages.
+
+**Everything derived from the person goes through one function.** Recording
+the opt-out fires a single trigger on `person_opt_out`, which calls
+`purge_person_derived(person_id)` (migration 0028). It deletes their
+conversation memory, personal facts, queued notifications, position alerts,
+scheduled tasks and MCP tokens. Self-service erasure calls the same function,
+so the two cannot drift apart: a new table holding person data adds its
+`DELETE` to the function in its own migration. The scheduled-task sweep also
+skips opted-out people, so a task written afterwards never runs, and MCP
+authentication refuses an opted-out person's token, so one issued afterwards
+never works. Before 0028 scheduled tasks, MCP tokens and the fetch log
+survived an opt-out; the migration purges the first two for everyone already
+opted out, and deletes fetch-log rows whose message no longer exists (the old
+opt-out had deleted those messages, so nothing else links the rows to the
+person). The opt-out also schedules the person's exported traces for deletion:
+the runs of questions they asked and every run quoting one of their messages
+(see [Tracing](#tracing) below).
 
 **It survives re-ingestion.** Discord still holds their messages, and backfill
 re-reads history from Discord. The exclusion is therefore enforced by a database
@@ -237,6 +255,7 @@ to say later whether the assistant is getting better.
 | `TRACING_ENABLED` | Off by default. Both `bot` and `ingest` need it |
 | `LANGFUSE_HOST` | e.g. `https://langfuse.example.com`, no trailing path |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
+| `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
 
 Turning it on with a host but no keys is refused at startup rather than
@@ -257,13 +276,39 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   on the trace store, so a destination that is down delays the withdrawal
   without delaying the deletion. Unconfirmed withdrawals are retried by a sweep
   in the `ingest` process every five minutes.
-- **An opt-out is honoured.** Nothing is exported for a person who has opted
-  out of indexing. If the opt-out registry cannot be read, the run is withheld
-  rather than exported.
+- **An opt-out stops new exports.** Nothing is exported for a person who has
+  opted out of indexing. If the opt-out registry cannot be read, the run is
+  withheld rather than exported.
+- **An opt-out withdraws earlier exports.** Each export records the asker's
+  platform id (`trace_export.asker_platform_user_id`, migration 0029). An
+  opt-out, from the console or otherwise, marks every trace asked by any of
+  the person's platform ids and every trace quoting a message they wrote as
+  pending deletion, and queues a search (`trace_asker_search`). Traces
+  exported before 0029 carry no recorded asker, so the `ingest` sweep pages
+  `GET /api/public/traces?userId=<id>&environment=<LANGFUSE_ENVIRONMENT>`
+  for each queued id and records what it finds as pending, keeping only rows
+  in our environment named after one of our answer paths (`fixed`, `loop`):
+  another app's or environment's traces in a shared project are never
+  deleted. The same sweep then deletes everything pending. The console only
+  marks: it holds no Langfuse keys, and `bot` and `ingest` are the processes
+  that hold the pair. A search or deletion Langfuse refuses or cannot receive
+  (a 400 included) stays pending and is retried every five minutes. The
+  migration queues a search for everyone who had already opted out, which
+  finds the traces of questions they asked. It cannot find the traces that
+  *quote* their messages: that link runs through their `message` rows, and
+  the earlier opt-out deleted them, so for people who opted out before 0029
+  those traces stay in Langfuse. To withdraw them, mark every trace exported
+  before the 0029 deploy as pending and let the sweep delete it:
+  `UPDATE trace_export SET deletion_requested_at = now() WHERE deleted_at IS NULL AND created_at < '<0029 deploy time>';`
+  This deletes other people's older traces too; no narrower query exists. A run
+  already answering when the opt-out lands is recorded as pending the moment
+  it is exported. Langfuse deletes asynchronously, so "withdrawn" means the
+  deletion was accepted.
 
 Neither of these makes the destination safe to share widely. They keep the
-project's deletion and opt-out guarantees true across the copy; they do not
-give the copy permissions of its own.
+deletion guarantee true across the copy, and the opt-out guarantee for
+everything exported after it; they do not give the copy permissions of its
+own.
 
 ### Checking it is working
 
@@ -274,6 +319,23 @@ curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
 
 The bot logs `composition.tracing enabled=true` at startup when a destination
 is configured, and `reasoning.trace_failed` when an export is dropped.
+
+## Checking the console after a deploy
+
+The operator console (see `docs/admin-console.md`) can widen what the agent
+reaches, so after a deploy that touches it, repeat these by hand. The unit and
+integration suites cover each rule; these confirm the deployed wiring honours
+them.
+
+1. Add a federated server through the console and confirm the agent uses it
+   without a redeploy.
+2. Remove a channel from scope and confirm ingestion stops within the refresh
+   period.
+3. Enable a tool that changes state and confirm the audit records it as an
+   escalation, and that the per-invocation confirmation still gates the call.
+4. Revoke one admin token and confirm it stops working while the others do not.
+5. Try to read message, document or ask content through every `/api` endpoint
+   and confirm each refuses.
 
 ## Wallet balances
 
