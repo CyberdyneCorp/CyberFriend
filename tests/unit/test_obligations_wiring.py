@@ -566,6 +566,17 @@ def test_the_answer_stack_puts_obligations_in_front_of_retrieval() -> None:
     )
 
 
+def test_obligation_periods_are_measured_on_the_graphs_clock() -> None:
+    """"This week" is bounded by `edges.clock`, like every other route.
+
+    Left to its wall-clock default, an obligation question on the end-to-end
+    harness's fixed clock asked about a different week from the one the
+    scenario was set in.
+    """
+    stack = _function(SRC / "composition.py", "build_answer_stack")
+    assert _calls(stack, "ObligationAnswerService", keyword="clock")
+
+
 def test_the_bot_receives_the_obligation_aware_service() -> None:
     """`bot.py` hands `stack.answers` to `build_ask_service`; that field is
     what has to be the obligation-aware one."""
@@ -601,6 +612,36 @@ def test_the_extraction_model_is_the_cheap_one() -> None:
         if isinstance(node, ast.Attribute) and node.attr.endswith("_model")
     }
     assert used == {"extraction_model"}, used
+
+
+class _EmptyExtractor:
+    """A scripted extractor that is falsy, as anything with `__len__` can be."""
+
+    def __len__(self) -> int:
+        return 0
+
+    async def extract(self, candidate: object) -> list[object]:
+        return []
+
+
+def test_an_injected_extractor_is_kept_even_when_falsy() -> None:
+    """The e2e seam replaces only the extractor; a truthiness fallback would
+    swap a falsy fake for the live OpenAI one behind the test's back."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from chatmemory.composition import build_ask_pipeline
+    from chatmemory.config import Settings
+
+    settings = Settings(  # type: ignore[call-arg]
+        discord_token="t",
+        discord_guild_id=1,
+        database_url="postgresql+asyncpg://u:p@h/d",
+        llm_api_key="k",
+    )
+    extractor = _EmptyExtractor()
+    engine = create_async_engine("postgresql+asyncpg://u:p@h/d")
+    pipeline = build_ask_pipeline(settings, engine, extractor=extractor)  # type: ignore[arg-type]
+    assert pipeline.worker._extraction._extractor is extractor
 
 
 def test_the_obligation_service_cannot_be_asked_without_a_viewer() -> None:

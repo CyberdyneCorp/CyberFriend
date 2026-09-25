@@ -51,8 +51,16 @@
 - [x] 5.6 Privacy: a channel the asker cannot read never reaches the answer or the model, in a DM or a channel; the withheld notice goes to the asker by DM
 - [x] 5.7 Mutation check: breaking chain-turn provenance, DM command contexts or one Portuguese fixed reply turns S5, S7/S8 or S12 red
 
-## 6. Later in the series
+## 6. Ingest ask extraction
 
-- [ ] 6.1 Remaining production-failure scenarios (S1-S4, S6, S9-S11) with recorded fixtures
-- [ ] 6.2 Retire the hand-built stand-ins the scenarios replace
-- [ ] 6.3 A stratified slice of the labelled routing set end to end
+- [x] 6.1 `build_ask_pipeline(..., extractor=...)`: the extractor is injectable, and production leaves it unset
+- [x] 6.2 `ObligationAnswerService` built on `edges.clock`; wiring test
+- [x] 6.3 Harness `Ingest`: `to_message` -> `live_loop` over a one-message source (`IngestService.capture` -> `ExtractionWorker.submit`), flushed by `E2EBot.extract_asks`; `ChatAskExtractor` sends the production prompt to `ScriptedChat` as `ask_extraction`, and `ScriptedChat.script_asks` scripts the reply
+- [x] 6.4 `FakeDiscord.chatter`: a channel message not addressed to the bot, its snowflake minted from when it was said
+- [x] 6.5 Scenario: "what was asked of me this week" cites the source message; an older ask and a #leadership ask are absent; unaddressed chatter costs no extraction call
+
+## 7. Later in the series
+
+- [ ] 7.1 Remaining production-failure scenarios (S1-S4, S6, S9-S11) with recorded fixtures
+- [ ] 7.2 Retire the hand-built stand-ins the scenarios replace
+- [ ] 7.3 A stratified slice of the labelled routing set end to end
