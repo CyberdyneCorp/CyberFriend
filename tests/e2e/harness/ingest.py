@@ -50,7 +50,11 @@ from chatmemory.config import Settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
 from chatmemory.entrypoints.decisions_backfill import backfill, indexing_scope
-from chatmemory.entrypoints.ingest import ScopedExtractionLedger, live_loop
+from chatmemory.entrypoints.ingest import (
+    ScopedExtractionLedger,
+    live_loop,
+    trace_withdrawal_pass,
+)
 from chatmemory.health import HealthState
 from chatmemory.ports.sources import ChatSource
 from tests.e2e.harness.model import ASK_EXTRACTION, HashEmbeddings, ScriptedChat
@@ -132,6 +136,9 @@ class Ingest:
             decisions=self.asks.decisions,
         )
         self.asks.worker.records_through(store)
+        # The sweep's own instance, as the entrypoint builds a second one for
+        # `trace_withdrawal_loop`.
+        self._withdrawal = build_trace_withdrawal(settings, engine, transport)
 
     async def capture(self, raw: discord.Message) -> Message:
         """Run one gateway message through `live_loop`: persist, then submit."""
@@ -163,6 +170,11 @@ class Ingest:
     async def delete(self, message: int, channel: ChannelRef) -> None:
         """A user deleting a message, as the gateway's delete event reaches ingest."""
         await self.service.handle_delete(message, channel=channel)
+
+    async def sweep_traces(self) -> None:
+        """One pass of `trace_withdrawal_loop`: the Langfuse search, then deletions."""
+        assert self._withdrawal is not None, "tracing is not configured"
+        await trace_withdrawal_pass(self._withdrawal, HealthState())
 
     async def extract(self) -> int:
         """Run the extraction pass over everything captured, ready or not."""

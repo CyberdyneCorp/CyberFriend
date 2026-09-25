@@ -508,20 +508,31 @@ async def trace_withdrawal_loop(
     The deletion itself is attempted inline, the moment the message is
     tombstoned. This is what makes that attempt failing survivable: without it
     a trace store that was down for the minute somebody deleted a message
-    keeps that message, and nothing ever looks again.
+    keeps that message, and nothing ever looks again. It is also the only
+    deleter for an opt-out, which the console marks and never sends.
     """
     while True:
         try:
-            retried = await withdrawal.retry_pending()
-            if retried:
-                state.details["trace_withdrawal"] = {
-                    "withdrawn": retried,
-                    "last_run_at": time.time(),
-                }
+            await trace_withdrawal_pass(withdrawal, state)
         except Exception:
             # The rows stay marked, so the next pass reconsiders exactly them.
             log.exception("tracing.withdrawal_sweep_failed")
         await asyncio.sleep(interval)
+
+
+async def trace_withdrawal_pass(withdrawal: TraceWithdrawal, state: HealthState) -> None:
+    """One pass: search Langfuse for opted-out askers, then delete what is pending.
+
+    The search first, so the traces it finds are deleted in the same pass.
+    """
+    found = await withdrawal.search_askers()
+    retried = await withdrawal.retry_pending()
+    if found or retried:
+        state.details["trace_withdrawal"] = {
+            "found": found,
+            "withdrawn": retried,
+            "last_run_at": time.time(),
+        }
 
 
 async def memory_retention_loop(

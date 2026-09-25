@@ -119,7 +119,11 @@ from chatmemory.adapters.store.postgres import HybridSearch, PostgresStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
-from chatmemory.adapters.tracing.langfuse import LangfuseTraceDeleter, LangfuseTracer
+from chatmemory.adapters.tracing.langfuse import (
+    LangfuseTraceDeleter,
+    LangfuseTraceFinder,
+    LangfuseTracer,
+)
 from chatmemory.adapters.web.limits import CallBudget
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
@@ -1206,6 +1210,7 @@ def build_tracer(
             secret_key=settings.langfuse_secret_key.get_secret_value(),
             index=PostgresTraceIndex(engine),
             timeout=settings.tracing_timeout_seconds,
+            environment=settings.langfuse_environment,
             transport=transport,
         ),
         PostgresRetentionStore(engine),
@@ -1239,12 +1244,24 @@ def build_trace_withdrawal(
         return None
     if settings.langfuse_public_key is None or settings.langfuse_secret_key is None:
         return None
+    public_key = settings.langfuse_public_key.get_secret_value()
+    secret_key = settings.langfuse_secret_key.get_secret_value()
     return TraceWithdrawal(
         PostgresTraceIndex(engine),
         LangfuseTraceDeleter(
             host=settings.langfuse_host,
-            public_key=settings.langfuse_public_key.get_secret_value(),
-            secret_key=settings.langfuse_secret_key.get_secret_value(),
+            public_key=public_key,
+            secret_key=secret_key,
+            timeout=settings.tracing_timeout_seconds,
+            transport=transport,
+        ),
+        # The backstop for traces exported before the index recorded who
+        # asked them: an opt-out queues a search by platform id, this runs it.
+        LangfuseTraceFinder(
+            host=settings.langfuse_host,
+            public_key=public_key,
+            secret_key=secret_key,
+            environment=settings.langfuse_environment,
             timeout=settings.tracing_timeout_seconds,
             transport=transport,
         ),

@@ -7,11 +7,11 @@
 
 ## 2. Traces by asker
 
-- [ ] 2.1 Migration: `trace_export.asker_platform_user_id` + index; written by `record_export`
-- [ ] 2.2 `TraceIndex.request_deletion_for_asker(ids)`
-- [ ] 2.3 Langfuse backstop: page traces by `userId` scoped to our environment and trace names, insert pending ids (ingest process)
-- [ ] 2.4 `OptOutService` withdraws quoted and asked traces (admin opt-out too)
-- [ ] 2.5 Tests: asked and quoting traces marked; unindexed trace found by backstop; foreign-environment trace untouched; v4-style 400 keeps it pending
+- [x] 2.1 Migration: `trace_export.asker_platform_user_id` + index; written by `record_export`
+- [x] 2.2 `TraceIndex.request_deletion_for_asker(ids)`
+- [x] 2.3 Langfuse backstop: page traces by `userId` scoped to our environment and trace names, insert pending ids (ingest process)
+- [x] 2.4 `OptOutService` withdraws quoted and asked traces (admin opt-out too)
+- [x] 2.5 Tests: asked and quoting traces marked; unindexed trace found by backstop; foreign-environment trace untouched; v4-style 400 keeps it pending
 
 ## 3. `/privacy` dashboard (after trace retention ships)
 

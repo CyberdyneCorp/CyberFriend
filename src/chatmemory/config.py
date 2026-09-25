@@ -297,6 +297,12 @@ class Settings(BaseSettings):
     langfuse_public_key: SecretStr | None = None
     langfuse_secret_key: SecretStr | None = None
 
+    langfuse_environment: str = "production"
+    """The Langfuse environment every trace is exported to, and the only one
+    a trace search reads. In a project shared with another deployment, a
+    distinct value per deployment is what keeps one from deleting the
+    other's traces."""
+
     tracing_timeout_seconds: float = 5.0
     """What an export may cost before it is abandoned.
 
