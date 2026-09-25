@@ -2,7 +2,7 @@
 
 ### Requirement: Opting out withdraws a person's existing traces
 
-When a person opts out or deletes everything, the system SHALL request deletion
+When a person opts out or deletes everything, with either choice, the system SHALL request deletion
 of every trace of a question they asked and every trace quoting a message they
 authored, including traces exported before the system recorded who asked them.
 
@@ -12,8 +12,8 @@ authored, including traces exported before the system recorded who asked them.
 
 #### Scenario: Trace exported before askers were recorded
 - WHEN a person's trace has no local record of its asker
-- THEN the system SHALL find it in the trace store by the person's platform id
-  and schedule it for deletion
+- THEN the system SHALL find it in the trace store by the person's platform id,
+  among this application's traces only, and schedule it for deletion
 
 #### Scenario: Trace store refuses the deletion
 - WHEN the trace store rejects or cannot receive the deletion

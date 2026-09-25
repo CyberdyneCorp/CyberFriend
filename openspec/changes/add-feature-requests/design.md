@@ -22,22 +22,50 @@ The admin API has no content surface, and the audit log is append-only.
 
 ## Decisions
 
-### Where recognition sits
+### Explicit forms only
 
-`suggestion_intent` runs after `typed_command` and before `resolve_viewer`. It
-reads nothing from the corpus, so it needs no viewer. It must come before
-`alert_intent`, because "I'd like a feature that notifies me when X" matches
-the alert strong trigger.
+`suggestion_intent` matches only when the message, after the bot mention and
+leading whitespace, starts with one of these forms (case- and
+accent-insensitive):
 
-A match requires an explicit meta marker, and is dropped when `fact_intent`,
-`alert_intent`, `catch_up_request` or `obligation_question` also matches the
-remainder. A match never stores directly: it replies with a proposal and two
-buttons, in a `RequesterOnlyView` with a timeout. [No, answer it] re-dispatches
-the message past the suggestion step. A false positive therefore costs one
-click. `said_by.py` 213-222 and `routing.py` 924-925 add the intent to their
-deferral lists.
+- PT: "tenho uma sugestão", "sugestão:", "seria legal se você"
+- EN: "I have a feature request", "feature request:", "it would be nice if you
+  could"
+
+The list is a constant with a unit test per form. There is no bare-noun or
+imperative marker: "sugestão" alone, "sugiro que", "você deveria" and "you
+should be able to" do not match, so "qual foi a sugestão do João?" and "you
+should be able to tell me X" are never proposed as suggestions.
 
 `/suggest` stores without a proposal, since the command is already explicit.
+
+### Every other router wins
+
+The suggestion step runs last, just before the default corpus answer, after
+every existing step in `app/ask.py`: fact_intent, indexing_request,
+typed_command, viewer/ACL resolution, alert_intent, catch-up, said_by. It then
+asks the router (`routing.py`) for its decision on the remainder of the
+message (the text after the form). Any decision other than the default corpus
+answer wins: market, crypto (wallet balance, activity, portfolio, DeFi), web
+search, time, decisions, obligations, capabilities. The suggestion step is not
+a hand-kept deferral list, so a router added later wins automatically.
+
+So:
+
+- "sugestão: me diga o preço do BTC" -> market price answer.
+- "it would be nice if you could show my portfolio" -> portfolio answer.
+- "feature request: notify me when BTC hits 100k" -> alert proposal
+  (alert_intent ran first).
+- "tenho uma sugestão: avisar quando alguém me marcar" -> suggestion proposal.
+
+### Always confirmed
+
+A match never stores directly. It replies with a proposal and two buttons in a
+`RequesterOnlyView` with a 120-second timeout. [Record suggestion] stores it.
+[No, answer it] answers the message through the default corpus answer, as if
+the suggestion step had not matched. On timeout the buttons are disabled and
+the message is answered the same way, so the message is never left
+unanswered.
 
 ### Data model (migration 0028)
 
@@ -58,8 +86,10 @@ feature_request(
 
 - There is no message text, surrounding context or channel name. The console
   resolves channel names itself.
-- A trigger on `person_opt_out` purges the person's rows, following 0014. An
-  insert for an opted-out person is refused.
+- The migration adds `DELETE FROM feature_request WHERE person_id = $1` to
+  `purge_person_derived` (add-privacy-dashboard), so admin opt-out and both
+  delete-everything choices purge suggestions with no separate step. An insert
+  for an opted-out person is refused.
 - `normalized_hash` is sha256 of the text lowercased, with whitespace collapsed
   and punctuation stripped. A resubmission returns "already recorded (#12)".
 
@@ -99,9 +129,9 @@ nothing to send.
 
 ## Risks / Trade-offs
 
-- [A natural-language match hijacks a real question] -> An explicit marker is
-  required, the detector defers to other intents, a confirm button is needed,
-  and there are labelled eval cases.
+- [A natural-language match hijacks a real question] -> Only fixed explicit
+  forms match, every other router wins, a confirm button is needed, and there
+  are labelled eval cases.
 - [Contact details or third-party private text in suggestions] -> The detectors
   refuse contact details. The acknowledgement says the team sees the text.
 - [Spam] -> Per-person rate limit and idempotent resubmission.

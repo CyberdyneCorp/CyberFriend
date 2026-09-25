@@ -18,6 +18,21 @@ session cookie, and SHALL NOT receive an access, refresh or id token.
   already used
 - THEN the sign-in SHALL be refused and no session created
 
+#### Scenario: Callback completed in another browser
+- WHEN a callback arrives without the pre-sign-in cookie set by the browser
+  that started the sign-in, or with a different value
+- THEN the sign-in SHALL be refused and no session created
+
+#### Scenario: Id token nonce does not match
+- WHEN the id token's nonce is missing or differs from the one issued for that
+  sign-in
+- THEN the sign-in SHALL be refused
+
+#### Scenario: Subjects disagree
+- WHEN the subject in the userinfo response differs from the subject of the id
+  token or the access token
+- THEN the sign-in SHALL be refused and the userinfo email SHALL NOT be used
+
 #### Scenario: No identity provider configured
 - WHEN no issuer is configured
 - THEN the sign-in routes SHALL NOT be available
@@ -28,7 +43,9 @@ session cookie, and SHALL NOT receive an access, refresh or id token.
 The system SHALL accept an access token only if its RS256 signature verifies
 against the issuer's published keys, its issuer equals the one in discovery,
 it has not expired, its `type` is `access`, and its audience is `cyberfriend`.
-People SHALL be identified by `sub`.
+The id token SHALL be verified by signature, issuer, audience equal to the
+client id, expiry and nonce. People SHALL be identified by `sub`, and the
+userinfo subject SHALL equal the token subject.
 
 #### Scenario: Token for another audience
 - WHEN an access token's audience is not `cyberfriend`
@@ -59,11 +76,20 @@ SHALL grant no console access.
 - THEN their session SHALL lose admin rights no later than their next token
   refresh
 
+#### Scenario: Refreshed token without a roles claim
+- WHEN a refreshed access token carries no roles claim
+- THEN the session SHALL be ended and the request refused as unauthenticated
+
+#### Scenario: Refreshed token with neither console role
+- WHEN a refreshed access token carries a roles claim with neither console role
+- THEN the session SHALL be ended and the request refused as forbidden
+
 ### Requirement: Read-only operators cannot change anything
 
-Every console route SHALL declare the minimum role it needs, and any route that
-is not a read SHALL require admin. A request below the required role SHALL be
-refused with a distinct "forbidden" response.
+Every mounted route SHALL have an explicit entry in one route-to-role table,
+with no default by request method, and any route that is not a read SHALL
+require admin. A request below the required role SHALL be refused with a
+distinct "forbidden" response.
 
 #### Scenario: Operator attempts a change
 - WHEN a person with the operator role sends a request that changes
@@ -71,8 +97,9 @@ refused with a distinct "forbidden" response.
 - THEN the system SHALL refuse it as forbidden and change nothing
 
 #### Scenario: Route without a declared role
-- WHEN a route exists that the role table does not name
-- THEN requests to it SHALL be refused
+- WHEN a route exists that the role table does not name, whatever its method
+- THEN requests to it SHALL be refused before its handler runs
+- AND the test suite, which enumerates every mounted route, SHALL fail
 
 ### Requirement: Cookie sessions are protected against cross-site use
 
@@ -106,24 +133,44 @@ end-session endpoint with the id token hint.
 - THEN the session cookie SHALL stop working immediately
 - AND the browser SHALL be sent to the provider's end-session endpoint
 
-### Requirement: Exactly one credential per request
+### Requirement: A bearer request ignores cookies
 
-A request SHALL carry either one bearer token or one session cookie. A request
-carrying both SHALL be refused as unauthenticated.
+A request carrying a bearer header SHALL be authenticated by that bearer
+alone. Cookies on the same request SHALL be ignored: the session SHALL NOT be
+read, refreshed or used as a fallback.
 
-#### Scenario: Script token plus browser cookie
-- WHEN a request carries a bearer header and a session cookie
-- THEN the system SHALL refuse it without choosing either
+#### Scenario: Break-glass token in a browser that holds a session cookie
+- WHEN a request carries a valid bearer header and a session cookie
+- THEN it SHALL be served with the bearer's role
+- AND the session SHALL be left untouched
 
-### Requirement: Static operator tokens remain for scripts
+#### Scenario: Invalid bearer with a valid cookie
+- WHEN a request carries an invalid bearer header and a valid session cookie
+- THEN it SHALL be refused as unauthenticated
 
-Operator tokens issued from the shell SHALL keep working and SHALL act with the
-admin role, attributed to the operator they name.
+### Requirement: Static operator tokens remain for scripts, downscoped
 
-#### Scenario: Script uses a token
-- WHEN a script calls the admin API with a valid operator token
+Operator tokens issued from the shell SHALL keep working, attributed to the
+operator they name. While no identity provider is configured they SHALL act as
+admin. Once one is configured they SHALL act as operator only, and admin rights
+SHALL come only from the identity provider's role. A token SHALL never read
+personal content such as question text.
+
+#### Scenario: Script uses a token before sign-in is configured
+- WHEN no identity provider is configured and a script calls the admin API with
+  a valid operator token
 - THEN it SHALL be served as admin and its changes recorded against that
   operator
+
+#### Scenario: Script uses a token after sign-in is configured
+- WHEN an identity provider is configured and a script sends a change with a
+  valid operator token
+- THEN the system SHALL refuse it as forbidden
+
+#### Scenario: Script token requests question text
+- WHEN a request authenticated by an operator token asks for a person's
+  question text
+- THEN the system SHALL refuse it as forbidden, whatever the token's role
 
 ### Requirement: Changes made through sign-in are attributed to the person
 

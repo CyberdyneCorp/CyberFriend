@@ -16,26 +16,42 @@ and the person's name.
 - THEN no second record SHALL be created
 - AND the reply SHALL give the existing number
 
-### Requirement: Suggestions in natural language are confirmed before being stored
+### Requirement: Suggestions in natural language are explicit and confirmed before being stored
 
-When a message explicitly offers a suggestion to the assistant, in Portuguese
-or English, the assistant SHALL propose recording it and SHALL store it only
-after the person confirms. When the same message is also a question or request
-another feature handles, that feature SHALL take it.
+The assistant SHALL recognise a suggestion in a message only when it begins
+with one of a fixed set of explicit suggestion forms, in Portuguese ("tenho uma
+sugestão", "sugestão:", "seria legal se você") or English ("I have a feature
+request", "feature request:", "it would be nice if you could"). It SHALL
+propose recording it and SHALL store it only after the person confirms. When
+any other feature would handle the message, that feature SHALL take it and no
+suggestion SHALL be proposed.
 
 #### Scenario: Explicit suggestion
-- WHEN a person writes "sugiro que você avise quando alguém me marcar"
+- WHEN a person writes "tenho uma sugestão: avisar quando alguém me marcar"
 - THEN the assistant SHALL offer to record the suggestion
 - AND SHALL store it only if the person confirms
 
 #### Scenario: A question phrased as a suggestion
-- WHEN a person writes "sugiro que você me diga o preço do BTC"
+- WHEN a person writes "sugestão: me diga o preço do BTC"
 - THEN the assistant SHALL answer the price question and SHALL NOT propose a
   suggestion
+
+#### Scenario: A request another feature handles
+- WHEN a person writes "feature request: notify me when BTC hits 100k"
+- THEN the alert feature SHALL handle it and no suggestion SHALL be proposed
+
+#### Scenario: The word suggestion in a question
+- WHEN a person writes "qual foi a sugestão do João?"
+- THEN the assistant SHALL NOT propose a suggestion
 
 #### Scenario: Declining the proposal
 - WHEN the person answers the proposal with "No, answer it"
 - THEN nothing SHALL be stored and the message SHALL be handled as it would be
+  without the suggestion step
+
+#### Scenario: The proposal times out
+- WHEN the person does not answer the proposal before it expires
+- THEN nothing SHALL be stored and the message SHALL be answered as it would be
   without the suggestion step
 
 #### Scenario: Someone else presses the button
@@ -82,8 +98,9 @@ SHALL be recorded with who made it and the values before and after.
 
 ### Requirement: People can be told when their suggestion's status changes
 
-When a person asked to be notified, the assistant SHALL send them one direct
-message per status change, unless their direct messages are undeliverable.
+When, and only when, a person asked to be notified, the assistant SHALL send
+them one direct message per status change, unless their direct messages are
+undeliverable.
 
 #### Scenario: Status changes
 - WHEN an admin changes the status of a suggestion whose author asked to be
@@ -97,4 +114,8 @@ and no suggestion SHALL be stored for a person who has opted out.
 
 #### Scenario: Opting out
 - WHEN a person with suggestions opts out
+- THEN their suggestions SHALL be deleted
+
+#### Scenario: Deleting everything
+- WHEN a person with suggestions deletes everything, with either choice
 - THEN their suggestions SHALL be deleted

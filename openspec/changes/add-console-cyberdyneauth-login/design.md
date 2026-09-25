@@ -38,15 +38,37 @@ CyberdyneAuth's contract (from its team):
 
 ### BFF with an opaque cookie, not tokens in the SPA
 
-The SPA never runs OIDC. `GET /auth/login` generates `state`, `nonce` and a
-PKCE verifier, stores them in a short-lived (10 minute) server-side login
-record keyed by a hash of `state`, and 302s to the authorization endpoint with
-`redirect_uri = <public base>/auth/callback`. The callback checks `state` (single
-use), exchanges the code with the client secret and verifier, verifies the
-access token and the id token (`nonce`), fetches userinfo for the email,
-creates a session, sets the cookie and 302s to `./#/status`. The code and state
-never reach the SPA, and `<meta name="referrer" content="no-referrer">` keeps
-them out of Referer headers.
+The SPA never runs OIDC. `GET /auth/login` generates `state`, `nonce`, a PKCE
+verifier and a browser-binding value `b` (32 random bytes). It stores them in a
+short-lived (10 minute) server-side login record
+`admin_login(state_hash PK, nonce, verifier, binding_hash, purpose, link_code_hash NULL, max_age NULL, expires_at, used_at)`,
+sets the pre-auth cookie `__Host-cf_login=b` (`HttpOnly; Secure;
+SameSite=Lax; Path=/; Max-Age=600`), and 302s to the authorization endpoint with
+`redirect_uri = <public base>/auth/callback`. SameSite=Lax is required here:
+the callback is a cross-site top-level navigation from the issuer, and a
+Strict cookie would not be sent.
+
+The callback, in order:
+
+1. Looks up the login record by the hash of `state`; it must exist, be
+   unexpired and unused. It is marked used in the same transaction.
+2. Requires `__Host-cf_login` and `sha256(b) == binding_hash`, then clears the
+   cookie. A callback URL replayed into another browser (login CSRF, session
+   swapping) fails here.
+3. Exchanges the code with the client secret and verifier.
+4. Verifies the access token (rules below) and the id token: RS256 via JWKS,
+   `iss` from discovery, `aud == client_id`, `exp`, and `nonce` equal to the
+   login record's. A missing or different nonce is refused.
+5. Fetches userinfo and requires `userinfo.sub == id_token.sub ==
+   access_token.sub` (OIDC Core 5.3.2). Email and `email_verified` are read
+   only after that check.
+6. Decides the role, creates the session, sets the session cookie and 302s to
+   `./#/status`.
+
+The code and state never reach the SPA, and
+`<meta name="referrer" content="no-referrer">` keeps them out of Referer
+headers. The same login record, with `purpose` and `link_code_hash`, is reused
+by the user area's `/link` flow and by fresh sign-in (`max_age`).
 
 Cookie: `__Host-cf_admin`, `HttpOnly; Secure; SameSite=Strict; Path=/`, value
 = 32 random bytes. The console's storage guard still forbids
@@ -88,8 +110,17 @@ concurrent refreshes of one session would present the same refresh token twice
 and CyberdyneAuth would revoke the whole token family. An `asyncio.Lock` per
 session id serialises it: the second request waits and then reads the new
 token. A refresh that fails ends the session (401, and the console sends the
-person back to login). Roles are re-read from each new access token, so a role
-withdrawn in CyberdyneAuth takes effect within 15 minutes.
+person back to login).
+
+Roles are re-checked on every refresh, from the new access token only:
+
+- roles claim absent: deny. The session is revoked and the request gets the
+  standard 401.
+- claim present but neither console role: the admin session is revoked and the
+  request gets 403 `{"error": "no console access"}`.
+- role lowered from admin to operator: the session continues as operator.
+
+A role withdrawn in CyberdyneAuth therefore takes effect within 15 minutes.
 
 ### Roles and the route table
 
@@ -103,20 +134,46 @@ Principal(subject, display, roles, via = "oidc" | "token")
 - An absent roles claim, or one with neither role, yields no console role. The
   login still completes, but the session is not created and the person sees a
   fixed "no access" page. The console does not reveal that the account exists.
-- A `cfa_` bearer maps to admin, `via = "token"`.
+- A `cfa_` bearer is `via = "token"`. While `ADMIN_OIDC_ISSUER` is unset it is
+  admin, exactly as today, so a deploy without OIDC keeps working. Once the
+  issuer is set, every `cfa_` token is operator: counts and configuration
+  reads only. Admin rights then come only from the CyberdyneAuth role, which
+  is named, managed and revocable at the provider.
+- Personal content (question text, and any later personal-content route)
+  additionally requires `via == "oidc"`. A token principal gets 403 there,
+  whatever its role.
 
-`server.py` keeps one table beside `api_routes()` mapping `(method, path)` to a
-minimum role. Every GET is operator unless the table says otherwise; every
-other method is admin. A route missing from the table is refused. A unit test
-walks every mounted route and asserts that each non-GET route requires admin.
+`server.py` keeps one table beside `api_routes()` mapping every mounted
+`(method, path)` to its access level: `public` (`/auth/*`, `/link`, the static
+bundle), `user` (`/me/*`, added by the user area), `operator`, `admin`, or
+`admin_oidc`. There is no per-method default. A route with no row is refused
+with 403 before its handler runs (deny by default), so forgetting a row can
+never expose a route. A unit test enumerates every route the Starlette router
+mounts and fails when:
+
+- a route has no row;
+- a non-GET route is anything other than `admin` or `admin_oidc`;
+- `GET /api/usage/people/{id}/questions` is anything other than `admin_oidc`.
+
 Below the role: 403 `{"error": "requires admin"}`. The 401 stays byte-identical
 for every authentication failure.
 
-### Exactly one credential
+### A bearer header wins; cookies on a bearer request are ignored
 
-A request with a bearer header and a session cookie is refused with 401. The
-middleware does not choose between them, following the existing "ambiguity is
-refused" rule (auth.py 342-356).
+A request with `Authorization: Bearer` is authenticated by the bearer alone.
+The middleware strips the `Cookie` header from that request before any handler
+or session code sees it: the session is not read, refreshed or touched. A
+browser that still holds `__Host-cf_admin` from an earlier sign-in can
+therefore use the break-glass token sign-in without being locked out, and the
+bearer cannot be combined with a session to gain the other's rights. An
+invalid bearer is a 401 even when a valid cookie is present; the cookie is
+never used as a fallback.
+
+In the console, `services/http.ts` (cookie mode) sends
+`credentials: "same-origin"` and never sets `Authorization`.
+`services/breakGlassHttp.ts` (token mode) sends the bearer with
+`credentials: "omit"`. The storage guard allows the strings `Authorization`
+and `Bearer` only in `services/breakGlassHttp.ts`.
 
 ### CSRF and headers
 
@@ -136,6 +193,12 @@ These apply to bearer requests too. They cost scripts nothing (scripts send no
 Origin) and keep one code path.
 
 ### Audit attribution
+
+Reading personal content is audited too: each question-text read writes a
+`config_audit` entry with actor `oidc:<sub>`, the viewer's email in
+`operator_display`, and the viewed person looked up server-side (person id and
+current display name), plus the window.
+
 
 `Operator.name` must match `[a-z0-9][a-z0-9._-]{0,63}`, and emails and OIDC
 subjects do not. An OIDC change is recorded with actor `oidc:<sub>`. The `:`
@@ -169,14 +232,19 @@ added to the secret set that is never recorded or displayed.
 
 ## Risks / Trade-offs
 
-- [One route missing its role check lets an operator purge a person] -> One
-  table, closed by default for non-GET, plus the walk-all-routes test.
+- [One route missing its role check lets an operator purge a person, or read
+  question text] -> One table, deny by default for any route without a row,
+  plus the walk-all-routes test.
 - [Refresh reuse detection revokes the family under concurrency] -> Per-session
   lock. This holds while `replicas: 1`; scaling out would need
   `SELECT ... FOR UPDATE` on the session row. That is a task, not an
   assumption.
-- [A leaked `cfa_` token is admin with no expiry] -> Unchanged from today.
-  Retirement is an open question with a date to set.
+- [A leaked `cfa_` token is admin with no expiry] -> Once OIDC is configured
+  tokens are operator only and never read personal content. Admin writes need
+  a CyberdyneAuth role.
+- [CyberdyneAuth down while an admin write is urgent] -> Break-glass is a
+  rollback: unset the issuer and `cfa_` tokens are admin again. This is
+  recorded in the operations docs.
 - [CyberdyneAuth unreachable] -> Login fails and existing sessions keep working
   until their access token needs a refresh. Bearer tokens keep working.
 - [Role claim semantics change on the provider side] -> Absent or unfamiliar
@@ -189,5 +257,6 @@ added to the secret set that is never recorded or displayed.
    post-logout URI) and assign roles in CyberdyneAuth.
 3. Set the issuer, client id, secret, session key and public URL. Admins sign in
    with CyberdyneAuth, and scripts keep their tokens.
-4. Rollback: unset the issuer. Sessions stop being accepted and tokens still
-   work.
+   From this point `cfa_` tokens are operator only.
+4. Rollback: unset the issuer. Sessions stop being accepted and tokens are
+   admin again.

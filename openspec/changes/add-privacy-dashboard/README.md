@@ -2,11 +2,13 @@
 
 `/privacy` in Discord shows a person what CyberFriend holds about them: facts,
 remembered turns, scheduled tasks, alerts, voice usage, suggestions, whether
-their messages are archived and where, and how long their questions are
-traced. A single "Delete everything" button, after a typed confirmation, opts
-them out and erases it all, including their Langfuse traces. Also fixes three
-gaps in today's opt-out: scheduled tasks keep running, existing traces are
-never withdrawn, and MCP tokens and linked-URL fetches survive.
+their messages are archived and where, and how long their questions and the
+bot's answers are traced. One confirm flow offers two buttons: "Delete
+everything" (erase it all and keep using the bot) and "Delete everything and
+stop archiving me" (erase and opt out). Both erase their Langfuse traces, media
+and voice usage too, and the dashboard states honestly what is kept. Also fixes
+three gaps in today's opt-out: scheduled tasks keep running, existing traces
+are never withdrawn, and MCP tokens and linked-URL fetches survive.
 
 - `proposal.md`: why, and what changes
 - `design.md`: inventory, what is shown where, the erasure flow, what is kept

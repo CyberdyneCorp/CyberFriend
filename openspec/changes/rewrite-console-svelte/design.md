@@ -36,8 +36,10 @@ already copies.
 
 A `$state` fed by `hashchange` plus a route table
 `[{ path, title, view, minRole }]`. The hash keeps the server free of SPA
-rewrites, as `App.tsx` 1-9 chose for React. `minRole` is unused until the login
-change and defaults to `operator`. Unknown paths go to `#/status`.
+rewrites, as `App.tsx` 1-9 chose for React. Every route states its `minRole`
+explicitly (no default), mirroring the server's deny-by-default route table;
+it is unused until the login change, and the server remains the authority.
+Unknown paths go to `#/status`.
 
 Alternative considered: `svelte-spa-router`. Rejected as a dependency for
 something this small.
@@ -53,7 +55,9 @@ domain/      -> nothing
 
 - `services/http.ts` is the only file that calls `fetch`. It keeps today's
   behaviour: `Authorization: Bearer`, `credentials: "omit"`, per-segment path
-  encoding, and a 401 that signs out with one fixed message.
+  encoding, and a 401 that signs out with one fixed message. The login change
+  later moves the bearer code into `services/breakGlassHttp.ts`, and
+  `http.ts` becomes cookie-only.
 - `services/adminApi.ts` has the same surface as `api/client.ts` 124-171 and
   still has no mint or issue call.
 - `viewmodels/resource.svelte.ts` (`Resource<T>`: data, error, loading,
@@ -76,7 +80,9 @@ matter. The guard now scans `.ts`, `.svelte` and `.svelte.ts`, strips HTML
 comments as well as JS comments, and keeps every existing rule (no
 localStorage, sessionStorage, indexedDB, document.cookie or window.name, no
 token in a query parameter, and the token read in exactly one file:
-`services/http.ts`).
+`services/http.ts`). The file allowed to hold the token is one constant in the
+guard, so the login change can move it to `services/breakGlassHttp.ts` without
+weakening the rule.
 
 ### Tests
 

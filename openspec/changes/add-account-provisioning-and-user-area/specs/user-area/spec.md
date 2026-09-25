@@ -31,10 +31,11 @@ area route.
 
 ### Requirement: Deleting everything from the web needs a fresh sign-in
 
-The user area SHALL offer the same delete-everything action as the assistant.
-It SHALL require a sign-in within the last five minutes, the typed confirmation
-word and cross-site request protection, and SHALL end the link and the session
-afterwards.
+The user area SHALL offer the same delete-everything flow as the assistant,
+with the same two choices. It SHALL require a sign-in within the last five
+minutes, proven by the authentication time in a verified id token obtained
+with a maximum authentication age, the typed confirmation word and cross-site
+request protection, and SHALL end the link and the session afterwards.
 
 #### Scenario: Stale sign-in
 - WHEN a person asks to delete everything more than five minutes after signing
@@ -43,8 +44,11 @@ afterwards.
 
 #### Scenario: Completed
 - WHEN the deletion is confirmed
-- THEN the person's data SHALL be erased as for the assistant's command
+- THEN the person's data SHALL be erased as for the assistant's command, with
+  the chosen option
 - AND their account link SHALL be removed and their session ended
+- AND the reply SHALL say that the identity-provider account is not deleted
+  and how to request it
 
 ### Requirement: Feature requests from the web follow the same rules
 

@@ -10,7 +10,7 @@
 - [ ] 2.2 Port `domain/` and its tests unchanged
 - [ ] 2.3 `services/http.ts` and `services/adminApi.ts`, with the ported `client.test.ts`
 - [ ] 2.4 `Resource` and `Action` view-models, with node tests
-- [ ] 2.5 Hash router and route table, with unknown path -> `#/status`
+- [ ] 2.5 Hash router and route table (explicit `minRole` on every route), with unknown path -> `#/status`
 - [ ] 2.6 `architecture.test.ts` enforcing the import rule
 - [ ] 2.7 CI builds, lints and tests `console-svelte/`
 

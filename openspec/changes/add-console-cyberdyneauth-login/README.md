@@ -5,7 +5,8 @@ PKCE) through a backend-for-frontend: the admin API does the code exchange and
 refresh, and the browser only ever holds an httpOnly session cookie. Adds two
 roles from the CyberdyneAuth client roles, `admin` (read/write) and `operator`
 (read-only), CSRF protection for cookie auth, and audit attribution by OIDC
-subject. The static `cfa_` tokens stay for scripts.
+subject. The static `cfa_` tokens stay for scripts, downscoped to operator once
+OIDC is configured.
 
 - `proposal.md`: why, and what changes
 - `design.md`: the BFF, the verification rules, sessions, CSRF, roles
