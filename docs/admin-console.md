@@ -15,7 +15,7 @@ Source is in `console/`. Build output is `console/dist/`, which is
 cd console
 npm install          # once
 npm run build        # type-checks, then emits console/dist/
-npm test             # unit tests, including the browser-storage guard
+npm test             # unit tests, including the browser-storage guard (CI runs these)
 ```
 
 Development against a running admin API:
@@ -170,6 +170,16 @@ browser storage, puts a token in a URL, or reads the token anywhere but the
 fetch client. It is a source scan rather than a behavioural test because the
 failure it prevents is a "remember me" checkbox added in six months, which no
 test of today's code would notice.
+
+The scan covers every file type the console may be written in (`.ts`, `.tsx`,
+`.svelte`, `.svelte.ts`) and ignores comments, HTML comments included, so a
+file can explain why it avoids `localStorage` without failing. It checks
+itself against the fixtures in `console/fixtures/storage-guard/`: a Svelte
+component and a `.svelte.ts` module that reach for storage must be caught, and
+a component that only mentions it in comments must not.
+
+CI runs the console's tests and build in a `console` job of its own, so a
+broken console test or a tripped guard fails the pull request.
 
 ### A tool that changes state never looks like one that does not
 
