@@ -90,6 +90,37 @@ candidate, in one statement.
 - Opt-out deletes decisions the person stated or whose evidence they wrote,
   before their messages are purged.
 
+### The answer (PR 6)
+
+`routing.decision_question(text, now, tz)` is lexical, PT and EN, and
+returns a topic (as typed), a `timespan.Span` and the shape's language. It
+takes the clock and zone because the span comes from `timespan`, like
+said-by's; no third period table. Shapes are group-scoped only ("we", "a
+gente", the passive); the `_NOT_A_LOOKUP` guard, a "between/entre" guard,
+the market and fact routes and a pronoun topic all decline. Catch-up and
+said-by run before the answer chain and share no phrases with it;
+`timespan.cut_span`/`cut_topic` are said-by's blank-and-trim, moved so both
+routes read time out of a question the same way.
+
+`DecisionAnswerService` sits behind `ObligationAnswerService`, in front of
+reasoning, under `retrieval_viewer`. It embeds the topic once and calls
+`DecisionSearch.search(viewer, request, embedding)`:
+`decisions_sql.SEARCH_DECISIONS` binds `:channel_ids` in its WHERE, joins
+the live source, requires every evidence message to exist, be alive and be
+in the viewer's channels, filters on confidence and `[since, until)`, keeps
+rows whose cosine reaches the floor (or, unembedded, whose tsvector matches
+the topic's non-filler words), ranks by `0.7*cosine + 0.3*ts_rank` and lists
+the best five newest first. The reply is rendered from the rows in the
+question's language, with local dates and one citation per line (the
+source's own words and a jump link).
+
+Nothing found, no readable channel, or a failed topic embedding hand the
+question to reasoning unchanged; there is no "nothing was decided" reply.
+The floor is `DECISION_MIN_SIMILARITY` (default 0.4). It has not been
+measured against the production embedding model yet, and cross-language
+pairs score lower than same-language ones, so it is a setting rather than a
+constant; a floor set too high costs a retrieval answer, never a false one.
+
 ## Alternatives considered
 
 - **A second extraction pass.** Double the calls on shared candidates, a

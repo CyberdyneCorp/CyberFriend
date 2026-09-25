@@ -128,3 +128,77 @@ it or wrote any message it rests on opts out.
   proposal that person wrote
 - THEN that decision SHALL be removed
 - AND the opt-out report SHALL count it
+
+### Requirement: Decision questions are answered from the decision log
+
+The system SHALL answer a question about what a group decided -- in
+Portuguese ("o que decidimos sobre Y?", "o que ficou decidido sobre Y?",
+"qual foi a decisão sobre Y?") or English ("what did we decide about Y?",
+"what was decided about Y?") -- from stored decisions, recognised without a
+model call, rendered without a chat-model call, in the language the question
+was asked in, listing each decision with its local date, newest first, and a
+citation of the message that settled it.
+
+#### Scenario: A Portuguese question
+- WHEN a person asks "o que decidimos sobre o deploy?" and a decision about
+  the deploy is stored in a channel they and the room can read
+- THEN the reply SHALL be in Portuguese, list that decision dated in
+  `ANSWER_TIMEZONE`, and cite the message that settled it with a link to it
+- AND no chat model SHALL be called; only the topic SHALL be embedded
+
+#### Scenario: An English question
+- WHEN a person asks "what did we decide about the deploy?"
+- THEN the reply SHALL be in English, with the decision's summary in the
+  language it was decided in
+
+#### Scenario: A period
+- WHEN the question names a time ("semana passada", "yesterday")
+- THEN only decisions taken in that span, read as calendar days in
+  `ANSWER_TIMEZONE`, SHALL be listed, and the heading SHALL state the span
+- AND a question with neither topic nor time SHALL list the last 30 days and
+  say so
+
+#### Scenario: Not a lookup of the log
+- WHEN the question asks the bot what it decided ("what did you decide"), asks
+  about one person's decision, asks for help choosing ("decide between A and
+  B"), names its topic only by a pronoun, asks more than one thing, or is a
+  market, fact, catch-up, said-by or obligation question
+- THEN the decision log SHALL NOT answer it
+
+### Requirement: A decision answer never discloses what the room cannot read
+
+The system SHALL list a decision only when its channel, and the channel of
+every message it rests on, are readable by both the asker and everyone the
+reply reaches, and only while its source and every message it rests on are
+alive.
+
+#### Scenario: A private decision asked about in a public channel
+- WHEN a decision was taken in #leadership and a lead asks about it in
+  #general, which not everyone there can read #leadership from
+- THEN the decision SHALL NOT be listed and the question SHALL be answered by
+  ordinary retrieval under the same scope
+- AND the same question asked by the lead in a direct message SHALL list it
+
+#### Scenario: A deleted conclusion or proposal
+- WHEN the message that settled a decision, or a message it rests on such as
+  the proposal it settled, is deleted
+- THEN the decision SHALL NOT be listed, even before its row is withdrawn
+
+#### Scenario: Evidence from an unreadable channel
+- WHEN a decision rests on a message in a channel the viewer cannot read
+- THEN the decision SHALL NOT be listed
+
+### Requirement: No match falls through to retrieval
+
+The system SHALL answer a decision question by ordinary retrieval, never by a
+statement that nothing was decided, when no readable decision is similar
+enough to the question's topic.
+
+#### Scenario: Below the similarity floor
+- WHEN no stored decision reaches `DECISION_MIN_SIMILARITY` against the
+  topic, and none stored without an embedding carries the topic's words
+- THEN the question SHALL be answered by ordinary retrieval
+
+#### Scenario: The topic cannot be embedded
+- WHEN embedding the topic fails
+- THEN the question SHALL be answered by ordinary retrieval

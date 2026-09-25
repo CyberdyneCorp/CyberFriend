@@ -14,11 +14,12 @@
 
 ## PR 6. The answer
 
-- [ ] 6.1 `decision_question(text)`: PT/EN, topic and period, `_NOT_A_LOOKUP` guard
-- [ ] 6.2 `DecisionAnswerService` after `ObligationAnswerService`, under `retrieval_viewer`
-- [ ] 6.3 Search: ACL in WHERE, source and evidence alive, confidence and period filters, exact `0.7*cosine + 0.3*ts_rank`; `statements()` audit
-- [ ] 6.4 Deterministic, localised, dated, cited reply; fall through below the similarity floor
-- [ ] 6.5 E2E: PT and EN answers, no leak across channels, deleted source or proposal not reported, fall-through, zero chat-model calls
+- [x] 6.1 `decision_question(text)`: PT/EN, topic and period, `_NOT_A_LOOKUP` guard
+- [x] 6.2 `DecisionAnswerService` after `ObligationAnswerService`, under `retrieval_viewer`
+- [x] 6.3 Search: ACL in WHERE, source and evidence alive, confidence and period filters, exact `0.7*cosine + 0.3*ts_rank`; `statements()` audit
+- [x] 6.4 Deterministic, localised, dated, cited reply; fall through below the similarity floor
+- [x] 6.5 E2E: PT and EN answers, no leak across channels, deleted source or proposal not reported, fall-through, zero chat-model calls
+- [x] 6.6 `DECISION_MIN_SIMILARITY` setting; README, operations and deploy docs; capability examples route to the decision path
 
 ## PR 7. Backfill
 
