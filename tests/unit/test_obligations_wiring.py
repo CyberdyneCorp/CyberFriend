@@ -614,6 +614,36 @@ def test_the_extraction_model_is_the_cheap_one() -> None:
     assert used == {"extraction_model"}, used
 
 
+class _EmptyExtractor:
+    """A scripted extractor that is falsy, as anything with `__len__` can be."""
+
+    def __len__(self) -> int:
+        return 0
+
+    async def extract(self, candidate: object) -> list[object]:
+        return []
+
+
+def test_an_injected_extractor_is_kept_even_when_falsy() -> None:
+    """The e2e seam replaces only the extractor; a truthiness fallback would
+    swap a falsy fake for the live OpenAI one behind the test's back."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from chatmemory.composition import build_ask_pipeline
+    from chatmemory.config import Settings
+
+    settings = Settings(  # type: ignore[call-arg]
+        discord_token="t",
+        discord_guild_id=1,
+        database_url="postgresql+asyncpg://u:p@h/d",
+        llm_api_key="k",
+    )
+    extractor = _EmptyExtractor()
+    engine = create_async_engine("postgresql+asyncpg://u:p@h/d")
+    pipeline = build_ask_pipeline(settings, engine, extractor=extractor)  # type: ignore[arg-type]
+    assert pipeline.worker._extraction._extractor is extractor
+
+
 def test_the_obligation_service_cannot_be_asked_without_a_viewer() -> None:
     for method in ("asked_of_me", "what_i_need_to_do", "outstanding_count"):
         parameter = inspect.signature(getattr(ObligationService, method)).parameters["viewer"]

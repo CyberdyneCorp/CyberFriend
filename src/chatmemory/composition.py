@@ -1396,7 +1396,8 @@ def build_ask_pipeline(
     usage = UsageMeter()
     extraction = ExtractionService(
         extractor=extractor
-        or OpenAICompatibleAskExtractor(
+        if extractor is not None
+        else OpenAICompatibleAskExtractor(
             ExtractorConfig(
                 api_key=settings.llm_api_key.get_secret_value(),
                 base_url=settings.llm_base_url,

@@ -4,8 +4,9 @@ The bot process never sees chatter it is not addressed in; ingest captures it.
 So a scenario about obligations needs this other half: a message FakeDiscord
 builds goes through the one conversion live capture uses (`to_message`), is
 persisted by the production `IngestService`, and is handed to the extraction
-worker `build_ask_pipeline` assembles -- the same calls `live_loop` makes, in
-the same order.
+worker `build_ask_pipeline` assembles by `live_loop` itself, fed a one-message
+source in place of the gateway stream. So the capture-then-submit ordering a
+scenario exercises is the entrypoint's, not a copy of it.
 
 Only the extractor is swapped, and it still speaks the real prompt: the
 candidate is rendered by `render_candidate`, sent to `ScriptedChat` as the
@@ -16,14 +17,14 @@ filtering, addressee resolution, the ask store's SQL -- is production's.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import timedelta
 from typing import cast
 
 import discord
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from chatmemory.adapters.discord.source import RawMessage, to_message
+from chatmemory.adapters.discord.source import DiscordChatSource, RawMessage, to_message
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.model import AskCandidate, ExtractedAsk
 from chatmemory.app.asks.prompt import (
@@ -37,6 +38,8 @@ from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import build_ask_pipeline
 from chatmemory.config import Settings
 from chatmemory.domain.messages import Message
+from chatmemory.entrypoints.ingest import live_loop
+from chatmemory.health import HealthState
 from chatmemory.ports.sources import ChatSource
 from tests.e2e.harness.model import ASK_EXTRACTION, ScriptedChat
 
@@ -52,6 +55,18 @@ class ChatAskExtractor:
             SYSTEM_PROMPT, render_candidate(candidate), OUTPUT_SCHEMA, ASK_EXTRACTION
         )
         return parse_extractions(reply.data)
+
+
+class OneMessageSource:
+    """The slice of `DiscordChatSource` `live_loop` reads: a stream, a backlog."""
+
+    pending = 0
+
+    def __init__(self, message: Message) -> None:
+        self._message = message
+
+    async def stream(self) -> AsyncIterator[Message]:
+        yield self._message
 
 
 class Ingest:
@@ -74,11 +89,15 @@ class Ingest:
         self.asks.worker.records_through(store)
 
     async def capture(self, raw: discord.Message) -> Message:
-        """What `live_loop` does with one gateway message: persist, then submit."""
+        """Run one gateway message through `live_loop`: persist, then submit."""
         message = to_message(cast(RawMessage, raw))
         assert message is not None, f"not indexable: {raw.content!r}"
-        assert await self.service.capture(message), f"out of scope: {raw.content!r}"
-        self.asks.worker.submit(message)
+        state = HealthState()
+        source = cast(DiscordChatSource, OneMessageSource(message))
+        await live_loop(source, self.service, state, self.asks.worker)
+        # `live_loop` logs a failed capture and moves on; the timestamp is set
+        # only when the store took the message.
+        assert state.last_message_ingested_at is not None, f"not captured: {raw.content!r}"
         return message
 
     async def extract(self) -> int:

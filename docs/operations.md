@@ -139,7 +139,7 @@ made it -- also when the provider that made it caught the error and answered
 embedding worker, so its windows carry message ids as ingest leaves them.
 
 The ingest half is there too, for asks: `bot.chatter(...)` is a channel message
-not addressed to the bot, captured the way the live loop captures it, and
+not addressed to the bot, captured by the ingest entrypoint's `live_loop`, and
 `bot.extract_asks()` flushes the extraction worker `build_ask_pipeline`
 assembles. Only the extractor is scripted -- it sends the production prompt to
 the scripted model, which answers with what `bot.chat.script_asks(...)` set for

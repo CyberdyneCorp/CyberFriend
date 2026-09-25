@@ -55,7 +55,7 @@
 
 - [x] 6.1 `build_ask_pipeline(..., extractor=...)`: the extractor is injectable, and production leaves it unset
 - [x] 6.2 `ObligationAnswerService` built on `edges.clock`; wiring test
-- [x] 6.3 Harness `Ingest`: `to_message` -> `IngestService.capture` -> `ExtractionWorker.submit`, flushed by `E2EBot.extract_asks`; `ChatAskExtractor` sends the production prompt to `ScriptedChat` as `ask_extraction`, and `ScriptedChat.script_asks` scripts the reply
+- [x] 6.3 Harness `Ingest`: `to_message` -> `live_loop` over a one-message source (`IngestService.capture` -> `ExtractionWorker.submit`), flushed by `E2EBot.extract_asks`; `ChatAskExtractor` sends the production prompt to `ScriptedChat` as `ask_extraction`, and `ScriptedChat.script_asks` scripts the reply
 - [x] 6.4 `FakeDiscord.chatter`: a channel message not addressed to the bot, its snowflake minted from when it was said
 - [x] 6.5 Scenario: "what was asked of me this week" cites the source message; an older ask and a #leadership ask are absent; unaddressed chatter costs no extraction call
 

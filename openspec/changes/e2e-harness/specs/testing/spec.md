@@ -148,12 +148,14 @@ were reached, which model stages ran, and memory and fact rows read by SQL.
 
 The harness SHALL provide the ingest half next to the bot: a message the fake
 wire builds, not addressed to the bot, SHALL be converted by the production
-conversion, persisted by the production ingest service and submitted to the
+conversion and handed to the ingest entrypoint's own live loop, which SHALL
+persist it through the production ingest service and submit it to the
 extraction worker the ask pipeline assembles, and a harness step SHALL flush
 that worker. The ask extractor SHALL be the only part replaced: it SHALL send
 the production extraction prompt to the scripted chat model under the
 `ask_extraction` schema and read the reply with the production parser.
-Production SHALL build the same OpenAI-compatible extractor as before.
+Production SHALL build the same OpenAI-compatible extractor as before, and
+only an absent extractor SHALL fall back to it.
 
 #### Scenario: A captured ask is answered with a citation
 - WHEN someone asks a person something in a channel, ingest captures it, the
