@@ -138,6 +138,18 @@ services:
       # with INFURA_KEY and sent as direct messages. Off unless enabled.
       - ALERTS_ENABLED=${ALERTS_ENABLED:-false}
       - ALERT_SWEEP_SECONDS=${ALERT_SWEEP_SECONDS:-300}
+      # Voice questions: a voice message sent to the bot in a DM is transcribed
+      # at MEDIA_BASE_URL and answered as typed text. Off unless enabled, and
+      # refused at boot without MEDIA_API_KEY. The caps are hard monthly limits.
+      - VOICE_QUESTIONS_ENABLED=${VOICE_QUESTIONS_ENABLED:-false}
+      - VOICE_MAX_SECONDS=${VOICE_MAX_SECONDS:-120}
+      - VOICE_MAX_BYTES=${VOICE_MAX_BYTES:-10000000}
+      - VOICE_PERSON_MONTHLY_MINUTES=${VOICE_PERSON_MONTHLY_MINUTES:-60}
+      - MEDIA_AUDIO_MONTHLY_MINUTES=${MEDIA_AUDIO_MONTHLY_MINUTES:-1500}
+      - MEDIA_BASE_URL=${MEDIA_BASE_URL}
+      - MEDIA_API_KEY=${MEDIA_API_KEY}
+      - MEDIA_AUDIO_MODEL=${MEDIA_AUDIO_MODEL:-gpt-4o-mini-transcribe}
+      - MEDIA_TIMEOUT_SECONDS=${MEDIA_TIMEOUT_SECONDS:-30}
       # The calendar "ontem" and "semana passada" are read in. Defaulted here
       # rather than left blank: the team is in Brazil, and a day cut at UTC
       # midnight is the wrong day for three hours of every evening.

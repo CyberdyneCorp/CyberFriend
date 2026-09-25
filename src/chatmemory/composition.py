@@ -74,6 +74,7 @@ from chatmemory.adapters.discord.acl import (
     GuildProvider,
 )
 from chatmemory.adapters.discord.profile import DiscordProfileResolver
+from chatmemory.adapters.documents.http import BoundedHttpFetcher
 from chatmemory.adapters.llm.asks_extraction import (
     ExtractorConfig,
     OpenAICompatibleAskExtractor,
@@ -81,6 +82,7 @@ from chatmemory.adapters.llm.asks_extraction import (
 )
 from chatmemory.adapters.llm.chat import OpenAICompatibleChat
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
+from chatmemory.adapters.llm.transcription import OpenAICompatibleTranscriber
 from chatmemory.adapters.market.alert_prices import AlertPrices
 from chatmemory.adapters.market.coingecko import CoinGeckoProvider
 from chatmemory.adapters.market.registration import MarketToolsConfig, build_market_tools
@@ -105,6 +107,7 @@ from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
+from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
 from chatmemory.adapters.store.postgres import HybridSearch
@@ -197,6 +200,7 @@ from chatmemory.app.self_description import (
     Command,
     SelfDescriptionAnswerService,
 )
+from chatmemory.app.voice import VoiceLimits, VoiceQuestions
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import AnswerService
@@ -1577,6 +1581,7 @@ async def build_answer_stack(
             # `/notifications` where the feature is off tells somebody to use
             # a command Discord will not show them.
             commands=available_commands(settings),
+            voice_questions=settings.voice_questions_enabled,
         ),
         reasoning=reasoning,
         obligations=obligations,
@@ -1631,6 +1636,51 @@ def build_memory_retention(settings: Settings, engine: AsyncEngine) -> MemoryRet
     """The retention sweep, for the ingest process."""
     return MemoryRetention(
         PostgresMemoryStore(engine), timedelta(days=settings.memory_retention_days)
+    )
+
+
+def build_voice_questions(
+    settings: Settings,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock = utc_now,
+) -> VoiceQuestions | None:
+    """Voice questions in DMs, or None when the switch is off.
+
+    None rather than a service that refuses: nothing is built that could reach
+    the transcription endpoint, and the bot answers a voice message that voice
+    is not enabled here. `transport` is the process's `Edges.http_transport`,
+    for the CDN download and the transcription alike, so a test that fakes the
+    network fakes both.
+    """
+    if not settings.voice_questions_enabled or settings.media_api_key is None:
+        return None
+    limits = VoiceLimits(
+        max_seconds=settings.voice_max_seconds,
+        max_bytes=settings.voice_max_bytes,
+        person_monthly_seconds=settings.voice_person_monthly_minutes * 60,
+        overall_monthly_seconds=settings.media_audio_monthly_minutes * 60,
+    )
+    log.info(
+        "composition.voice_questions",
+        model=settings.media_audio_model,
+        max_seconds=limits.max_seconds,
+        person_monthly_minutes=settings.voice_person_monthly_minutes,
+        monthly_minutes=settings.media_audio_monthly_minutes,
+    )
+    return VoiceQuestions(
+        OpenAICompatibleTranscriber(
+            base_url=settings.media_base_url,
+            api_key=settings.media_api_key.get_secret_value(),
+            model=settings.media_audio_model,
+            timeout_seconds=settings.media_timeout_seconds,
+            transport=transport,
+        ),
+        BoundedHttpFetcher(transport=transport, follow_redirects=False),
+        PostgresVoiceLedger(engine),
+        limits,
+        fetch_timeout=settings.media_timeout_seconds,
+        clock=clock,
     )
 
 

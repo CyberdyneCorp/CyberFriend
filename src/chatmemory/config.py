@@ -297,6 +297,49 @@ class Settings(BaseSettings):
     waiting for something that is not for them.
     """
 
+    # --- Voice questions -----------------------------------------------
+    voice_questions_enabled: bool = False
+    """A voice message sent to the bot in a DM, answered as if it were typed.
+
+    Off by default, and an outbound boundary of a new kind: what leaves is a
+    recording of somebody's voice, sent to the transcription endpoint below.
+    Only the asker's own message in their own DM is ever sent, never anything
+    said in a channel. Off, a voice message is answered once that voice is not
+    enabled here, and nothing is downloaded.
+    """
+
+    voice_max_seconds: int = 120
+    """The longest voice question accepted, by the duration Discord declares.
+
+    A plain audio file declares none, so it is charged this much and bounded
+    by `voice_max_bytes` instead."""
+
+    voice_max_bytes: int = 10_000_000
+    """The largest download, enforced on the bytes as they arrive."""
+
+    voice_person_monthly_minutes: int = 60
+    """Minutes of voice questions one person may send in a calendar month (UTC)."""
+
+    media_audio_monthly_minutes: int = 1500
+    """Minutes of audio transcribed in a calendar month (UTC), for everybody.
+
+    The hard ceiling on the transcription bill. Shared with any later
+    transcription of channel voice notes, so it bounds the whole feature."""
+
+    media_base_url: str = "https://api.openai.com/v1"
+    """The OpenAI-compatible endpoint audio is sent to: `{this}/audio/transcriptions`.
+
+    Its own setting rather than LLM_BASE_URL, because where people's voices go
+    is a separate decision from where their text goes."""
+
+    media_api_key: SecretStr | None = None
+    """Required once VOICE_QUESTIONS_ENABLED is on; refused at boot without it."""
+
+    media_audio_model: str = "gpt-4o-mini-transcribe"
+
+    media_timeout_seconds: float = 30.0
+    """What one download, and separately one transcription, may take."""
+
     # --- Time ----------------------------------------------------------
     answer_timezone: str = "America/Sao_Paulo"
     """The zone whose calendar a question's "ontem" or "last week" means.
@@ -463,6 +506,36 @@ class Settings(BaseSettings):
         if v < 60:
             raise ValueError("must be at least 60 seconds")
         return v
+
+    @field_validator(
+        "voice_max_seconds",
+        "voice_max_bytes",
+        "voice_person_monthly_minutes",
+        "media_audio_monthly_minutes",
+        "media_timeout_seconds",
+    )
+    @classmethod
+    def _positive_voice_setting(cls, v: float) -> float:
+        """Refused at boot: a zero cap refuses every voice question, and reads
+        to an operator as a feature that is on."""
+        if v <= 0:
+            raise ValueError("must be positive")
+        return v
+
+    @field_validator("media_base_url")
+    @classmethod
+    def _http_media_endpoint(cls, v: str) -> str:
+        if not v.lower().startswith(("https://", "http://")):
+            raise ValueError("media_base_url must be an http(s) URL")
+        return v.rstrip("/")
+
+    @model_validator(mode="after")
+    def _voice_needs_a_key(self) -> Settings:
+        """Refused at boot rather than on somebody's first voice message, where
+        it would read as "I couldn't understand the audio"."""
+        if self.voice_questions_enabled and self.media_api_key is None:
+            raise ValueError("voice_questions_enabled needs media_api_key")
+        return self
 
     @field_validator("ask_stale_after_days", "ask_extraction_window_messages")
     @classmethod

@@ -41,6 +41,7 @@ SQL_MODULES = (
     "config_sql",
     "memory_sql",
     "facts_sql",
+    "media_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -426,6 +427,21 @@ UNSCOPED: dict[str, str] = {
         "write; /forget everywhere, keyed on the requester's own platform "
         "identity as FORGET_FACT. Returns no row"
     ),
+    # --- media_sql -------------------------------------------------------
+    #
+    # The voice-question ledger: seconds per person and month, never content.
+    "media_sql.LOCK_LEDGER": "advisory lock; reads no table",
+    "media_sql.PERSON_OF": (
+        "identity lookup; the asker's own person id and whether they opted "
+        "out, keyed on their platform identity. No content"
+    ),
+    "media_sql.CREATE_PERSON": "write; a person row for an asker never seen before",
+    "media_sql.LINK_PERSON": "write; links that person row to the asker's account",
+    "media_sql.MONTH_USAGE": (
+        "accounting; two sums of seconds for one month -- the asker's and "
+        "everyone's. Returns numbers, never who or what"
+    ),
+    "media_sql.CHARGE": "write; adds seconds to the asker's row for the month",
 }
 
 # Viewer-scoped statements that do not filter tombstones, and why. Kept

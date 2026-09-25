@@ -165,3 +165,20 @@ async def test_attachment_bytes_are_capped_against_what_arrives() -> None:
 async def test_a_non_http_url_is_never_opened() -> None:
     fetcher = BoundedHttpFetcher()
     assert await fetcher.fetch("file:///etc/passwd", 1000, 1.0) is None
+
+
+async def test_with_redirects_off_a_redirect_is_a_failure_not_a_file() -> None:
+    """The voice path fetches only from the Discord CDN; a redirect there must
+    neither be followed elsewhere nor handed back as the file's bytes."""
+    hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        return httpx.Response(302, headers={"location": "https://evil.example/a.ogg"})
+
+    fetcher = BoundedHttpFetcher(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    )
+
+    assert await fetcher.fetch("https://cdn.discordapp.com/a.ogg", 1000, 5.0) is None
+    assert hosts == ["cdn.discordapp.com"]
