@@ -54,7 +54,7 @@ Five services come from one image:
 | `ingest`  | Discord gateway client plus workers    | none   |
 | `bot`     | Conversational surface (mentions, DMs, slash commands) | none |
 | `mcp`     | HTTP retrieval interface               | FQDN   |
-| `admin`   | Operator console and its API, database credentials only | FQDN (its own) |
+| `admin`   | Operator console and its API; database credentials, plus the CyberdyneAuth client secret and session key when sign-in is configured | FQDN (its own) |
 
 `bot` and `ingest` each hold their own gateway connection and each run one
 replica.

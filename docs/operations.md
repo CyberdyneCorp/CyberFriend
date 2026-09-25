@@ -221,6 +221,34 @@ These are real and are not fixed by anything on this page:
   is wired into `IngestService`, every excluded message costs a round trip to
   the database to be rejected.
 
+## Console sign-in secrets
+
+When CyberdyneAuth sign-in is configured (see
+[admin-console.md](admin-console.md#signing-in-with-cyberdyneauth)), the
+`admin` service holds two secrets besides `DATABASE_URL`. Neither reaches the
+corpus or the bot's accounts, and neither is ever logged, recorded in
+`config_audit` or shown by the console.
+
+| Secret | What it is | If it leaks |
+|---|---|---|
+| `ADMIN_OIDC_CLIENT_SECRET` | The `cyberfriend` client's secret at CyberdyneAuth. | Rotate it at CyberdyneAuth and redeploy `admin`. |
+| `ADMIN_SESSION_KEY` | 32 bytes (base64) that encrypt the tokens in `admin_session`. `openssl rand -base64 32`. | Replace it and redeploy: every existing session stops decrypting and people sign in again. |
+
+The other sign-in variables (`ADMIN_OIDC_ISSUER`, `ADMIN_OIDC_CLIENT_ID`,
+`ADMIN_PUBLIC_URL`) are not secret. Set all five or none: a partial set refuses
+to start and names what is missing.
+
+**Break-glass.** If CyberdyneAuth is down while an admin change is urgent,
+unset `ADMIN_OIDC_ISSUER` (and the other four) and redeploy `admin`: sessions
+stop being accepted and `cfa_` tokens are admin again. Set them back once
+CyberdyneAuth is up. While CyberdyneAuth is merely unreachable, existing
+sessions keep working until their access token needs a refresh, and bearer
+tokens keep working throughout.
+
+`admin_session` and `admin_login` hold hashes and ciphertext only. Revoked and
+expired sessions stay until the table is pruned; used and expired logins are
+dropped a day after they expire, when the next sign-in starts.
+
 ## Tracing
 
 With `TRACING_ENABLED=true` and a Langfuse destination configured, every run is

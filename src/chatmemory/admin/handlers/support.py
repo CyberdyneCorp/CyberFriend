@@ -10,7 +10,7 @@ not buried in argument checking. Three of them carry weight:
     body is a list or a bare string reaching a field lookup would raise
     `TypeError` and surface as a 500, which reads as a bug in the console
     rather than as a malformed request.
-*   `acting_operator` is a one-line wrapper over `current_operator`, and the
+*   `acting_operator` is a one-line wrapper over `current_actor`, and the
     only way a handler learns who is acting. It reads the context the
     middleware bound from the credential; it never reads the request. A
     handler cannot accidentally take an operator from a body field, because
@@ -34,7 +34,7 @@ import structlog
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from chatmemory.admin.auth import Operator, current_operator
+from chatmemory.admin.auth import Actor, current_actor
 
 log = structlog.get_logger()
 
@@ -69,9 +69,13 @@ def refusal(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({ERROR_KEY: "the console could not complete that"}, status_code=500)
 
 
-def acting_operator() -> Operator:
-    """Who this request acts as, from the credential and from nothing else."""
-    return current_operator()
+def acting_operator() -> Actor:
+    """Who this request acts as, from the credential and from nothing else.
+
+    An operator name for a `cfa_` token; `oidc:<sub>`, with the email to show
+    beside it, for a CyberdyneAuth session.
+    """
+    return current_actor()
 
 
 async def body_of(request: Request) -> Mapping[str, Any]:

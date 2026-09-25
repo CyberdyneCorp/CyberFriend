@@ -32,6 +32,7 @@ from chatmemory.admin.handlers.queries import (
     StatusSnapshot,
 )
 from chatmemory.admin.handlers.services import AdminServices
+from chatmemory.admin.oidc.service import SignIn
 from chatmemory.admin.server import NO_CORPUS, build_app
 from chatmemory.app.authorization import ToolEffect
 from chatmemory.app.configuration import ConfigurationEditor, RuntimeConfiguration
@@ -43,6 +44,7 @@ from chatmemory.ports.configuration import StoredSetting
 
 ANA = Operator("ana")
 BEN = Operator("ben")
+CLIENT_BASE = "http://testserver"
 AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 #: A deployment's worth of environment. These are the *editable* settings; the
@@ -74,20 +76,26 @@ class FakeConfigurationStore:
     def __init__(self, rows: Sequence[StoredSetting] = ()) -> None:
         self.rows = list(rows)
         self.refusals: list[tuple[str, str, str]] = []
+        self.displays: list[str | None] = []
 
     async def load(self) -> Sequence[StoredSetting]:
         return list(self.rows)
 
-    async def put(self, key: str, raw: str, operator: str) -> None:
+    async def put(
+        self, key: str, raw: str, operator: str, *, display: str | None = None
+    ) -> None:
         self.rows = [r for r in self.rows if r.key != key]
         self.rows.append(
             StoredSetting(key=key, raw=raw, updated_by=operator, updated_at=AT)
         )
+        self.displays.append(display)
 
-    async def clear(self, key: str, operator: str) -> None:
+    async def clear(self, key: str, operator: str, *, display: str | None = None) -> None:
         self.rows = [r for r in self.rows if r.key != key]
 
-    async def record_refusal(self, key: str, operator: str, reason: str) -> None:
+    async def record_refusal(
+        self, key: str, operator: str, reason: str, *, display: str | None = None
+    ) -> None:
         self.refusals.append((key, operator, reason))
 
 
@@ -220,6 +228,7 @@ async def build_console(
     optouts: Sequence[OptOutEntry] = (),
     status: StatusSnapshot | None = None,
     oidc_configured: bool = False,
+    sign_in: SignIn | None = None,
 ) -> Console:
     tokens = InMemoryOperatorTokens()
     issued = await tokens.issue(ANA, "laptop")
@@ -243,9 +252,11 @@ async def build_console(
         mcp_tokens=ReviewAndRevokeOnly(mcp_tokens),
         probe=probe,
     )
-    app = build_app(services, tokens, oidc_configured=oidc_configured)
+    app = build_app(services, tokens, oidc_configured=oidc_configured, sign_in=sign_in)
     return Console(
-        client=TestClient(app),
+        # https: the sign-in cookies are `__Host-` and Secure, and a client on
+        # http would never send them back.
+        client=TestClient(app, base_url=sign_in.settings.public_url if sign_in else CLIENT_BASE),
         services=services,
         tokens=tokens,
         store=store,

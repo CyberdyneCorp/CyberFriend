@@ -393,9 +393,97 @@ diff.
 
 ### What a `cfa_` token is
 
-While `ADMIN_OIDC_ISSUER` is unset, a `cfa_` token is admin, exactly as before
-roles existed. Once it is set, every `cfa_` token is **operator only**: admin
-rights then come only from the CyberdyneAuth role. Until CyberdyneAuth sign-in
-ships (the rest of `add-console-cyberdyneauth-login`), setting the issuer
-leaves nobody with admin rights, so leave it unset. Unsetting it again is the
-break-glass rollback: tokens are admin again on the next start.
+While CyberdyneAuth sign-in is not configured (`ADMIN_OIDC_ISSUER` unset), a
+`cfa_` token is admin, exactly as before roles existed. Once sign-in is
+configured, every `cfa_` token is **operator only**: admin rights then come
+only from the CyberdyneAuth role. A token never reads personal content
+(`admin_oidc` routes), whatever its role. Unsetting the issuer is the
+break-glass rollback: tokens are admin again on the next start, and sessions
+stop being accepted.
+
+## Signing in with CyberdyneAuth
+
+The admin API is a backend-for-frontend: it runs the OIDC authorization code
+flow with PKCE (S256) against CyberdyneAuth itself, and the browser only ever
+holds an opaque cookie. No access, refresh or id token reaches the browser.
+The code is in `src/chatmemory/admin/oidc/`.
+
+| Route | Access | What it does |
+|---|---|---|
+| `GET /auth/login` | public | Stores a login record (10 minutes), sets `__Host-cf_login` (`HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`) and redirects to CyberdyneAuth. |
+| `GET /auth/callback` | public | Consumes the login once, requires the `__Host-cf_login` value, exchanges the code, verifies both tokens and userinfo, sets `__Host-cf_admin` (`HttpOnly; Secure; SameSite=Strict; Path=/`) and redirects to `/#/status`. |
+| `POST /auth/logout` | public, CSRF header | Revokes the session, then the refresh token at CyberdyneAuth (best effort), clears the cookie and returns `{"end_session_url": ...}` with `id_token_hint` and `post_logout_redirect_uri`. The console navigates there. |
+| `GET /api/session` | operator | `{"subject", "display", "roles", "via"}` for whoever the credential names. |
+
+With sign-in off, the three `/auth/*` routes answer 404.
+
+**Verification**, exactly per the CyberdyneAuth contract. Access token: RS256
+via the issuer's JWKS, `iss` equal to discovery's, `exp`, `type == "access"`,
+`aud == "cyberfriend"`. Id token: RS256, `iss`, `aud == client_id`, `exp`, and
+the nonce issued for that sign-in. `userinfo.sub == id_token.sub ==
+access_token.sub` is required before the email is read. People are keyed on
+`sub`. The key set is refetched when an unknown `kid` arrives, at most once a
+minute.
+
+**Roles** come from the verified access token only: `<client_id>:admin` is
+admin (and operator), `<client_id>:operator` is operator. A roles claim that
+is absent, or has neither role, gives no session; the browser sees a fixed
+"No access" page that does not say whether the account exists.
+
+**Sessions** live in `admin_session` (migration 0031): the id as its sha256,
+the tokens AES-GCM under `ADMIN_SESSION_KEY`. Every request re-verifies the
+stored access token. Within 60 seconds of expiry it is refreshed first, under
+a per-session lock (refresh tokens rotate with reuse detection, so two
+refreshes in flight would revoke the family; the lock holds while the admin
+service runs one replica). Roles are re-checked on every refresh:
+
+- no roles claim: the session is revoked and the request gets the standard 401;
+- neither console role: the session is revoked and the request gets 403
+  `{"error":"no console access"}`;
+- admin lowered to operator: the session continues as operator.
+
+A role withdrawn at CyberdyneAuth therefore takes effect within 15 minutes. A
+session also ends when its refresh token expires (30 days), on sign-out, when a
+refresh fails, or after 12 hours without a request.
+
+**A bearer header wins.** A request with `Authorization` is authenticated by it
+alone, and its `Cookie` header is removed before any handler sees it: the
+session is not read, refreshed or used as a fallback, and an invalid bearer is
+a 401 even with a valid cookie.
+
+**CSRF.** Every cookie-authenticated request that is not a read, and every
+`POST /auth/logout`, must carry `X-CyberFriend-Console: 1`; without it the
+answer is 403 `{"error":"cross-site request refused"}`. Any non-read that sends
+an `Origin` must send the console's own (`ADMIN_PUBLIC_URL`'s origin). Every
+response carries `Content-Security-Policy: default-src 'self'; frame-ancestors
+'none'; base-uri 'none'; form-action 'self' <issuer>`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+
+**Audit.** A change made through a session is recorded with actor
+`oidc:<sub>` and the person's email in `config_audit.operator_display`
+(`/api/audit` returns it as `operator_display`). Token changes are recorded
+exactly as before. The record stays append-only.
+
+### Configuration
+
+Sign-in is on only when all five are set; setting some but not all refuses to
+start and names what is missing (the issuer alone would downscope every token
+with no way left to sign in as admin).
+
+| Variable | Value |
+|---|---|
+| `ADMIN_OIDC_ISSUER` | `https://auth.backend.coolify.cyberdynecorp.ai` |
+| `ADMIN_OIDC_CLIENT_ID` | the registered BFF client, `cyberfriend` |
+| `ADMIN_OIDC_CLIENT_SECRET` | its secret (never logged or shown) |
+| `ADMIN_SESSION_KEY` | 32 random bytes, base64: `openssl rand -base64 32` (never logged or shown) |
+| `ADMIN_PUBLIC_URL` | the console's https URL, e.g. `https://admin.example.com` |
+| `ADMIN_OIDC_SCOPES` | optional; default `openid email profile` |
+
+Register the client at CyberdyneAuth as a confidential client with redirect
+URI `<ADMIN_PUBLIC_URL>/auth/callback` and post-logout redirect URI
+`<ADMIN_PUBLIC_URL>/`, and assign people `cyberfriend:admin` or
+`cyberfriend:operator`.
+
+The console interface still signs in with a pasted token until its sign-in
+screen lands (task group 3 of `add-console-cyberdyneauth-login`); the API side
+above is complete and is what that screen calls.

@@ -354,6 +354,29 @@ UNSCOPED: dict[str, str] = {
         "content -- and `admin.audit` refuses to record a change naming an "
         "environment-only secret, so one cannot arrive through this column"
     ),
+    "admin_sql.INSERT_ADMIN_LOGIN": (
+        "write; one console sign-in in flight: hashes of state, nonce and "
+        "browser binding, and the encrypted PKCE verifier. No corpus table"
+    ),
+    "admin_sql.FORGET_EXPIRED_ADMIN_LOGINS": "write; drops sign-ins that expired a day ago",
+    "admin_sql.CONSUME_ADMIN_LOGIN": (
+        "authentication; marks one sign-in used and returns its hashes and "
+        "ciphertext, keyed on the state's hash. No content"
+    ),
+    "admin_sql.INSERT_ADMIN_SESSION": (
+        "write; a console session: its id hash, the person's subject, email and "
+        "roles, and encrypted tokens. No corpus table"
+    ),
+    "admin_sql.LIVE_ADMIN_SESSION": (
+        "authentication; exchanges a session-id hash for the session it names. "
+        "This establishes an identity, so it cannot be scoped to one; it returns "
+        "a subject, an email, roles and ciphertext, never corpus content"
+    ),
+    "admin_sql.REFRESH_ADMIN_SESSION": "write; replaces one session's tokens after a refresh",
+    "admin_sql.TOUCH_ADMIN_SESSION": "write; marks one session seen",
+    "admin_sql.REVOKE_ADMIN_SESSION": (
+        "write; ends one session and returns it for sign-out. No content"
+    ),
     # --- config_sql ------------------------------------------------------
     "config_sql.LOAD_SETTINGS": (
         "operator configuration; the settings an operator has stored and who "

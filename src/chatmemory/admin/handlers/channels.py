@@ -139,12 +139,14 @@ async def _fresh_scope(services: AdminServices) -> frozenset[int]:
 
 
 async def _store_scope(services: AdminServices, channel_ids: list[int]) -> None:
+    actor = acting_operator()
     await services.editor.set(
         INDEXED_CHANNEL_IDS.key,
         " ".join(str(c) for c in channel_ids),
         # The operator comes from the credential; the editor records it against
         # the change in the same transaction as the write.
-        acting_operator().name,
+        actor.name,
+        display=actor.display,
     )
     await services.configuration.refresh()
 

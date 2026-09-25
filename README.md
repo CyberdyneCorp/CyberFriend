@@ -291,6 +291,7 @@ graph TD
     MCPS["mcp"] --> PG
     ADM["admin console"] --> PG
     ADM --> OP["Operator"]
+    ADM -->|"sign-in (OIDC)"| CA["CyberdyneAuth"]
     MIG["migrate"] --> PG
 
     style PG fill:#E3F2FD,stroke:#1565C0

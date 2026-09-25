@@ -77,16 +77,20 @@ class FakeConfigurationStore:
             raise self.fail_with
         return list(self.rows)
 
-    async def put(self, key: str, raw: str, operator: str) -> None:
+    async def put(
+        self, key: str, raw: str, operator: str, *, display: str | None = None
+    ) -> None:
         self.puts.append((key, raw, operator))
         self.rows = [row for row in self.rows if row.key != key]
         self.rows.append(stored(key, raw, operator))
 
-    async def clear(self, key: str, operator: str) -> None:
+    async def clear(self, key: str, operator: str, *, display: str | None = None) -> None:
         self.cleared.append((key, operator))
         self.rows = [row for row in self.rows if row.key != key]
 
-    async def record_refusal(self, key: str, operator: str, reason: str) -> None:
+    async def record_refusal(
+        self, key: str, operator: str, reason: str, *, display: str | None = None
+    ) -> None:
         self.refusals.append((key, operator, reason))
 
 

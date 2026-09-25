@@ -64,7 +64,7 @@ from chatmemory.adapters.mcp_client.config import (
 from chatmemory.adapters.mcp_client.registry import ServerDiscovery
 from chatmemory.adapters.mcp_client.session import DiscoveredTool, default_session_factory
 from chatmemory.admin.audit import escalation, refused
-from chatmemory.admin.auth import Operator
+from chatmemory.admin.auth import Actor
 from chatmemory.admin.handlers.services import AdminServices, ServerProbe
 from chatmemory.admin.handlers.settings import setting_text
 from chatmemory.admin.handlers.support import (
@@ -340,7 +340,7 @@ def routes(services: AdminServices) -> list[Route]:
 
 
 async def _refuse_duplicate_server(
-    services: AdminServices, operator: Operator, server: ServerConfig
+    services: AdminServices, operator: Actor, server: ServerConfig
 ) -> None:
     if not any(s.name == server.name for s in _servers(services)):
         return
@@ -352,7 +352,7 @@ async def _refuse_duplicate_server(
 
 
 async def _configured_server(
-    services: AdminServices, operator: Operator, name: str
+    services: AdminServices, operator: Actor, name: str
 ) -> ServerConfig:
     """The configured server by that name, or a refusal that does not name it."""
     configured = _servers(services)
@@ -372,7 +372,7 @@ async def _configured_server(
 
 
 async def _offered_tool(
-    services: AdminServices, operator: Operator, server: ServerConfig, tool: str
+    services: AdminServices, operator: Actor, server: ServerConfig, tool: str
 ) -> DiscoveredTool:
     """The tool as the server describes it, or a refusal.
 
@@ -402,7 +402,7 @@ async def _offered_tool(
 
 async def _check_confirmation(
     services: AdminServices,
-    operator: Operator,
+    operator: Actor,
     server: str,
     tool: str,
     confirmation: object,
@@ -427,7 +427,7 @@ async def _check_confirmation(
 
 
 async def _check_someone_can_spend_it(
-    services: AdminServices, operator: Operator, server: str, tool: str
+    services: AdminServices, operator: Actor, server: str, tool: str
 ) -> None:
     """A mutating tool is useless, and refuses to boot, with no credential holder.
 
@@ -446,7 +446,7 @@ async def _check_someone_can_spend_it(
 
 
 async def _refuse_known_tool(
-    services: AdminServices, operator: Operator, server: str, tool: str, reason: str
+    services: AdminServices, operator: Actor, server: str, tool: str, reason: str
 ) -> NoReturn:
     """Refuse a tool the console has recognised, recording which one it was.
 
@@ -468,7 +468,7 @@ async def _refuse_known_tool(
 
 
 async def _refuse_unrecognised(
-    services: AdminServices, operator: Operator, reason: str
+    services: AdminServices, operator: Actor, reason: str
 ) -> NoReturn:
     """Refuse an allowlist change whose subject the console did not recognise.
 
@@ -483,7 +483,7 @@ async def _refuse_unrecognised(
 
 
 async def _record_escalation(
-    services: AdminServices, operator: Operator, entry: AllowedTool
+    services: AdminServices, operator: Actor, entry: AllowedTool
 ) -> None:
     """Record enabling a mutating tool as a widening, not as an edit.
 
@@ -557,10 +557,12 @@ def _parsed(words: Sequence[str], read: Callable[[str], T]) -> Iterator[T]:
 
 
 async def _write(
-    services: AdminServices, spec: SettingSpec[Any], words: Sequence[str], operator: Operator
+    services: AdminServices, spec: SettingSpec[Any], words: Sequence[str], operator: Actor
 ) -> None:
     """Store the whole setting, then re-read it so the console is current."""
-    await services.editor.set(spec.key, " ".join(words), operator.name)
+    await services.editor.set(
+        spec.key, " ".join(words), operator.name, display=operator.display
+    )
     await services.configuration.refresh()
 
 

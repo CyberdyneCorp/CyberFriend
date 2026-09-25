@@ -26,6 +26,14 @@ Three properties are load-bearing here:
     provider's role, which is named, managed and revocable there. Which role
     each route needs is `access.py`'s question, not this module's.
 
+*   **A bearer header wins.** A request with `Authorization` is authenticated
+    by it alone and its `Cookie` header is stripped before anything else sees
+    it, so a CyberdyneAuth session cookie (`__Host-cf_admin`, see
+    `admin.oidc`) is never read, refreshed or used as a fallback beside one.
+    A request authenticated by the cookie instead must carry the console's
+    CSRF header on anything that is not a read, and every non-read with an
+    `Origin` must come from the console's own origin.
+
 Header parsing is deliberately not imported from `mcp.auth`. The two surfaces
 authenticate different principals against different tables, and sharing the
 code would mean a change made for one silently changes the other.
@@ -81,6 +89,13 @@ class Unauthenticated(Exception):
     """
 
 
+OIDC_ACTOR_PREFIX = "oidc:"
+"""The change record's actor for a signed-in person: `oidc:<sub>`.
+
+Operator names cannot contain ':', so no token holder can be recorded as one.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class Operator:
     """The named holder of a console token, and the actor the change record names.
@@ -100,6 +115,23 @@ class Operator:
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def display(self) -> str | None:
+        """Nothing beyond the name: a token holder is shown as their name."""
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class Actor:
+    """Who the change record names for this request, and what to show beside it.
+
+    `name` is an operator name for a token and `oidc:<sub>` for a signed-in
+    person; `display` is the person's email, kept in its own column.
+    """
+
+    name: str
+    display: str | None = None
 
 
 class Role(StrEnum):
@@ -307,6 +339,15 @@ def current_operator() -> Operator:
     return Operator(principal.subject)
 
 
+def current_actor() -> Actor:
+    """The actor the change record names for this request's principal."""
+    principal = current_principal()
+    if principal.via == "token":
+        return Actor(Operator(principal.subject).name)
+    display = principal.display if principal.display != principal.subject else None
+    return Actor(OIDC_ACTOR_PREFIX + principal.subject, display)
+
+
 def bind_principal(principal: Principal) -> Token[Principal | None]:
     """Bind a principal to this context, returning a handle that undoes it.
 
@@ -323,6 +364,46 @@ def unbind_principal(handle: Token[Principal | None]) -> None:
 
 # --- request authentication --------------------------------------------
 
+SESSION_COOKIE = "__Host-cf_admin"
+"""The console's session cookie: an opaque id, `HttpOnly; Secure; SameSite=Strict`."""
+
+LOGIN_COOKIE = "__Host-cf_login"
+"""The pre-sign-in cookie that binds a sign-in to the browser that started it."""
+
+CSRF_HEADER = "x-cyberfriend-console"
+"""Required, with value `1`, on every cookie-authenticated request that is not a read.
+
+A cross-site form cannot set it, and a cross-site `fetch` with it needs a CORS
+preflight, which this server never grants.
+"""
+
+READ_METHODS = frozenset({"GET", "HEAD"})
+
+_UNAUTHORIZED_BODY = b'{"error":"unauthorized"}'
+_REQUIRES_ADMIN_BODY = b'{"error":"requires admin"}'
+_NO_RULE_BODY = b'{"error":"forbidden"}'
+
+
+@dataclass(frozen=True, slots=True)
+class Denied:
+    """A refusal decided while authenticating, with the status and body to send."""
+
+    status: int
+    body: bytes
+
+
+UNAUTHENTICATED = Denied(401, _UNAUTHORIZED_BODY)
+NO_CONSOLE_ACCESS = Denied(403, b'{"error":"no console access"}')
+CROSS_SITE = Denied(403, b'{"error":"cross-site request refused"}')
+
+
+class SessionAuthenticator(Protocol):
+    """Turns a session cookie into a principal (see `admin.oidc.service`)."""
+
+    async def authenticate(self, session_id: str) -> Principal | Denied:
+        """The session's principal, refreshed if due, or why it is refused."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class AdminAuthenticator:
@@ -330,12 +411,16 @@ class AdminAuthenticator:
 
     Deliberately thinner than the MCP authenticator: there is no ACL lookup
     behind it, because the console grants no view of the corpus that a
-    permission set could narrow. `oidc_configured` is whether an identity
-    provider issuer is set, which is what downscopes tokens to operator.
+    permission set could narrow. `oidc_configured` is whether CyberdyneAuth
+    sign-in is configured, which is what downscopes tokens to operator;
+    `sessions` is the sign-in itself, and `public_origin` the only `Origin` a
+    non-read may come from.
     """
 
     tokens: OperatorTokens
     oidc_configured: bool = False
+    sessions: SessionAuthenticator | None = None
+    public_origin: str | None = None
 
     async def principal_for_token(self, token: str) -> Principal | None:
         operator = await self.tokens.operator_for_token(token)
@@ -354,9 +439,52 @@ def bearer_token(header_value: str | None) -> str | None:
     return value.strip()
 
 
-_UNAUTHORIZED_BODY = b'{"error":"unauthorized"}'
-_REQUIRES_ADMIN_BODY = b'{"error":"requires admin"}'
-_NO_RULE_BODY = b'{"error":"forbidden"}'
+def header_values(scope: Scope, name: bytes) -> list[bytes]:
+    raw = cast("list[tuple[bytes, bytes]]", scope["headers"])
+    return [v for k, v in raw if k.lower() == name]
+
+
+def cookie_value(scope: Scope, name: str) -> str | None:
+    """The one value of cookie `name`, or None when it is absent or repeated.
+
+    Repeated is refused rather than resolved, for the same reason as a
+    repeated Authorization header: whichever copy we read, something in front
+    of us might read the other.
+    """
+    found: list[str] = []
+    for header in header_values(scope, b"cookie"):
+        for part in header.decode("latin-1").split(";"):
+            key, sep, value = part.strip().partition("=")
+            if sep and key == name:
+                found.append(value.strip())
+    return found[0] if len(found) == 1 and found[0] else None
+
+
+def without_cookies(scope: Scope) -> Scope:
+    """The same request with its `Cookie` header removed."""
+    raw = cast("list[tuple[bytes, bytes]]", scope["headers"])
+    return {**scope, "headers": [(k, v) for k, v in raw if k.lower() != b"cookie"]}
+
+
+def origin_allowed(scope: Scope, public_origin: str | None) -> bool:
+    """An `Origin`, when sent, must be the console's own. Scripts send none."""
+    origins = header_values(scope, b"origin")
+    if not origins:
+        return True
+    if len(origins) != 1:
+        return False
+    # Sign-in off: no public origin is configured, and bearer requests behave
+    # exactly as before sign-in existed.
+    return public_origin is None or origins[0].decode("latin-1") == public_origin
+
+
+def csrf_header_present(scope: Scope) -> bool:
+    values = header_values(scope, CSRF_HEADER.encode())
+    return len(values) == 1 and values[0] == b"1"
+
+
+def is_read(scope: Scope) -> bool:
+    return str(scope.get("method", "GET")).upper() in READ_METHODS
 
 
 class AdminAuthMiddleware:
@@ -391,17 +519,17 @@ class AdminAuthMiddleware:
             await self._app(scope, receive, send)
             return
 
-        principal = await self._principal_for(scope)
-        if principal is None:
-            log.info("admin.unauthenticated", path=scope.get("path"))
-            await _refuse(send, 401, _UNAUTHORIZED_BODY)
+        outcome, scope = await self._authenticate(scope)
+        if isinstance(outcome, Denied):
+            log.info("admin.refused", path=scope.get("path"), status=outcome.status)
+            await _refuse(send, outcome.status, outcome.body)
             return
 
-        if not rule.permits(principal):
+        if not rule.permits(outcome):
             log.info(
                 "admin.forbidden",
                 path=scope.get("path"),
-                principal=principal.subject,
+                principal=outcome.subject,
                 required=rule.access.value if rule.access else None,
             )
             await _refuse(send, 403, _REQUIRES_ADMIN_BODY if rule.access else _NO_RULE_BODY)
@@ -411,7 +539,7 @@ class AdminAuthMiddleware:
         # field can name a principal, because only the credential is
         # consulted. `receive` is passed through untouched, so the body has
         # not even been read at the point identity is settled.
-        handle = bind_principal(principal)
+        handle = bind_principal(outcome)
         try:
             await self._app(scope, receive, send)
         finally:
@@ -437,12 +565,28 @@ class AdminAuthMiddleware:
         # handler runs).
         return rule.is_public or not rule.matched
 
-    async def _principal_for(self, scope: Scope) -> Principal | None:
-        raw = cast("list[tuple[bytes, bytes]]", scope["headers"])
-        presented = [v for k, v in raw if k.lower() == b"authorization"]
-        # Exactly one, or none. A dict of headers would keep the last of a
-        # repeated Authorization, so a request carrying two credentials would
-        # be attributed to whichever one we happened to read -- and a proxy in
+    async def _authenticate(self, scope: Scope) -> tuple[Principal | Denied, Scope]:
+        """The principal, and the scope the handler will see.
+
+        With an Authorization header the bearer alone decides, and the scope
+        loses its cookies: the session is not read, refreshed or used as a
+        fallback, and an invalid bearer is a 401 whatever cookie came with it.
+        """
+        presented = header_values(scope, b"authorization")
+        if not presented:
+            return await self._by_session(scope), scope
+        scope = without_cookies(scope)
+        principal = await self._by_bearer(presented)
+        if principal is None:
+            return UNAUTHENTICATED, scope
+        if not is_read(scope) and not origin_allowed(scope, self._authenticator.public_origin):
+            return CROSS_SITE, scope
+        return principal, scope
+
+    async def _by_bearer(self, presented: list[bytes]) -> Principal | None:
+        # Exactly one. A dict of headers would keep the last of a repeated
+        # Authorization, so a request carrying two credentials would be
+        # attributed to whichever one we happened to read -- and a proxy in
         # front that reads the first would disagree with us about who acted.
         # On the surface where attribution is the product, ambiguity about
         # the actor is refused rather than resolved.
@@ -452,6 +596,20 @@ class AdminAuthMiddleware:
         if token is None:
             return None
         return await self._authenticator.principal_for_token(token)
+
+    async def _by_session(self, scope: Scope) -> Principal | Denied:
+        sessions = self._authenticator.sessions
+        session_id = cookie_value(scope, SESSION_COOKIE) if sessions else None
+        if sessions is None or session_id is None:
+            return UNAUTHENTICATED
+        # Before the session is touched: a cross-site request must not even
+        # cause a refresh.
+        if not is_read(scope) and not (
+            csrf_header_present(scope)
+            and origin_allowed(scope, self._authenticator.public_origin)
+        ):
+            return CROSS_SITE
+        return await sessions.authenticate(session_id)
 
 
 async def _refuse(send: Send, status: int, body: bytes) -> None:

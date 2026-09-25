@@ -276,6 +276,14 @@ services:
       # and the root page says the bundle is missing -- a deploy that forgot to
       # build it reads as that rather than as a broken API.
       - ADMIN_CONSOLE_DIR=/app/console
+      # CyberdyneAuth sign-in (docs/admin-console.md). All five or none: a
+      # partial set refuses to start. Unset, `cfa_` tokens are admin as before;
+      # set, people sign in with CyberdyneAuth and tokens are operator only.
+      - ADMIN_OIDC_ISSUER=${ADMIN_OIDC_ISSUER:-}
+      - ADMIN_OIDC_CLIENT_ID=${ADMIN_OIDC_CLIENT_ID:-}
+      - ADMIN_OIDC_CLIENT_SECRET=${ADMIN_OIDC_CLIENT_SECRET:-}
+      - ADMIN_SESSION_KEY=${ADMIN_SESSION_KEY:-}
+      - ADMIN_PUBLIC_URL=${ADMIN_PUBLIC_URL:-}
       # Its own domain. Separate from the MCP one so the console can be closed
       # to the internet without taking retrieval with it.
       - SERVICE_FQDN_ADMIN_8083

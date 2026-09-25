@@ -68,16 +68,85 @@ ORDER BY issued_at, token_hash
 # ordinary path cannot be given a time that suits it.
 APPEND_CONFIG_AUDIT = text("""
 INSERT INTO config_audit
-    (operator, setting, kind, before_value, after_value, reason, recorded_at)
+    (operator, operator_display, setting, kind, before_value, after_value, reason,
+     recorded_at)
 VALUES
-    (:operator, :setting, :kind, :before_value, :after_value, :reason,
+    (:operator, :operator_display, :setting, :kind, :before_value, :after_value, :reason,
      coalesce(CAST(:recorded_at AS timestamptz), now()))
 RETURNING id, recorded_at
 """)
 
 RECENT_CONFIG_AUDIT = text("""
-SELECT id, recorded_at, operator, setting, kind, before_value, after_value, reason
+SELECT id, recorded_at, operator, operator_display, setting, kind, before_value,
+       after_value, reason
 FROM config_audit
 ORDER BY id DESC
 LIMIT :limit
+""")
+
+# --- CyberdyneAuth sign-in (migration 0031) -----------------------------
+#
+# Hashes and ciphertext only: the session id, state, nonce and browser binding
+# are sha256, the verifier and the tokens AES-GCM under ADMIN_SESSION_KEY. No
+# statement here returns content, and none takes a viewer.
+
+INSERT_ADMIN_LOGIN = text("""
+INSERT INTO admin_login
+    (state_hash, nonce_hash, verifier_enc, binding_hash, purpose, link_code_hash,
+     max_age, expires_at)
+VALUES
+    (:state_hash, :nonce_hash, :verifier_enc, :binding_hash, :purpose, :link_code_hash,
+     :max_age, :expires_at)
+""")
+
+# Logins live ten minutes; a day of grace keeps a replayed state explainable
+# in the table while it is still being looked at.
+FORGET_EXPIRED_ADMIN_LOGINS = text("""
+DELETE FROM admin_login WHERE expires_at < CAST(:now AS timestamptz) - interval '1 day'
+""")
+
+# Used once: marking it used is the lookup, so two callbacks with one state
+# cannot both find it.
+CONSUME_ADMIN_LOGIN = text("""
+UPDATE admin_login SET used_at = :now
+WHERE state_hash = :state_hash AND used_at IS NULL AND expires_at > :now
+RETURNING state_hash, nonce_hash, verifier_enc, binding_hash, purpose, link_code_hash,
+          max_age, expires_at
+""")
+
+INSERT_ADMIN_SESSION = text("""
+INSERT INTO admin_session
+    (id_hash, sub, email, roles, access_token_enc, refresh_token_enc, id_token_enc,
+     access_expires_at, created_at, last_seen_at, expires_at)
+VALUES
+    (:id_hash, :sub, :email, :roles, :access_token_enc, :refresh_token_enc, :id_token_enc,
+     :access_expires_at, :created_at, :last_seen_at, :expires_at)
+""")
+
+LIVE_ADMIN_SESSION = text("""
+SELECT id_hash, sub, email, roles, access_token_enc, refresh_token_enc, id_token_enc,
+       access_expires_at, created_at, last_seen_at, expires_at, revoked_at
+FROM admin_session
+WHERE id_hash = :id_hash AND revoked_at IS NULL AND expires_at > :now
+  AND last_seen_at > :idle_since
+""")
+
+REFRESH_ADMIN_SESSION = text("""
+UPDATE admin_session
+SET roles = :roles, access_token_enc = :access_token_enc,
+    refresh_token_enc = :refresh_token_enc, id_token_enc = :id_token_enc,
+    access_expires_at = :access_expires_at, expires_at = :expires_at, last_seen_at = :now
+WHERE id_hash = :id_hash AND revoked_at IS NULL
+""")
+
+TOUCH_ADMIN_SESSION = text("""
+UPDATE admin_session SET last_seen_at = :now
+WHERE id_hash = :id_hash AND revoked_at IS NULL
+""")
+
+REVOKE_ADMIN_SESSION = text("""
+UPDATE admin_session SET revoked_at = :now
+WHERE id_hash = :id_hash AND revoked_at IS NULL
+RETURNING id_hash, sub, email, roles, access_token_enc, refresh_token_enc, id_token_enc,
+          access_expires_at, created_at, last_seen_at, expires_at, revoked_at
 """)

@@ -149,6 +149,7 @@ def _entry(row: RowMapping) -> ChangeRecord:
         before=_optional(row["before_value"]),
         after=_optional(row["after_value"]),
         reason=_optional(row["reason"]),
+        operator_display=_optional(row["operator_display"]),
     )
 
 
@@ -169,6 +170,7 @@ async def append_change(
         admin_sql.APPEND_CONFIG_AUDIT,
         {
             "operator": change.operator,
+            "operator_display": change.operator_display,
             "setting": change.setting,
             "kind": str(change.kind),
             "before_value": change.before,
@@ -187,6 +189,7 @@ async def append_change(
         before=change.before,
         after=change.after,
         reason=change.reason,
+        operator_display=change.operator_display,
     )
 
 

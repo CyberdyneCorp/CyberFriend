@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 
 from chatmemory.admin.access import WRITE_ACCESS, Access, permits, route_keys
 from chatmemory.admin.auth import Operator, Principal, Role
-from chatmemory.admin.server import ROUTE_ACCESS, build_app
+from chatmemory.admin.server import LOGOUT, ROUTE_ACCESS, build_app
 from chatmemory.domain.identity import PersonRef
 from tests.unit.test_admin_api import build_console
 from tests.unit.test_admin_api_federation import ISSUES
@@ -60,7 +60,14 @@ async def test_every_row_names_a_mounted_route(tmp_path: Path) -> None:
 
 
 def test_no_write_is_below_admin() -> None:
-    below = {key: access for key, access in ROUTE_ACCESS.items() if key[0] != "GET"}
+    # Signing out is the one exception, and only narrows access: it is public
+    # so an operator (or a session whose refresh failed) can end it, and it
+    # checks the CSRF header itself.
+    below = {
+        key: access
+        for key, access in ROUTE_ACCESS.items()
+        if key[0] != "GET" and key != LOGOUT
+    }
     assert all(access in WRITE_ACCESS for access in below.values()), below
 
 
@@ -208,6 +215,7 @@ async def test_with_an_issuer_a_token_is_refused_on_every_admin_route() -> None:
 #: a read raised to admin fails here instead of silently leaving the list --
 #: once the issuer is set, that would lock every operator out of the screen.
 OPERATOR_READS = {
+    "/api/session",
     "/api/status",
     "/api/audit",
     "/api/settings",

@@ -48,9 +48,10 @@ WITH previous AS (
         updated_at = EXCLUDED.updated_at
 )
 INSERT INTO config_audit
-    (operator, setting, kind, before_value, after_value, reason, recorded_at)
+    (operator, operator_display, setting, kind, before_value, after_value, reason,
+     recorded_at)
 VALUES (
-    :operator, :key, 'applied', (SELECT value FROM previous), :value, NULL, :at
+    :operator, :display, :key, 'applied', (SELECT value FROM previous), :value, NULL, :at
 )
 """)
 
@@ -64,14 +65,16 @@ WITH removed AS (
     DELETE FROM app_setting WHERE key = :key RETURNING value
 )
 INSERT INTO config_audit
-    (operator, setting, kind, before_value, after_value, reason, recorded_at)
-SELECT :operator, :key, 'applied', removed.value, NULL, :reason, :at FROM removed
+    (operator, operator_display, setting, kind, before_value, after_value, reason,
+     recorded_at)
+SELECT :operator, :display, :key, 'applied', removed.value, NULL, :reason, :at FROM removed
 """)
 
 # No before and no after, deliberately. See the module docstring: the refused
 # value is the one thing that must not be kept.
 RECORD_REFUSAL = text("""
 INSERT INTO config_audit
-    (operator, setting, kind, before_value, after_value, reason, recorded_at)
-VALUES (:operator, :key, 'refused', NULL, NULL, :reason, :at)
+    (operator, operator_display, setting, kind, before_value, after_value, reason,
+     recorded_at)
+VALUES (:operator, :display, :key, 'refused', NULL, NULL, :reason, :at)
 """)

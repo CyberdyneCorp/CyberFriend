@@ -1,11 +1,19 @@
 """The admin console service: the API, the interface, and nothing else.
 
-This process holds **database credentials only**. It has no Discord token, no
-model key and no platform access, and that is the point of the whole change: a
-console that could redeploy would need platform credentials, which is a far
-larger authority than configuring the agent requires -- and is exactly why
-stored configuration exists instead of the console writing environment
-variables.
+This process holds **database credentials**, and -- when CyberdyneAuth sign-in
+is configured -- the OIDC client secret and the key its sessions are encrypted
+under. It has no Discord token, no model key and no platform access, and that
+is the point of the whole change: a console that could redeploy would need
+platform credentials, which is a far larger authority than configuring the
+agent requires -- and is exactly why stored configuration exists instead of
+the console writing environment variables. Neither sign-in secret reaches the
+corpus or the bot's accounts: one lets this process act as the `cyberfriend`
+client at CyberdyneAuth, the other decrypts the tokens in `admin_session`.
+Both are in `admin.oidc.config.SECRET_VARS` and are never logged or shown.
+
+Its only outbound HTTP is to CyberdyneAuth (discovery, keys, token, userinfo,
+revocation), through the transport `build` is given, like the bot's
+`Edges.http_transport`.
 
 Two consequences shape this file:
 
@@ -36,6 +44,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import structlog
 import uvicorn
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -47,6 +56,10 @@ from chatmemory.adapters.store.admin_postgres import (
     PostgresChangeRecord,
     PostgresOperatorTokens,
 )
+from chatmemory.adapters.store.admin_session_postgres import (
+    PostgresLoginStore,
+    PostgresSessionStore,
+)
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.admin.handlers.federation import make_probe
@@ -56,6 +69,13 @@ from chatmemory.admin.handlers.queries import (
     PostgresOptOutDirectory,
 )
 from chatmemory.admin.handlers.services import AdminServices
+from chatmemory.admin.oidc.config import (
+    ISSUER_VAR,
+    SignInSettings,
+    sign_in_settings,
+)
+from chatmemory.admin.oidc.provider import OIDCProvider, ProviderUnavailable
+from chatmemory.admin.oidc.service import SignIn
 from chatmemory.admin.server import build_app
 from chatmemory.app.configuration import (
     SETTINGS,
@@ -80,11 +100,13 @@ not of the corpus.
 CONSOLE_DIR_VAR = "ADMIN_CONSOLE_DIR"
 PORT_VAR = "ADMIN_PORT"
 DATABASE_URL_VAR = "DATABASE_URL"
-OIDC_ISSUER_VAR = "ADMIN_OIDC_ISSUER"
+OIDC_ISSUER_VAR = ISSUER_VAR
 """The CyberdyneAuth issuer. Unset: `cfa_` tokens are admin, as before roles.
 
-Set: tokens are operator (read-only) and admin rights come only from the
-identity provider's role. Unsetting it again is the break-glass rollback.
+Set (with the client id, secret, session key and public URL, see
+`admin.oidc.config`): people sign in with CyberdyneAuth, tokens are operator
+(read-only), and admin rights come only from the identity provider's role.
+Unsetting it again is the break-glass rollback.
 """
 
 FORBIDDEN_CREDENTIALS = ("DISCORD_TOKEN", "LLM_API_KEY", "SERPAPI_KEY")
@@ -152,6 +174,18 @@ def oidc_issuer(environ: Mapping[str, str]) -> str | None:
     return environ.get(OIDC_ISSUER_VAR, "").strip() or None
 
 
+def sign_in(
+    settings: SignInSettings | None,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None,
+) -> SignIn | None:
+    """CyberdyneAuth sign-in over Postgres, or None when it is not configured."""
+    if settings is None:
+        return None
+    provider = OIDCProvider(settings, transport=transport)
+    return SignIn(settings, provider, PostgresLoginStore(engine), PostgresSessionStore(engine))
+
+
 def database_url(environ: Mapping[str, str]) -> str:
     url = environ.get(DATABASE_URL_VAR, "").strip()
     if not url:
@@ -190,15 +224,26 @@ class ConsoleProcess:
     configuration: RuntimeConfiguration
     engine: AsyncEngine
     port: int
+    #: CyberdyneAuth sign-in, or None when it is not configured.
+    sign_in: SignIn | None = None
 
 
-def build(environ: Mapping[str, str]) -> ConsoleProcess:
+def build(
+    environ: Mapping[str, str], *, transport: httpx.AsyncBaseTransport | None = None
+) -> ConsoleProcess:
     """Wire the console from the environment. Connects to nothing yet.
 
     `create_async_engine` is lazy, so this does no I/O: the first connection
-    happens on the first request or the first refresh.
+    happens on the first request or the first refresh, and CyberdyneAuth's
+    discovery on the first sign-in (or `main`'s warm-up). `transport` carries
+    every outbound call to CyberdyneAuth; None is the real network.
+
+    Sign-in partly configured raises `MisconfiguredSignIn`, naming what is
+    missing: the issuer alone would downscope every token to operator with no
+    way left to sign in as admin.
     """
     warn_about_credentials(environ)
+    settings = sign_in_settings(environ)
 
     # No schema creation here: `app_setting`, `admin_token` and `config_audit`
     # belong to migrations 0011 and 0012. A service that creates its own tables
@@ -223,18 +268,35 @@ def build(environ: Mapping[str, str]) -> ConsoleProcess:
         mcp_tokens=PostgresTokenStore(engine),
         probe=make_probe(),
     )
+    signing_in = sign_in(settings, engine, transport)
     return ConsoleProcess(
         app=build_app(
             services,
             PostgresOperatorTokens(engine),
             console_dir(environ),
-            oidc_configured=oidc_issuer(environ) is not None,
+            oidc_configured=settings is not None,
+            sign_in=signing_in,
         ),
         services=services,
         configuration=configuration,
         engine=engine,
         port=port(environ),
+        sign_in=signing_in,
     )
+
+
+async def warm_up(signing_in: SignIn | None) -> None:
+    """Fetch discovery at startup, so a bad issuer shows in the log at once.
+
+    Best effort: CyberdyneAuth being down must not stop the console, whose
+    bearer tokens and existing sessions keep working without it.
+    """
+    if signing_in is None:
+        return
+    try:
+        await signing_in.provider.discovery()
+    except ProviderUnavailable as exc:
+        log.error("admin.oidc.discovery_failed", error=str(exc))
 
 
 async def main() -> None:
@@ -245,8 +307,10 @@ async def main() -> None:
         port=built.port,
         console=str(console_dir(os.environ) or "not configured"),
         settings=len(SETTINGS),
-        token_role="operator" if oidc_issuer(os.environ) else "admin",
+        token_role="operator" if built.sign_in else "admin",
+        sign_in="cyberdyneauth" if built.sign_in else "off",
     )
+    await warm_up(built.sign_in)
     config = uvicorn.Config(
         built.app, host="0.0.0.0", port=built.port, log_level="warning"
     )

@@ -291,12 +291,14 @@ async def test_naming_an_operator_without_a_credential_still_refuses() -> None:
     assert response.status_code == 401
 
 
-def test_the_middleware_reads_no_header_but_authorization() -> None:
+def test_the_middleware_reads_no_header_but_the_credentials_and_origin() -> None:
     """Structural, because the behavioural tests can only cover names we guess.
 
     A header this file never thought of is exactly how a caller-supplied
     identity gets read back in, so the check is on what the module can read
-    at all rather than on a list of forbidden names.
+    at all rather than on a list of forbidden names. Identity comes from
+    `authorization` or the session `cookie`; `origin` (and the CSRF header)
+    can only refuse a request, never name anyone.
     """
     source = (Path(chatmemory.__file__).parent / "admin" / "auth.py").read_text()
     tree = ast.parse(source)
@@ -306,8 +308,8 @@ def test_the_middleware_reads_no_header_but_authorization() -> None:
         if isinstance(node, ast.Constant) and isinstance(node.value, bytes)
     }
     header_names = {b for b in byte_literals if b.islower() and b.isalpha()}
-    assert header_names == {b"authorization"}, (
-        f"the middleware compares header names other than authorization: {header_names}"
+    assert header_names == {b"authorization", b"cookie", b"origin"}, (
+        f"the middleware compares header names it should not: {header_names}"
     )
     # The body is never read for identity: `receive` is passed straight
     # through, and the query string is not consulted at all.
