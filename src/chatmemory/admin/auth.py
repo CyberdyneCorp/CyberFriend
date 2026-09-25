@@ -418,7 +418,7 @@ class AdminAuthMiddleware:
             unbind_principal(handle)
 
     def _is_open(self, scope: Scope, rule: Rule) -> bool:
-        """A public row, or a path no route claims outside the protected prefix.
+        """Outside the protected prefix: a public row, or a path no route claims.
 
         `get_route_path`, never `scope["path"]`: the router matches routes on
         the path with `root_path` stripped, and a guard that matched on the
@@ -428,11 +428,14 @@ class AdminAuthMiddleware:
         to the handler the router then resolves for "/api/settings". The
         guard has to answer the same question the router will.
         """
-        if rule.is_public:
-            return True
-        # Nothing claims it, so the router answers 404 and no handler runs.
-        # Under the prefix it is still authenticated first: fail closed.
-        return not rule.matched and not get_route_path(scope).startswith(self._prefix)
+        # Under the prefix a request is authenticated first, whatever claims
+        # it: the bundle's Mount at "/" also matches "/api" and "/apix", and
+        # a public row reached that way must not open the prefix.
+        if get_route_path(scope).startswith(self._prefix):
+            return False
+        # A public row, or nothing claims it (the router answers 404 and no
+        # handler runs).
+        return rule.is_public or not rule.matched
 
     async def _principal_for(self, scope: Scope) -> Principal | None:
         raw = cast("list[tuple[bytes, bytes]]", scope["headers"])

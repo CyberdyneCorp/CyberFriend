@@ -15,7 +15,7 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from chatmemory.admin.access import WRITE_ACCESS, Access, route_keys
+from chatmemory.admin.access import WRITE_ACCESS, Access, permits, route_keys
 from chatmemory.admin.auth import Operator, Principal, Role
 from chatmemory.admin.server import ROUTE_ACCESS, build_app
 from chatmemory.domain.identity import PersonRef
@@ -99,6 +99,32 @@ async def test_a_route_without_a_row_is_refused_before_its_handler_runs() -> Non
 # --- principals --------------------------------------------------------
 
 
+def test_personal_content_needs_an_admin_signed_in_as_a_person() -> None:
+    """A break-glass token is never enough for `admin_oidc`, even when admin."""
+    token_admin = Principal("ana", "ana", frozenset({Role.ADMIN}), "token")
+    person_admin = Principal("ana", "oidc:ana", frozenset({Role.ADMIN}), "oidc")
+    person_operator = Principal("ben", "oidc:ben", frozenset({Role.OPERATOR}), "oidc")
+
+    assert not permits(token_admin, Access.ADMIN_OIDC)
+    assert permits(person_admin, Access.ADMIN_OIDC)
+    assert not permits(person_operator, Access.ADMIN_OIDC)
+
+
+async def test_an_admin_oidc_route_refuses_an_admin_token() -> None:
+    console = await build_console()  # no issuer: the token is admin
+    table = {**ROUTE_ACCESS, ("POST", "/api/optouts"): Access.ADMIN_OIDC}
+    app = build_app(console.services, console.tokens, route_access=table)
+
+    response = TestClient(app).post(
+        "/api/optouts",
+        json={"platform": "discord", "platform_user_id": 42},
+        headers=console.auth(),
+    )
+
+    assert (response.status_code, response.json()) == (403, REQUIRES_ADMIN)
+    assert console.optouts.purged == []
+
+
 def test_admin_implies_operator() -> None:
     admin = Principal("ana", "ana", frozenset({Role.ADMIN}), "oidc")
     assert admin.has(Role.OPERATOR)
@@ -178,15 +204,34 @@ async def test_with_an_issuer_a_token_is_refused_on_every_admin_route() -> None:
     assert console.changes._entries == []  # noqa: SLF001
 
 
-async def test_with_an_issuer_a_token_still_reads() -> None:
-    console = await build_console(oidc_configured=True)
-    reads = [
+#: What an operator reads today. Fixed rather than derived from the table, so
+#: a read raised to admin fails here instead of silently leaving the list --
+#: once the issuer is set, that would lock every operator out of the screen.
+OPERATOR_READS = {
+    "/api/status",
+    "/api/audit",
+    "/api/settings",
+    "/api/federation/servers",
+    "/api/federation/allowlist",
+    "/api/channels",
+    "/api/optouts",
+    "/api/tokens",
+}
+
+
+def test_the_operator_reads_are_exactly_the_screens_operators_use() -> None:
+    reads = {
         path
         for (method, path), access in ROUTE_ACCESS.items()
         if method == "GET" and access is Access.OPERATOR and "{" not in path
-    ]
+    }
+    assert reads == OPERATOR_READS
 
-    for path in reads:
+
+async def test_with_an_issuer_a_token_still_reads() -> None:
+    console = await build_console(oidc_configured=True)
+
+    for path in sorted(OPERATOR_READS):
         assert console.client.get(path, headers=console.auth()).status_code == 200, path
     assert console.client.head("/api/status", headers=console.auth()).status_code == 200
 
@@ -225,3 +270,30 @@ async def test_the_refusal_without_a_credential_is_byte_identical_everywhere(
     assert refusals == {
         (401, b'{"error":"unauthorized"}', 'Bearer realm="chatmemory-admin"', "application/json")
     }
+
+
+# --- outside /api, and the prefix itself --------------------------------
+
+
+async def test_a_wrong_method_on_a_probe_is_refused_not_405() -> None:
+    """No row, no access -- a public GET row does not open the route's other verbs."""
+    console = await build_console()
+
+    anonymous = console.client.post("/health")
+    with_token = console.client.post("/health", headers=console.auth())
+
+    assert anonymous.status_code == 401
+    assert anonymous.headers["www-authenticate"] == 'Bearer realm="chatmemory-admin"'
+    assert (with_token.status_code, with_token.json()) == (403, {"error": "forbidden"})
+
+
+async def test_the_bundle_is_public_and_the_prefix_is_not(tmp_path: Path) -> None:
+    """The Mount at "/" claims "/api" and "/apix" too; they stay authenticated."""
+    (tmp_path / "index.html").write_text("<!doctype html><title>console</title>")
+    console = await build_console()
+    client = TestClient(build_app(console.services, console.tokens, tmp_path))
+
+    assert client.get("/index.html").status_code == 200
+    assert client.post("/index.html").status_code == 401
+    for path in ("/api", "/apix", "/api/", "/api/messages"):
+        assert client.get(path).status_code == 401, path

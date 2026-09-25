@@ -378,6 +378,14 @@ against the router's own route list, so:
 - an unauthenticated request still gets the one byte-identical 401, whatever
   the route's role.
 
+"No row" covers the open routes' other verbs too. `/health`, `/ready` and the
+bundle are public for GET (and HEAD) only: `POST /health` or `POST
+/index.html` is no longer the router's 405 but a 401 without a credential and
+a 403 `{"error":"forbidden"}` with one. Everything whose path starts with
+`/api` is authenticated first even when the bundle's mount at `/` is what
+claims it, so `GET /api` or `GET /apix` without a credential is the same 401
+as any API route.
+
 `tests/unit/test_admin_roles.py` walks every mounted route and fails on a
 route without a row, a row without a route, a write below admin, or anything
 under `/api` marked public. Adding a route means adding its row in the same

@@ -28,6 +28,7 @@ from chatmemory.adapters.store.admin_postgres import (
     PostgresOperatorTokens,
 )
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.admin.auth import Operator
 from chatmemory.admin.handlers.queries import (
     PostgresChannelDirectory,
     PostgresCorpusStatus,
@@ -299,3 +300,46 @@ def test_a_missing_bundle_says_so_rather_than_404() -> None:
 
     assert response.status_code == 200
     assert "interface bundle is not here" in response.text
+
+
+# --- ADMIN_OIDC_ISSUER reaches the token role -----------------------------
+
+
+@pytest.fixture
+def any_token_is_ana(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every `cfa_` token resolves to one operator, without a database."""
+
+    async def operator_for_token(_self: object, _token: str) -> Operator:
+        return Operator("ana")
+
+    monkeypatch.setattr(PostgresOperatorTokens, "operator_for_token", operator_for_token)
+
+
+def _opt_out_as_a_token(environ: dict[str, str]) -> tuple[int, object]:
+    # An empty body: past the role check the handler refuses it with 400
+    # before touching the database, so the status alone says which side of
+    # the role check the request landed on.
+    client = TestClient(admin.build(environ).app, raise_server_exceptions=False)
+    response = client.post(
+        "/api/optouts", json={}, headers={"Authorization": "Bearer cfa_anything"}
+    )
+    return response.status_code, response.json()
+
+
+@pytest.mark.usefixtures("any_token_is_ana")
+def test_setting_the_issuer_makes_every_token_operator_only() -> None:
+    """The production path: the variable, through build(), to the middleware."""
+    status, body = _opt_out_as_a_token({**ENVIRON, "ADMIN_OIDC_ISSUER": "https://idp"})
+
+    assert (status, body) == (403, {"error": "requires admin"})
+
+
+@pytest.mark.usefixtures("any_token_is_ana")
+@pytest.mark.parametrize("issuer", [None, "", "   "])
+def test_without_an_issuer_a_token_stays_admin(issuer: str | None) -> None:
+    """Unset or blank is not an issuer: downscoping then would lock everyone out."""
+    environ = dict(ENVIRON) if issuer is None else {**ENVIRON, "ADMIN_OIDC_ISSUER": issuer}
+
+    status, _ = _opt_out_as_a_token(environ)
+
+    assert status == 400
