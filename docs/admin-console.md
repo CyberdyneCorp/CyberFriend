@@ -15,7 +15,7 @@ Source is in `console/`. Build output is `console/dist/`, which is
 cd console
 npm install          # once
 npm run build        # type-checks, then emits console/dist/
-npm test             # unit tests, including the browser-storage guard
+npm test             # unit tests, including the browser-storage guard (CI runs these)
 ```
 
 Development against a running admin API:
@@ -171,6 +171,16 @@ fetch client. It is a source scan rather than a behavioural test because the
 failure it prevents is a "remember me" checkbox added in six months, which no
 test of today's code would notice.
 
+The scan covers every file type the console may be written in (`.ts`, `.tsx`,
+`.svelte`, `.svelte.ts`) and ignores comments, HTML comments included, so a
+file can explain why it avoids `localStorage` without failing. It checks
+itself against the fixtures in `console/fixtures/storage-guard/`: a Svelte
+component and a `.svelte.ts` module that reach for storage must be caught, and
+a component that only mentions it in comments must not.
+
+CI runs the console's tests and build in a `console` job of its own, so a
+broken console test or a tripped guard fails the pull request.
+
 ### A tool that changes state never looks like one that does not
 
 `effectOf()` in `src/domain/effect.ts` has one rule worth reading: a tool whose
@@ -228,6 +238,45 @@ and records the attempt without the text. A tool the server itself advertised
 is different -- that name was already ours -- and a refusal about one does say
 which tool it was, which is what makes "somebody tried to enable this" worth
 reading a week later.
+
+## The Svelte rewrite, in `console-svelte/`
+
+The console is being ported to Svelte 5 (runes) + Vite, without SvelteKit
+(`openspec/changes/rewrite-console-svelte`). Until the swap, `console/` (React)
+is the bundle that is built into the image and served; `console-svelte/` is
+built, linted and tested in CI (the `console-svelte` job) and is listed in
+`.dockerignore`.
+
+```bash
+cd console-svelte
+npm ci
+npm run lint     # eslint, including sonarjs cognitive complexity <= 12 per function
+npm test         # domain, services, view-models, guards, and sign-in + Status end to end
+npm run build    # svelte-check, then dist/ (same base "./", sourcemaps, dev proxy)
+```
+
+The source is in four layers, and `src/architecture.test.ts` fails on an
+import that breaks the direction:
+
+| Layer | Holds | May import |
+| --- | --- | --- |
+| `domain/` | Pure rules and API types (`effect`, `settings`, `person`, `format`, `roles`) | nothing |
+| `services/` | `http.ts` (the only `fetch`, the bearer, the 401 rule), `adminApi.ts`, `session.ts`, `hashLocation.ts` | domain, types only |
+| `viewmodels/` | `*.svelte.ts` classes: `Resource`, `Action`, `SessionVM`, `Router`, `StatusVM`, `ConsoleVM` | services, domain |
+| `views/` | Screens and components, bound to a view-model | viewmodels, domain |
+
+`main.ts` is the composition root: it builds a `ConsoleVM` from the real
+services and mounts `views/App.svelte`. A view asks the `ConsoleVM` for its
+screen's view-model, so no view names a service, and a test builds a
+view-model with fakes (`new StatusVM(fakeApi)`) and drives it without a DOM.
+
+The router is a hash router over a route table in `views/routes.ts`. Every
+route declares a `minRole` (`operator` or `admin`) with no default; the
+navigation shows the routes the session's role allows, and the server stays
+the authority. An address that names no screen is rewritten to `#/status`.
+
+Status and sign-in are ported and serve as the template for the other
+screens, which show a "Not ported yet" panel in this tree until they are.
 
 ## Tests
 

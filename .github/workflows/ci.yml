@@ -92,3 +92,64 @@ jobs:
         env:
           E2E_REQUIRE_DB: "1"
         run: pytest tests/e2e -q --durations=10
+
+  # The operator console's own tests, including the browser-storage guard that
+  # keeps the admin token in memory. A job of its own so a Python failure
+  # cannot hide a console one, and the other way round.
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      # Type-checks, then bundles: the same build the image runs.
+      - name: Build
+        run: npm run build
+
+  # The Svelte rewrite of the console, built, linted and tested while it grows
+  # beside console/. Nothing here reaches the image: the Dockerfile copies
+  # console/ only, and the swap folds this job into the one above.
+  console-svelte:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console-svelte
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console-svelte/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # Includes the cognitive-complexity limit (12 per function).
+      - name: Lint
+        run: npm run lint
+
+      # The layer rule and the browser-storage guard are tests, so they run here.
+      - name: Test
+        run: npm test
+
+      # svelte-check, then the bundle.
+      - name: Build
+        run: npm run build
