@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 
+from chatmemory.app.decisions.model import ExtractedDecision
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
 
@@ -83,6 +84,11 @@ class AddresseeSignal(StrEnum):
     #: when it mentions nobody -- and without this signal every commitment
     #: made into an empty room is invisible to "what do I need to do".
     FIRST_PERSON = "first_person"
+    #: The message concludes a choice ("fechou, vamos com Postgres", "we
+    #: decided to ship Friday"). Not an addressee at all: it is here because
+    #: the same model call reads decisions, and without it a decision nobody
+    #: was addressed in would never be read.
+    DECISION = "decision"
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +180,18 @@ class ExtractedAsk:
     confidence: float
     addressee_hint: str | None = None
     addressee_is_group: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Extraction:
+    """Everything one model call reported about one candidate message.
+
+    Asks and decisions come back together because they are read in the same
+    call: a second pass over the same message would pay for it twice.
+    """
+
+    asks: tuple[ExtractedAsk, ...] = ()
+    decisions: tuple[ExtractedDecision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

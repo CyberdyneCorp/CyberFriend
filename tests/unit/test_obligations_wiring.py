@@ -644,6 +644,13 @@ def test_an_injected_extractor_is_kept_even_when_falsy() -> None:
     assert pipeline.worker._extraction._extractor is extractor
 
 
+def test_ingest_gives_the_service_the_decision_log() -> None:
+    """A deletion is a tombstone, which no cascade sees; without `decisions=`
+    the retracted words stay restated in the decision log."""
+    main = _function(SRC / "entrypoints" / "ingest.py", "main")
+    assert _calls(main, "IngestService", keyword="decisions")
+
+
 def test_the_obligation_service_cannot_be_asked_without_a_viewer() -> None:
     for method in ("asked_of_me", "what_i_need_to_do", "outstanding_count"):
         parameter = inspect.signature(getattr(ObligationService, method)).parameters["viewer"]

@@ -64,10 +64,18 @@ class PersonPurge:
     asks: int = 0
     reactions: int = 0
     mentions: int = 0
+    decisions: int = 0
 
     @property
     def total(self) -> int:
-        return self.windows + self.messages + self.asks + self.reactions + self.mentions
+        return (
+            self.windows
+            + self.messages
+            + self.asks
+            + self.reactions
+            + self.mentions
+            + self.decisions
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +155,7 @@ class OptOutService:
             asks=corpus.asks,
             reactions=corpus.reactions,
             mentions=corpus.mentions,
+            decisions=corpus.decisions,
             documents=documents,
         )
         return report

@@ -220,6 +220,26 @@ async def test_delete_tombstones_the_message() -> None:
     assert store.tombstoned == [1]
 
 
+class DecisionLog:
+    def __init__(self) -> None:
+        self.withdrawn: list[int] = []
+
+    async def withdraw_message(self, message_id: int) -> int:
+        self.withdrawn.append(message_id)
+        return 1
+
+
+async def test_delete_withdraws_the_decisions_resting_on_the_message() -> None:
+    """A tombstone fires no cascade, so the decision log is told directly."""
+    decisions = DecisionLog()
+    service = IngestService(
+        FakeSource([]), FakeStore(), WindowBuilder(), frozenset({INDEXED}),
+        decisions=decisions,
+    )
+    await service.handle_delete(1)
+    assert decisions.withdrawn == [1]
+
+
 # --- embeddings --------------------------------------------------------
 
 

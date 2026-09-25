@@ -103,6 +103,7 @@ from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
 from chatmemory.adapters.store.alerts_postgres import PostgresAlertStore
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
@@ -1374,10 +1375,27 @@ class AskPipeline:
     state: AskStateService
     directory: ObservedDirectory
     usage: UsageMeter
+    decisions: PostgresDecisionStore
+
+
+def build_decision_store(
+    settings: Settings, engine: AsyncEngine, embeddings: EmbeddingClient | None = None
+) -> PostgresDecisionStore:
+    """The decision log, embedding through `embeddings` or the configured endpoint.
+
+    Its own builder because ingest needs it even with extraction switched off:
+    deleting a message has to withdraw the decisions recorded before it was.
+    """
+    return PostgresDecisionStore(
+        engine, embeddings if embeddings is not None else build_embeddings(settings)
+    )
 
 
 def build_ask_pipeline(
-    settings: Settings, engine: AsyncEngine, extractor: AskExtractor | None = None
+    settings: Settings,
+    engine: AsyncEngine,
+    extractor: AskExtractor | None = None,
+    embeddings: EmbeddingClient | None = None,
 ) -> AskPipeline:
     """Assemble the extraction pass for the ingest process.
 
@@ -1390,8 +1408,13 @@ def build_ask_pipeline(
     test hands a scripted one, so everything behind it -- candidate
     filtering, resolution, the store -- is the pipeline ingest runs. `usage`
     then counts nothing, because nothing here was billed.
+
+    The same pass records decisions, embedded at write time through
+    `embeddings`: production leaves it unset and gets the configured
+    embedding endpoint, and an end-to-end test hands its offline one.
     """
     store = PostgresAskStore(engine)
+    decisions = build_decision_store(settings, engine, embeddings)
     directory = ObservedDirectory()
     usage = UsageMeter()
     extraction = ExtractionService(
@@ -1409,6 +1432,7 @@ def build_ask_pipeline(
         directory=directory,
         candidates=CandidateFilter(),
         policy=ask_policy(settings),
+        decisions=decisions,
     )
     log.info(
         "composition.ask_extraction",
@@ -1427,6 +1451,7 @@ def build_ask_pipeline(
         state=AskStateService(store, ask_policy(settings)),
         directory=directory,
         usage=usage,
+        decisions=decisions,
     )
 
 

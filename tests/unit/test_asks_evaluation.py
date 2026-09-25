@@ -14,18 +14,23 @@ from __future__ import annotations
 
 from chatmemory.app.asks.evaluation import (
     ADDRESSEE_GATE,
+    DECISION_EXAMPLES,
+    DECISION_PRECISION_GATE,
     EXAMPLES,
     GROUP,
     PEOPLE,
     PRECISION_GATE,
     Metrics,
     candidate_of,
+    decision_candidate_of,
     directory,
     evaluate,
+    evaluate_decisions,
     is_candidate,
 )
 from chatmemory.app.asks.model import Ask, AskKind, ExtractedAsk, ask_key
 from chatmemory.app.asks.resolution import resolve_addressee
+from chatmemory.app.decisions.model import ExtractedDecision
 
 #: What an ideal model would return as the addressee for each positive example.
 #: Written out rather than derived from the label, because the interesting case
@@ -168,3 +173,68 @@ def _any_ask(kind: AskKind = AskKind.REQUEST, confidence: float = 0.9) -> Ask:
         confidence=confidence,
         asked_at=T0,
     )
+
+
+# --- the decision set ------------------------------------------------------
+
+
+def test_every_decision_example_is_labelled_consistently() -> None:
+    ids = [e.example_id for e in DECISION_EXAMPLES]
+    assert len(ids) == len(set(ids))
+    for example in DECISION_EXAMPLES:
+        assert example.author in PEOPLE
+        assert all(author in PEOPLE for author, _ in example.context)
+
+
+def test_the_decision_set_covers_both_languages_and_can_fail_on_precision() -> None:
+    positives = [e for e in DECISION_EXAMPLES if e.decides]
+    negatives = [e for e in DECISION_EXAMPLES if not e.decides]
+    assert len(positives) <= len(negatives)
+    for language in ("pt-", "en-"):
+        assert any(e.example_id.startswith(language) for e in positives)
+        assert any(e.example_id.startswith(language) for e in negatives)
+
+
+def test_every_decision_survives_the_cost_filter() -> None:
+    """A decision the filter drops is never recorded at any quality."""
+    missed = []
+    for index, example in enumerate(DECISION_EXAMPLES):
+        if not example.decides:
+            continue
+        try:
+            decision_candidate_of(example, index)
+        except LookupError:
+            missed.append(example.example_id)
+    assert missed == []
+
+
+def test_every_near_miss_reaches_the_extractor() -> None:
+    """They share the markers, so the model -- not the filter -- is measured."""
+    for index, example in enumerate(DECISION_EXAMPLES):
+        if not example.decides:
+            decision_candidate_of(example, index)
+
+
+def test_the_proposal_is_shown_as_context_to_the_decision() -> None:
+    index, example = next(
+        (i, e) for i, e in enumerate(DECISION_EXAMPLES) if e.example_id == "pt-fechou"
+    )
+    candidate = decision_candidate_of(example, index)
+    assert [m.content for m in candidate.context] == [c for _, c in example.context]
+
+
+def test_a_decision_found_in_a_proposal_is_a_false_positive() -> None:
+    metrics = evaluate_decisions({"pt-proposta": [_decision()]})
+    assert metrics.false_positives == 1
+    assert metrics.precision == 0.0
+
+
+def test_ideal_decisions_meet_the_gate_and_weak_ones_are_not_scored() -> None:
+    ideal = {e.example_id: [_decision()] for e in DECISION_EXAMPLES if e.decides}
+    metrics = evaluate_decisions({**ideal, "pt-convite": [_decision(confidence=0.3)]})
+    assert metrics.precision >= DECISION_PRECISION_GATE
+    assert metrics.recall == 1.0
+
+
+def _decision(confidence: float = 0.9) -> ExtractedDecision:
+    return ExtractedDecision(summary="deploy na sexta", topic="deploy", confidence=confidence)

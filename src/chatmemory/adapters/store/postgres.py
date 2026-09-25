@@ -24,7 +24,7 @@ from chatmemory.domain.search import (
     SearchQuery,
 )
 from chatmemory.ports.sources import EmbeddingClient
-from chatmemory.ports.store import PendingExtraction
+from chatmemory.ports.store import ExtractionContext, PendingExtraction
 
 log = structlog.get_logger()
 
@@ -468,6 +468,34 @@ class PostgresStore:
                 },
             )
             return result.rowcount or 0
+
+    async def extraction_context(
+        self, messages: Sequence[Message], limit: int
+    ) -> ExtractionContext:
+        ids = [m.platform_message_id for m in messages]
+        if not ids:
+            return ExtractionContext()
+        # Every message asked about gets an entry, empty or not: an absent
+        # entry would send the caller back to the batch's partial context.
+        preceding: dict[int, list[Message]] = {mid: [] for mid in ids}
+        parents: dict[int, Message] = {}
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                sql.EXTRACTION_CONTEXT, {"ids": ids, "limit": limit, "platform": PLATFORM}
+            )
+            for row in rows.mappings():
+                shown = _message_from_row(row)
+                if row["role"] == "parent":
+                    parents[shown.platform_message_id] = shown
+                else:
+                    preceding[cast(int, row["context_for"])].append(shown)
+        return ExtractionContext(
+            preceding={
+                mid: tuple(sorted(found, key=lambda m: (m.created_at, m.platform_message_id)))
+                for mid, found in preceding.items()
+            },
+            parents=parents,
+        )
 
     async def pending_extraction_count(
         self, cap: int = 1000, channels: Sequence[ChannelRef] = ()

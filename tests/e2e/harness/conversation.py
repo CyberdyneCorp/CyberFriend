@@ -394,6 +394,18 @@ class E2EBot:
         kind with several, any one of them -- use `fact_rows`)."""
         return dict(await self.fact_rows(who))
 
+    async def decision_rows(self) -> list[Row[Any]]:
+        """Every stored decision, oldest first, by SQL. There is no read path yet."""
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                text(
+                    "SELECT source_message_id, channel_id, summary, topic, "
+                    "evidence_message_ids, embedding IS NOT NULL AS embedded "
+                    "FROM decision ORDER BY decided_at, id"
+                )
+            )
+            return list(rows)
+
     async def fact_rows(self, who: discord.Member) -> list[tuple[str, str]]:
         """Every stored (kind, value), in the order saved, by SQL."""
         async with self.engine.connect() as conn:

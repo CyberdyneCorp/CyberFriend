@@ -41,10 +41,11 @@ from typing import Protocol
 
 import structlog
 
+from chatmemory.app.asks.candidates import CONTEXT_MESSAGES
 from chatmemory.app.asks.extraction import ExtractionReport, ExtractionService
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
-from chatmemory.ports.store import PendingExtraction
+from chatmemory.ports.store import ExtractionContext, PendingExtraction
 
 log = structlog.get_logger()
 
@@ -76,6 +77,10 @@ class ExtractionLedger(Protocol):
         ...
 
     async def record_extraction(self, entries: Sequence[PendingExtraction]) -> int: ...
+
+    async def extraction_context(
+        self, messages: Sequence[Message], limit: int
+    ) -> ExtractionContext: ...
 
     async def pending_extraction_count(
         self, cap: int = 1000, channels: Sequence[ChannelRef] = ()
@@ -122,6 +127,8 @@ class ExtractionProgress:
     extracted: int = 0
     recorded: int = 0
     failed: int = 0
+    decisions: int = 0
+    decisions_failed: int = 0
     batches_failed: int = 0
     last_flush_at: float | None = None
 
@@ -135,6 +142,8 @@ class ExtractionProgress:
             "extracted": self.extracted,
             "recorded": self.recorded,
             "failed": self.failed,
+            "decisions": self.decisions,
+            "decisions_failed": self.decisions_failed,
             "batches_failed": self.batches_failed,
             "last_flush_at": self.last_flush_at,
         }
@@ -289,7 +298,10 @@ class ExtractionWorker:
         return len(batch)
 
     async def extract_batch(
-        self, messages: Sequence[Message], parents: Mapping[int, Message] | None = None
+        self,
+        messages: Sequence[Message],
+        parents: Mapping[int, Message] | None = None,
+        preceding: Mapping[int, Sequence[Message]] | None = None,
     ) -> bool:
         """Extract from one batch, absorbing its failure. True if it ran.
 
@@ -309,7 +321,7 @@ class ExtractionWorker:
                 self._directory.observe(message)
 
         try:
-            report = await self._extraction.extract_window(messages, parents)
+            report = await self._extraction.extract_window(messages, parents, preceding)
         except Exception:
             # One channel's batch must not end the pass. The messages are
             # already persisted, so nothing is lost that a later re-extraction
@@ -353,6 +365,8 @@ class ExtractionWorker:
             extracted=current.extracted + report.extracted,
             recorded=current.recorded + report.recorded,
             failed=current.failed + report.failed,
+            decisions=current.decisions + report.decisions,
+            decisions_failed=current.decisions_failed + report.decisions_failed,
             last_flush_at=time.time(),
         )
 
@@ -430,6 +444,7 @@ class BacklogExtractionWorker:
         messages_per_pass: int = BACKLOG_MESSAGES_PER_PASS,
         batch_messages: int = WINDOW_MESSAGES,
         count_cap: int = BACKLOG_COUNT_CAP,
+        context_messages: int = CONTEXT_MESSAGES,
     ) -> None:
         self._worker = worker
         self._ledger = ledger
@@ -441,6 +456,7 @@ class BacklogExtractionWorker:
         self._per_pass = messages_per_pass
         self._batch = batch_messages
         self._cap = count_cap
+        self._context = context_messages
         self._progress = BacklogProgress()
 
     @property
@@ -490,7 +506,11 @@ class BacklogExtractionWorker:
     async def _extract_chunk(
         self, chunk: Sequence[PendingExtraction], parents: Mapping[int, Message]
     ) -> int:
-        if not await self._worker.extract_batch([e.message for e in chunk], parents):
+        messages = [e.message for e in chunk]
+        context = await self._conversation(messages)
+        if context is None or not await self._worker.extract_batch(
+            messages, {**parents, **context.parents}, context.preceding
+        ):
             # Left unrecorded on purpose. An unrecorded message is one the next
             # pass reads again, so a batch that failed on a transient model or
             # store error costs a retry rather than a hole in the obligations
@@ -508,6 +528,21 @@ class BacklogExtractionWorker:
             recorded=self._progress.recorded + recorded,
         )
         return len(chunk)
+
+    async def _conversation(self, messages: Sequence[Message]) -> ExtractionContext | None:
+        """The corpus's conversation around a chunk, or None to retry it later.
+
+        A chunk is what is pending, which is contiguous history after a
+        backfill but a lone message after an edit. Extracting it without its
+        conversation is worse than not extracting it: the re-run replaces the
+        message's decisions, and a conclusion read without the proposal it
+        settled reads as no decision at all.
+        """
+        try:
+            return await self._ledger.extraction_context(messages, self._context)
+        except Exception:
+            log.exception("asks.backlog_context_failed", count=len(messages))
+            return None
 
     async def _record(self, chunk: Sequence[PendingExtraction]) -> int:
         """Mark the chunk read, at the revisions that were read.

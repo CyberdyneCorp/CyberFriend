@@ -1,4 +1,4 @@
-"""Ask extraction over any OpenAI-compatible endpoint.
+"""Ask and decision extraction over any OpenAI-compatible endpoint.
 
 Same shape as `embeddings.py`, for the same reason: the base URL is
 configuration, so the extractor runs against OpenAI, a LiteLLM proxy or a
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -25,12 +25,12 @@ from openai import APIError, AsyncOpenAI, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject, ResponseFormatJSONSchema
 
-from chatmemory.app.asks.model import AskCandidate, ExtractedAsk
+from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.prompt import (
     OUTPUT_SCHEMA,
     RESPONSE_FORMAT,
     SYSTEM_PROMPT,
-    parse_extractions,
+    parse_extraction,
     render_candidate,
 )
 from chatmemory.domain.identity import PersonRef
@@ -87,11 +87,11 @@ class OpenAICompatibleAskExtractor:
         self._config = config
         self.usage = usage or UsageMeter()
 
-    async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]:
+    async def extract(self, candidate: AskCandidate) -> Extraction:
         payload = await self._call(render_candidate(candidate, self._config.names))
         if payload is None:
-            return []
-        return parse_extractions(payload)
+            return Extraction()
+        return parse_extraction(payload)
 
     async def _call(self, rendered: str) -> Mapping[str, Any] | None:
         delay = 1.0

@@ -13,6 +13,11 @@ to doubt. Recall is reported so the trade is visible, not enforced.
 Addressee accuracy is measured separately because it is the likeliest source of
 wrong entries, and because an ask attributed to the wrong person is worse than
 one left unattributed.
+
+Decisions ride the same model call, so they have a set of their own here, in
+Portuguese and English, gated on precision the same way: a false "we decided
+X" is worse than a missed one, because it is repeated as settled. The ask set
+has to keep passing too, since the prompt both are read by is shared.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from chatmemory.app.asks.model import (
     AskPolicy,
 )
 from chatmemory.app.asks.resolution import StaticDirectory
+from chatmemory.app.decisions.model import DecisionPolicy, ExtractedDecision
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
 
@@ -385,6 +391,186 @@ def _addressee_matches(ask: Ask, expected: Expected) -> bool:
     if expected.addressee_kind is not AddresseeKind.PERSON:
         return True
     return ask.addressee.person == PEOPLE[str(expected.addressee)]
+
+
+# --- decisions --------------------------------------------------------------
+
+#: Precision below this is a release blocker for the prompt, as for asks.
+DECISION_PRECISION_GATE = 0.9
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionExample:
+    """A message, the conversation shown before it, and whether it decides.
+
+    `context` is `(author, content)` pairs, oldest first: most conclusions only
+    name what was chosen in the message that proposed it.
+    """
+
+    example_id: str
+    author: str
+    content: str
+    context: tuple[tuple[str, str], ...] = ()
+    decides: bool = False
+
+
+#: Hand-labelled, in the two languages this server writes in. The negatives are
+#: the near misses: proposals, questions and preferences that use the same
+#: words a conclusion does.
+DECISION_EXAMPLES: tuple[DecisionExample, ...] = (
+    DecisionExample(
+        "pt-fechou",
+        "leo",
+        "fechou, vamos com Postgres então",
+        context=(("hezron", "Postgres ou Mongo pro serviço novo?"),),
+        decides=True,
+    ),
+    DecisionExample(
+        "pt-ficou-decidido",
+        "amina",
+        "ficou decidido: o deploy passa a ser na sexta",
+        decides=True,
+    ),
+    DecisionExample(
+        "pt-combinado",
+        "george",
+        "combinado, retro só a cada duas semanas a partir de agora",
+        context=(("amina", "retro toda semana tá pesado, bora fazer quinzenal?"),),
+        decides=True,
+    ),
+    DecisionExample(
+        "pt-bora-de",
+        "clinton",
+        "beleza, bora de Vercel pro front",
+        context=(
+            ("leo", "Vercel ou Netlify?"),
+            ("hezron", "Vercel já tem o preview que a gente precisa"),
+        ),
+        decides=True,
+    ),
+    DecisionExample(
+        "pt-decidimos",
+        "hezron",
+        "decidimos manter o Redis até o fim do trimestre",
+        decides=True,
+    ),
+    DecisionExample(
+        "en-we-decided",
+        "amina",
+        "we decided to freeze the API until the retreat",
+        decides=True,
+    ),
+    DecisionExample(
+        "en-lets-go-with",
+        "leo",
+        "ok, let's go with the managed database then",
+        context=(("george", "self-host or managed for the new postgres?"),),
+        decides=True,
+    ),
+    DecisionExample(
+        "en-agreed",
+        "george",
+        "agreed, final call: the launch moves to october",
+        decides=True,
+    ),
+    DecisionExample(
+        "pt-proposta",
+        "amina",
+        "bora fazer o deploy na sexta?",
+    ),
+    DecisionExample(
+        "pt-que-tal",
+        "leo",
+        "que tal a gente ir de Postgres? vamos com calma nisso",
+    ),
+    DecisionExample(
+        "pt-preferencia",
+        "clinton",
+        "eu fecharia com a Vercel, mas bora ouvir todo mundo antes",
+    ),
+    DecisionExample(
+        "pt-pergunta",
+        "george",
+        "ficou decidido alguma coisa sobre o deploy?",
+    ),
+    DecisionExample(
+        "pt-status",
+        "hezron",
+        "fechou a sprint, 14 tickets entregues",
+    ),
+    DecisionExample(
+        "pt-convite",
+        "amina",
+        "bora almoçar?",
+    ),
+    DecisionExample(
+        "en-question",
+        "clinton",
+        "was it agreed that the schema freezes before the retreat?",
+    ),
+    DecisionExample(
+        "en-proposal",
+        "leo",
+        "what if we decided to go with option 2 instead?",
+    ),
+    DecisionExample(
+        "en-still-open",
+        "george",
+        "we decided nothing yet, let's pick it up tomorrow",
+    ),
+    DecisionExample(
+        "en-agreement-with-a-fact",
+        "hezron",
+        "agreed, the gateway is flaky today",
+    ),
+)
+
+
+def decision_candidate_of(example: DecisionExample, index: int = 0) -> AskCandidate:
+    """The candidate an extractor is given, through the real filter.
+
+    Raises `LookupError` when the filter drops the message, which the caller
+    counts as predicting nothing -- a decision never read is never recorded.
+    """
+    at = T0 + timedelta(hours=index)
+    messages = [
+        _message(2000 + index * 10 + offset, author, content, at - timedelta(minutes=5 - offset))
+        for offset, (author, content) in enumerate(example.context)
+    ]
+    source = _message(2009 + index * 10, example.author, example.content, at)
+    found = CandidateFilter().candidates([*messages, source])
+    match = [c for c in found if c.message.platform_message_id == source.platform_message_id]
+    if not match:
+        raise LookupError(example.example_id)
+    return match[0]
+
+
+def evaluate_decisions(
+    predictions: Mapping[str, Sequence[ExtractedDecision]],
+    examples: Sequence[DecisionExample] = DECISION_EXAMPLES,
+    policy: DecisionPolicy | None = None,
+) -> Metrics:
+    """Score predicted decisions against the labels.
+
+    As for asks, only presentable decisions count, and a message that decides
+    something counts once however many decisions were reported for it: the
+    label is "this message concludes a choice", not how the model split it.
+    """
+    settings = policy or DecisionPolicy()
+    tp = fp = fn = 0
+    for example in examples:
+        found = [
+            d
+            for d in predictions.get(example.example_id, ())
+            if settings.presentable(d.confidence)
+        ]
+        if not example.decides:
+            fp += len(found)
+        elif found:
+            tp += 1
+        else:
+            fn += 1
+    return Metrics(tp, fp, fn)
 
 
 @dataclass(frozen=True, slots=True)
