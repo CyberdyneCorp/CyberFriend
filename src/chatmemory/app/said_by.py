@@ -116,7 +116,13 @@ class SaidByRequest:
     language: Language
 
 
-_SLOT = r"(?P<slot><@!?\d+>|@?[a-z][\w.'-]*(?:\s+[a-z][\w.'-]*){0,2})"
+#: "o que o Leo te falou": a pronoun before the verb says who was spoken to.
+_PT_CLITIC = r"(?:me|te|lhe|nos)"
+#: A name has up to three words, none of them that pronoun, or "Leo te" would
+#: be looked up as somebody's name.
+_SLOT = (
+    rf"(?P<slot><@!?\d+>|@?[a-z][\w.'-]*(?:\s+(?!{_PT_CLITIC}\b)[a-z][\w.'-]*){{0,2}})"
+)
 _END = r"\s*[?.!]*\s*$"
 #: Third person, and first person for "o que eu falei".
 _PT_VERBS = (
@@ -129,10 +135,19 @@ _PT_ABOUT = (
     r"|em\s+relacao\s+a[os]?|quanto\s+a[os]?)"
 )
 _PT_SOMETHING = r"(?:algo|alguma\s+coisa|nada)"
+#: Who it was said to, after the verb: "falou com você", "disse pra mim". The
+#: search is still everything the person said -- the asker's own words go to
+#: the synthesiser, which is how "to me" narrows it -- but without this the
+#: question fell to the ordinary route, which has no date filter at all.
+_PT_TO_WHOM = (
+    r"(?:com\s+(?:voce|vc|a\s+gente|agente|nos)|comigo|conosco"
+    r"|(?:pra|para|pro)\s+(?:voce|vc|mim|a\s+gente|gente|nos))"
+)
 _EN_VERBS = (
     r"say|said|write|wrote|written|mention|mentioned|post|posted|comment|commented"
-    r"|think|thought"
+    r"|think|thought|tell|told"
 )
+_EN_TO_WHOM = r"(?:(?:to\s+)?(?:you|me|us))"
 _EN_ABOUT = r"(?:about|on|regarding|concerning)"
 _EN_SOMETHING = r"(?:anything|something)"
 
@@ -140,8 +155,9 @@ _SHAPES: tuple[tuple[re.Pattern[str], Language], ...] = (
     # "o que o João disse (sobre Y)", "oque a Ana achou do Y", "o que eu falei"
     (
         re.compile(
-            rf"^{_PT_WHAT}\s+(?:(?:o|a)\s+)?{_SLOT}\s+(?:{_PT_VERBS})"
-            rf"(?:\s+{_PT_SOMETHING})?(?:\s+{_PT_ABOUT}\s+(?P<topic>.+?))?{_END}"
+            rf"^{_PT_WHAT}\s+(?:(?:o|a)\s+)?{_SLOT}\s+(?:{_PT_CLITIC}\s+)?(?:{_PT_VERBS})"
+            rf"(?:\s+{_PT_TO_WHOM})?(?:\s+{_PT_SOMETHING})?"
+            rf"(?:\s+{_PT_ABOUT}\s+(?P<topic>.+?))?{_END}"
         ),
         Language.PORTUGUESE,
     ),
@@ -149,8 +165,9 @@ _SHAPES: tuple[tuple[re.Pattern[str], Language], ...] = (
     # or "eu falei sobre isso ontem" as a statement would be read as a search.
     (
         re.compile(
-            rf"^(?:e\s+)?(?:(?:o|a)\s+)?{_SLOT}\s+(?:{_PT_VERBS})"
-            rf"(?:\s+{_PT_SOMETHING})?\s+{_PT_ABOUT}\s+(?P<topic>.+?)\s*\?[?.!\s]*$"
+            rf"^(?:e\s+)?(?:(?:o|a)\s+)?{_SLOT}\s+(?:{_PT_CLITIC}\s+)?(?:{_PT_VERBS})"
+            rf"(?:\s+{_PT_TO_WHOM})?(?:\s+{_PT_SOMETHING})?\s+{_PT_ABOUT}"
+            rf"\s+(?P<topic>.+?)\s*\?[?.!\s]*$"
         ),
         Language.PORTUGUESE,
     ),
@@ -158,7 +175,8 @@ _SHAPES: tuple[tuple[re.Pattern[str], Language], ...] = (
     (
         re.compile(
             rf"^(?:so\s+|and\s+)?what\s+(?:did|does|has|have|had)\s+{_SLOT}\s+(?:{_EN_VERBS})"
-            rf"(?:\s+{_EN_SOMETHING})?(?:\s+{_EN_ABOUT}\s+(?P<topic>.+?))?{_END}"
+            rf"(?:\s+{_EN_TO_WHOM})?(?:\s+{_EN_SOMETHING})?"
+            rf"(?:\s+{_EN_ABOUT}\s+(?P<topic>.+?))?{_END}"
         ),
         Language.ENGLISH,
     ),

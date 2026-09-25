@@ -138,6 +138,23 @@ async def test_resolve_person_and_capture_agree_on_one_identity(
         assert [int(r[0]) for r in rows] == [resolved]
 
 
+async def test_people_known_only_by_account_id_are_listed_until_named(
+    clean: AsyncEngine,
+) -> None:
+    """Regression: people backfilled before names were written on ingest kept
+    their account id as a name forever, so "o que o João disse" found nobody."""
+    await channels(clean, CH)
+    store = PostgresStore(clean)
+    await store.upsert_messages([msg(1)])  # no name given: stored as "4242"
+    named = PersonRef("discord", 5151)
+    await store.resolve_person(named, "bea")
+
+    assert await store.unnamed_people(10) == [AUTHOR]
+
+    await store.resolve_person(AUTHOR, "ada")
+    assert await store.unnamed_people(10) == []
+
+
 # --- messages_without_window -------------------------------------------
 
 

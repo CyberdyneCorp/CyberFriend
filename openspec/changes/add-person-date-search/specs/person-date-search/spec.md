@@ -65,6 +65,14 @@ applied in one statement.
 - THEN the question SHALL be answered by the ordinary route, not searched
   across all of João's history
 
+#### Scenario: Who it was said to
+- WHEN someone asks "o que <@Leo> falou com você hoje?", "o que o Leo te
+  falou hoje?", "o que a Ana disse pra mim sobre X?" or "what did Ana tell you
+  today?"
+- THEN it SHALL be recognised as a question about what that person said in
+  that span, and SHALL NOT be answered by the ordinary route, which applies no
+  date filter
+
 #### Scenario: A multi-author conversation
 - WHEN Bea and Caio spoke in the same conversation and someone asks what Bea
   said about it
@@ -86,6 +94,13 @@ The system SHALL resolve a mention directly, "eu"/"I" to the asker, and a name
 only among people with a visible message in the channels the question's
 viewer may read; with several candidates it SHALL ask which, without
 retrieval or a model call, and with none it SHALL answer as before.
+
+#### Scenario: A person first stored before names were recorded
+- WHEN a person's messages were captured before ingest recorded author names,
+  so their stored name is their account id
+- THEN ingest SHALL, when its gateway connects, name them from the guild's
+  member cache or else Discord's user lookup, so that a question by name can
+  find them
 
 #### Scenario: Two people with the same first name
 - WHEN two people named João have spoken where the asker can read and someone
