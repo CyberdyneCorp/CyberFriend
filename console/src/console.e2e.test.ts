@@ -415,6 +415,10 @@ describe("signing in with CyberdyneAuth", () => {
   });
 
   it("shows an operator every screen with nothing that changes anything", async () => {
+    // Something to revoke, so the allowlist's Revoke button has a row to hide on.
+    api.state.allowlist = [
+      { server: "wikipedia", tool: "search", effect: "read_only", mutation_enabled: false },
+    ];
     await reloadWithSignIn("operator-session");
     await screen.findByText("Ingestion");
     expect(screen.getByText(/operator, read-only/)).toBeTruthy();
@@ -424,6 +428,8 @@ describe("signing in with CyberdyneAuth", () => {
     expect(screen.queryByRole("button", { name: "Add server" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    const entry = await waitFor(() => allowlistRow("wikipedia", "search"));
+    expect(within(entry).queryByRole("button", { name: "Revoke" })).toBeNull();
 
     await fireEvent.click(screen.getByRole("link", { name: "Settings" }));
     await screen.findByText("web_tools_enabled");
@@ -431,11 +437,15 @@ describe("signing in with CyberdyneAuth", () => {
 
     await fireEvent.click(screen.getByRole("link", { name: "Retention" }));
     await screen.findByText("discord:42");
+    expect(screen.getByText("retention_days")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Opt this person out" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Opt back in" })).toBeNull();
 
     await fireEvent.click(screen.getByRole("link", { name: "Channels" }));
     await screen.findByText("leadership");
+    expect(screen.queryByRole("button", { name: "Index this channel" })).toBeNull();
+    expect(screen.queryByPlaceholderText("e.g. 1234567890")).toBeNull();
     expect(screen.queryByRole("button", { name: "Stop indexing" })).toBeNull();
 
     await fireEvent.click(screen.getByRole("link", { name: "Tokens" }));

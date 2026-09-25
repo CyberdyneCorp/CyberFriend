@@ -260,8 +260,11 @@ Nothing else secret reaches `admin`. Its environment in `docker-compose.yml`
 is `DATABASE_URL`, its own `ADMIN_*` variables (sign-in included), its domain,
 and the non-secret setting baselines it reports provenance for (channels,
 federation, web tools, asks, windows); no `DISCORD_TOKEN`, `LLM_API_KEY`,
-`SERPAPI_KEY` or tracing key. `tests/unit/test_compose_env.py` fails on any
-other variable added to that block.
+`SERPAPI_KEY` or tracing key. `tests/unit/test_compose_env.py` parses the
+compose file and fails on any other variable in that service's `environment:`
+(list or map form, quoted or not) and on an `env_file:` on the service, which
+would hand it every variable in the file. Enabling sign-in on Coolify is
+described in `docs/admin-console.md` ("Enabling sign-in on Coolify").
 
 The other sign-in variables (`ADMIN_OIDC_ISSUER`, `ADMIN_OIDC_CLIENT_ID`,
 `ADMIN_PUBLIC_URL`) are not secret. The issuer is the switch: with it set, the

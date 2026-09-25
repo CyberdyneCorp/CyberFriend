@@ -559,6 +559,32 @@ URI `<ADMIN_PUBLIC_URL>/auth/callback` and post-logout redirect URI
 `<ADMIN_PUBLIC_URL>/`, and assign people `cyberfriend:admin` or
 `cyberfriend:operator`.
 
+### Enabling sign-in on Coolify
+
+Set the variables in Coolify on the **admin** service's environment.
+`docker-compose.yml` declares them for `admin` alone (Coolify accepts only the
+variables the compose file declares), so no other service receives the client
+secret or the session key.
+
+1. Register the client at CyberdyneAuth as above, with redirect URI
+   `<ADMIN_PUBLIC_URL>/auth/callback` and post-logout redirect URI
+   `<ADMIN_PUBLIC_URL>/`.
+2. On the `admin` service, set `ADMIN_OIDC_ISSUER`, `ADMIN_OIDC_CLIENT_ID`,
+   `ADMIN_OIDC_CLIENT_SECRET`, `ADMIN_SESSION_KEY` and `ADMIN_PUBLIC_URL`
+   (and `ADMIN_OIDC_SCOPES` only to change the default).
+3. Set `ADMIN_PUBLIC_URL` to exactly the https origin Coolify serves for
+   `SERVICE_FQDN_ADMIN_8083`: `https://`, the host, no path, no trailing slash.
+   The console compares each browser write's `Origin` header to it by exact
+   string match, so any difference (`http`, another host, a port, a path)
+   refuses every cookie-mode write and `POST /auth/logout` with 403, and the
+   callback URI sent to CyberdyneAuth no longer matches the registered one.
+4. Redeploy `admin`. A partial set refuses to start and the log names the
+   missing variable.
+5. Check: `curl https://<admin host>/auth/config` returns `{"sign_in": true}`,
+   and the console's first page offers "Sign in with CyberdyneAuth".
+
+To switch sign-in off again, unset `ADMIN_OIDC_ISSUER` on `admin` and redeploy.
+
 ### In the console
 
 On load the console asks `GET /auth/config` whether sign-in is offered and

@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 from chatmemory.app.configuration import SECRETS, SETTINGS
 
@@ -255,26 +257,76 @@ def test_the_console_holds_database_credentials_and_no_others() -> None:
     assert held == ["DATABASE_URL"], f"the console is given {held}"
 
 
+def environment_names(service: dict[str, Any]) -> list[str]:
+    """The variable names a compose service declares, list form or map form."""
+    environment = service.get("environment") or []
+    if isinstance(environment, dict):
+        return [str(name) for name in environment]
+    return [str(item).split("=", 1)[0] for item in environment]
+
+
+def admin_service(compose_text: str = COMPOSE) -> dict[str, Any]:
+    parsed = yaml.safe_load(compose_text)
+    service = parsed["services"]["admin"]
+    assert isinstance(service, dict)
+    return service
+
+
+def unexpected_console_variables(service: dict[str, Any]) -> list[str]:
+    baselines = {key.upper() for key in SETTINGS}
+    return [
+        name
+        for name in environment_names(service)
+        if name != "DATABASE_URL"
+        and not name.startswith(("ADMIN_", "SERVICE_FQDN_"))
+        and name not in baselines
+    ]
+
+
 def test_the_console_environment_is_the_database_its_own_settings_and_nothing_else() -> None:
     """An allowlist, so a variable pasted into the wrong service fails here.
 
     The console gets `DATABASE_URL`, its own `ADMIN_*` variables (sign-in
     included), its domain, and the non-secret setting baselines it reports
     provenance for. Anything else -- the bot token, the model key, the search
-    key, a tracing key -- is authority it has no use for.
+    key, a tracing key -- is authority it has no use for. The file is parsed
+    rather than matched line by line, so a quoted item or the map form of
+    `environment:` cannot slip past.
     """
-    block = service_block("admin")
-    declared = re.findall(r"^\s+- ([A-Z][A-Z0-9_]*)(?:=|$)", block, re.M)
-    baselines = {key.upper() for key in SETTINGS}
-    unexpected = [
-        name
-        for name in declared
-        if name != "DATABASE_URL"
-        and not name.startswith(("ADMIN_", "SERVICE_FQDN_"))
-        and name not in baselines
-    ]
-    assert declared, "no environment found for the admin service"
-    assert unexpected == [], f"the console is given {unexpected}"
+    service = admin_service()
+    assert environment_names(service), "no environment found for the admin service"
+    assert unexpected_console_variables(service) == [], (
+        f"the console is given {unexpected_console_variables(service)}"
+    )
+
+
+def test_the_console_reads_no_env_file() -> None:
+    """An `env_file:` hands the container every variable in the file -- the
+    bot token, the model key and the search key included -- without one of
+    them appearing in its `environment:` block."""
+    assert "env_file" not in admin_service()
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        '      - "SENTRY_DSN=${SENTRY_DSN}"\n',
+        "      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}\n",
+    ],
+)
+def test_the_allowlist_sees_quoted_and_plain_list_items(environment: str) -> None:
+    compose = COMPOSE.replace(
+        "      - DATABASE_URL=${DATABASE_URL}\n      - INDEXED_CHANNEL_IDS",
+        f"      - DATABASE_URL=${{DATABASE_URL}}\n{environment}      - INDEXED_CHANNEL_IDS",
+        1,
+    )
+    assert compose != COMPOSE, "the admin environment block moved; update this test"
+    assert unexpected_console_variables(admin_service(compose)) != []
+
+
+def test_the_allowlist_sees_the_map_form() -> None:
+    service = {"environment": {"DATABASE_URL": "x", "DISCORD_TOKEN": "y"}}
+    assert unexpected_console_variables(service) == ["DISCORD_TOKEN"]
 
 
 def test_the_console_is_not_given_the_model_endpoint_either() -> None:
@@ -303,6 +355,7 @@ def test_the_console_serves_its_interface_from_the_same_container() -> None:
         "ADMIN_OIDC_CLIENT_SECRET",
         "ADMIN_SESSION_KEY",
         "ADMIN_PUBLIC_URL",
+        "ADMIN_OIDC_SCOPES",
     ],
 )
 def test_the_console_accepts_the_sign_in_settings(variable: str) -> None:

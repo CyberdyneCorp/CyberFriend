@@ -288,6 +288,8 @@ services:
       - ADMIN_OIDC_CLIENT_SECRET=${ADMIN_OIDC_CLIENT_SECRET:-}
       - ADMIN_SESSION_KEY=${ADMIN_SESSION_KEY:-}
       - ADMIN_PUBLIC_URL=${ADMIN_PUBLIC_URL:-}
+      # Optional; unset means `openid email profile`.
+      - ADMIN_OIDC_SCOPES=${ADMIN_OIDC_SCOPES:-}
       # Its own domain. Separate from the MCP one so the console can be closed
       # to the internet without taking retrieval with it.
       - SERVICE_FQDN_ADMIN_8083
