@@ -301,7 +301,7 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "market_note": (
             "Só fontes ao vivo, nunca um preço que alguém mencionou num canal. "
             "Cada número diz o quão atual ele é, e aparece também na sua moeda "
-            "preferida se você me disser uma (`prefiro ver em reais`). Não "
+            "preferida se você me disser uma (`prefiro ver em reais`); não "
             "recomendo comprar, vender nem manter nada."
         ),
         "alerts_heading": "Alertas",
