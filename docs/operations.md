@@ -287,10 +287,14 @@ possible to say later whether the assistant is getting better.
 
 Every answer service is traced, not only the two reasoning paths: the tracer
 sits at the outermost answer service, so capabilities, obligations and
-decisions replies are exported too. Each trace is:
+decisions replies are exported too, and the catch-up and said-by routes -- which
+the ask service answers before that chain -- export through the same tracer.
+Each trace is:
 
 - **named by its feature**, a stable id decided where the route is decided:
-  `corpus.fixed`, `corpus.loop`, `market.price` (crypto and index prices),
+  `corpus.fixed`, `corpus.loop`, `corpus.catchup` ("what did I miss in #x"),
+  `corpus.said_by` ("what did Ana say about X"), `market.price` (crypto and
+  index prices),
   `market.other` (currency conversions), `wallet.balance`, `wallet.activity`,
   `portfolio`, `defi.positions`, `web.search`, `time`, `obligations`,
   `decisions`, `capabilities`, `federation` (a corpus question answered by
@@ -302,7 +306,9 @@ decisions replies are exported too. Each trace is:
 - **in the environment** `LANGFUSE_ENVIRONMENT`.
 
 Every read and delete this application makes against Langfuse is scoped by
-that environment and by our tag or trace names, so another app or environment
+that environment and by our tag: a trace named by a feature is only ours if it
+also carries `app:cyberfriend`, and only the legacy `fixed` / `loop` names,
+which predate the tag, are recognised without it. Another app or environment
 sharing the project is never touched.
 
 | | |

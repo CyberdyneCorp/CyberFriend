@@ -99,6 +99,8 @@ from chatmemory.app.facts import (
     PersonalFactsService,
 )
 from chatmemory.app.limits import LimitDecision, RateLimiter
+from chatmemory.app.reasoning.contract import NoRunTracer, RunOutcome, RunTracer
+from chatmemory.app.reasoning.tracing import export_run
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.app.said_by import SAID_BY, SaidByService
 from chatmemory.app.suggestion_intent import (
@@ -300,6 +302,7 @@ class AskService:
         catchup: CatchUpService | None = None,
         alerts: AlertRequests | None = None,
         said_by: SaidByService | None = None,
+        tracer: RunTracer | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
@@ -327,6 +330,10 @@ class AskService:
         # Without it "what did Ana say about X" is answered by the ordinary
         # search -- everybody's words about X, under the same viewer.
         self._said_by = said_by
+        # The answer stack's tracer. Catch-up and said-by are answered here,
+        # before the answer chain and its `TracedAnswerService`, so their runs
+        # are exported here -- or no trace would ever show either feature.
+        self._tracer: RunTracer = tracer or NoRunTracer()
         # Optional, and absent unless alerts are switched on with an Infura
         # key. An alert request is still recognised without it, and answered
         # that alerts are not available here -- never searched for.
@@ -529,7 +536,8 @@ class AskService:
         """
         routed = await self._routed(request, question)
         if routed is not None:
-            return routed, frozenset()
+            await export_run(self._tracer, question, routed)
+            return routed.answer, frozenset()
         # Concurrent, and not merely for speed. Run after the answer, the
         # probe would add its latency only for askers who have channels the
         # room does not -- which makes "this person can see more than you" a
@@ -540,7 +548,7 @@ class AskService:
         )
         return answer, withheld
 
-    async def _routed(self, request: AskRequest, question: Question) -> Answer | None:
+    async def _routed(self, request: AskRequest, question: Question) -> RunOutcome | None:
         """A catch-up or a "what did X say", or None for the ordinary answer.
 
         Catch-up first: "o que eu perdi" is a catch-up whatever else it says.
@@ -555,7 +563,7 @@ class AskService:
                 period_named=catch_up.period_named,
                 named_a_channel=catch_up.named_a_channel,
             )
-            return await self._catchup.summarise(question, catch_up, request.destination)
+            return await self._catchup.summarise_run(question, catch_up, request.destination)
         said = self._said_by.recognise(request.text) if self._said_by is not None else None
         if said is None or self._said_by is None:
             return None
@@ -567,7 +575,7 @@ class AskService:
             outcome=outcome.decision.outcome,
             detail=outcome.decision.detail,
         )
-        return outcome.answer
+        return outcome.run
 
     async def _alert_turn(
         self,

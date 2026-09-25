@@ -154,6 +154,22 @@ async def test_the_loop_route_is_named_corpus_loop() -> None:
     assert outcome.record.feature == features.CORPUS_LOOP
 
 
+CHAIN_FEATURES = {
+    CryptoRoute.WALLET_ACTIVITY: "wallet.activity",
+    CryptoRoute.PORTFOLIO: "portfolio",
+    CryptoRoute.DEFI_LIQUIDITY: "defi.positions",
+    CryptoRoute.DEFI_LENDING: "defi.positions",
+    CryptoRoute.DEFI_BOTH: "defi.positions",
+    CryptoRoute.WALLET_BALANCE: "wallet.balance",
+}
+"""Stated literally: the ids are what Langfuse and usage reports hold, so a
+test that read them back from `CHAIN_HANDLERS` would pass whatever they were."""
+
+
+def test_every_chain_route_has_a_stated_feature() -> None:
+    assert set(CHAIN_FEATURES) == set(CryptoRoute)
+
+
 @pytest.mark.parametrize("route", list(CryptoRoute))
 @pytest.mark.parametrize("addresses", [(ADDRESS,), ()])
 async def test_every_chain_route_names_its_feature_with_or_without_an_address(
@@ -164,7 +180,7 @@ async def test_every_chain_route_names_its_feature_with_or_without_an_address(
     _, outcome = await service._chain_route(  # noqa: SLF001
         question(text="wallet question"), CryptoQuery(route=route, addresses=addresses)
     )
-    assert outcome.record.feature == CHAIN_HANDLERS[route].feature
+    assert outcome.record.feature == CHAIN_FEATURES[route]
 
 
 async def test_an_escalated_answer_is_named_federation() -> None:
@@ -305,9 +321,20 @@ def _run(feature: str = features.CORPUS_LOOP) -> RunTrace:
             ),
         ),
     )
+    # A web citation: not a corpus message, so nothing is indexed for it --
+    # no tombstone is coming for a web page, and its id could collide with
+    # a real message's.
+    web = Citation(
+        channel=base.channel,
+        message_id=503,
+        author_display="",
+        excerpt="",
+        url="https://example.com/offsite",
+        source_system="web",
+    )
     return RunTrace(
         question=question(text="when is the offsite?"),
-        answer=Answer("The offsite is on Friday.", citations=(cited,)),
+        answer=Answer("The offsite is on Friday.", citations=(cited, web)),
         record=record,
         evidence=(held,),
         language="en",
@@ -360,16 +387,51 @@ async def test_no_evidence_text_or_excerpt_is_in_the_batch() -> None:
          "score": 0.8123}
     ]
     assert metadata["citations"] == [
-        {"channel": str(evidence(1).channel), "message_id": 502, "source_system": "discord"}
+        {"channel": str(evidence(1).channel), "message_id": 502, "source_system": "discord"},
+        {"channel": str(evidence(1).channel), "message_id": 503, "source_system": "web"},
     ]
 
 
 async def test_the_messages_a_trace_draws_on_are_still_indexed() -> None:
     """References only in the trace, but deleting a message must still withdraw
-    it -- including one only a citation points at (an obligation's source)."""
+    it -- including one only a citation points at (an obligation's source).
+    A web citation (503) is not a corpus message and is not indexed."""
     index = FakeIndex()
     await _exported(_run(), index)
     assert set(index.by_message) == {501, 502}
+
+
+async def test_only_requested_tools_are_tagged() -> None:
+    """`invoked` carries a source system and `not_invoked` a reason in `detail`;
+    neither is a tool name, so neither becomes a `tool:` tag."""
+    run = _run()
+    decisions = (
+        Decision(
+            FEDERATION_CALL, "tool_requested", DecisionMaker.MODEL,
+            model_calls=1, detail="defi:positions",
+        ),
+        Decision(FEDERATION_CALL, "invoked", DecisionMaker.DRIVER, detail="coingecko"),
+        Decision(FEDERATION_CALL, "not_invoked", DecisionMaker.DRIVER, detail="refused"),
+        Decision(FEDERATION_CALL, "not_offered", DecisionMaker.DRIVER, detail="jira:create"),
+        Decision("routing", "tool_requested", DecisionMaker.HEURISTIC, detail="other:tool"),
+    )
+    payload = await _exported(
+        RunTrace(
+            question=run.question,
+            answer=run.answer,
+            record=RunRecord(
+                path=run.record.path,
+                status=run.record.status,
+                cause=run.record.cause,
+                feature=run.record.feature,
+                decisions=decisions,
+            ),
+            evidence=run.evidence,
+            language=run.language,
+        )
+    )
+    tags = payload["batch"][0]["body"]["tags"]
+    assert [t for t in tags if t.startswith("tool:")] == ["tool:defi:positions"]
 
 
 async def test_an_unnamed_record_falls_back_to_its_path() -> None:
@@ -388,9 +450,13 @@ async def test_the_search_backstop_finds_feature_named_traces() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
             "data": [
-                {"id": "new", "name": features.MARKET_PRICE, "environment": "production"},
+                {"id": "new", "name": features.MARKET_PRICE, "environment": "production",
+                 "tags": [APP_TAG, f"feature:{features.MARKET_PRICE}"]},
                 {"id": "old", "name": "fixed", "environment": "production"},
-                {"id": "foreign", "name": "checkout", "environment": "production"},
+                {"id": "foreign", "name": "checkout", "environment": "production",
+                 "tags": [APP_TAG]},
+                {"id": "staging", "name": features.TIME, "environment": "staging",
+                 "tags": [APP_TAG]},
             ],
             "meta": {"page": 1, "totalPages": 1},
         })
@@ -402,6 +468,30 @@ async def test_the_search_backstop_finds_feature_named_traces() -> None:
         transport=httpx.MockTransport(handle),
     )
     assert await finder.find_traces_by_user(7) == ["new", "old"]
+
+
+@pytest.mark.parametrize("tags", [None, [], ["app:another"], ["feature:time"]])
+async def test_a_feature_named_trace_without_our_tag_is_not_ours(
+    tags: list[str] | None,
+) -> None:
+    """Another app in a shared project, same environment and same Discord user,
+    may name a trace `time`: without `app:cyberfriend` it is never deleted."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        row: dict[str, Any] = {"id": "theirs", "name": features.TIME, "environment": "production"}
+        if tags is not None:
+            row["tags"] = tags
+        return httpx.Response(
+            200, json={"data": [row], "meta": {"page": 1, "totalPages": 1}}
+        )
+
+    finder = LangfuseTraceFinder(
+        host="http://langfuse.invalid",
+        public_key="pk",
+        secret_key="sk",
+        transport=httpx.MockTransport(handle),
+    )
+    assert await finder.find_traces_by_user(7) == []
 
 
 # --- ops 1.2 the v4 trap is reported at startup ----------------------------

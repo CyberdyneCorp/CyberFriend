@@ -93,9 +93,21 @@ def test_the_answer_stack_builds_a_tracer_and_hands_it_to_the_seam() -> None:
 
 def test_the_seam_calls_the_tracer_on_every_answer() -> None:
     answered = _function(TRACING, "answer_run")
-    assert _calls(answered, "trace"), (
-        "answer_run of the outermost service is the one point every answer "
-        "passes through; the trace goes here"
+    assert _calls(answered, "export_run"), (
+        "answer_run of the outermost service is the one point every chain "
+        "answer passes through; the trace goes here"
+    )
+    assert _calls(_function(TRACING, "export_run"), "trace"), (
+        "export_run is what hands the run to the tracer"
+    )
+
+
+def test_the_routes_answered_before_the_chain_are_exported_too() -> None:
+    """Catch-up and said-by never reach the chain's seam; the ask service
+    exports their runs through the same helper."""
+    produce = _function(SRC / "app" / "ask.py", "_produce")
+    assert _calls(produce, "export_run"), (
+        "AskService._produce must export the catch-up / said-by run it answers"
     )
 
 

@@ -13,6 +13,10 @@ CORPUS_FIXED = "corpus.fixed"
 """Answered from the team's conversations by the single-lookup path."""
 CORPUS_LOOP = "corpus.loop"
 """Answered from the team's conversations by the planning loop."""
+CORPUS_CATCHUP = "corpus.catchup"
+"""A summary of a period of one channel ("what did I miss in #x")."""
+CORPUS_SAID_BY = "corpus.said_by"
+"""What one person said, from their own messages ("what did Ana say about X")."""
 MARKET_PRICE = "market.price"
 """A current crypto or index price, from market data."""
 MARKET_OTHER = "market.other"
@@ -36,6 +40,8 @@ FEATURES = frozenset(
     {
         CORPUS_FIXED,
         CORPUS_LOOP,
+        CORPUS_CATCHUP,
+        CORPUS_SAID_BY,
         MARKET_PRICE,
         MARKET_OTHER,
         WALLET_BALANCE,

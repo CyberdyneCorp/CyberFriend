@@ -238,19 +238,35 @@ def answered(
     answer: Answer,
     feature: str,
     cause: TerminalCause = TerminalCause.EVIDENCE_SUFFICIENT,
+    *,
+    spend: Spend | None = None,
+    decisions: tuple[Decision, ...] = (),
+    evidence: tuple[Evidence, ...] = (),
 ) -> RunOutcome:
     """The outcome of an answer given without either reasoning path.
 
     Obligations, decisions and the self-description are answered from rows or
     configuration: no retrieval, no model, so nothing is spent and the record
-    carries only what the run was for and how it ended.
+    carries only what the run was for and how it ended. A route that does
+    retrieve and synthesise on its own (catch-up, said-by) passes what it spent,
+    decided and held, so its trace is as complete as a reasoning path's.
     """
-    status = RunStatus.ABSTAINED if answer.abstained else RunStatus.ANSWERED
+    if cause is TerminalCause.DEPENDENCY_FAILED:
+        status = RunStatus.FAILED
+    else:
+        status = RunStatus.ABSTAINED if answer.abstained else RunStatus.ANSWERED
     return RunOutcome(
         answer=answer,
         record=RunRecord(
-            path=AnswerPath.FIXED, status=status, cause=cause, feature=feature
+            path=AnswerPath.FIXED,
+            status=status,
+            cause=cause,
+            feature=feature,
+            spend=spend if spend is not None else Spend(),
+            decisions=decisions,
+            evidence_window_ids=tuple(sorted({e.window_id for e in evidence})),
         ),
+        evidence=evidence,
     )
 
 

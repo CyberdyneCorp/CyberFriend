@@ -43,10 +43,13 @@ DEFAULT_TIMEOUT = 5.0
 APP_TAG = "app:cyberfriend"
 """Carried by every trace this application exports; reads and deletes filter on it."""
 
-#: The names this application gives its traces: the feature ids, and the path
-#: names traces were given before features existed. A search of a shared
-#: Langfuse project deletes nothing else.
-TRACE_NAMES = FEATURES | frozenset(str(path) for path in AnswerPath)
+#: The names traces were given before features and the app tag existed. Only
+#: these are recognised without `APP_TAG`: they predate it.
+LEGACY_TRACE_NAMES = frozenset(str(path) for path in AnswerPath)
+#: The names this application gives its traces: the feature ids, and the
+#: legacy path names. A feature id is a generic word (`time`, `portfolio`), so
+#: a row with one is ours only if it also carries `APP_TAG`.
+TRACE_NAMES = FEATURES | LEGACY_TRACE_NAMES
 #: Langfuse's largest page for the traces list.
 SEARCH_PAGE_SIZE = 100
 
@@ -221,7 +224,9 @@ class LangfuseTraceFinder:
     Filtered twice: the query asks for our environment, and every row is
     checked for our environment and one of our trace names before its id is
     returned, so a server that ignores a filter still cannot widen a deletion
-    to another application's traces.
+    to another application's traces. A row named by a feature must also carry
+    `APP_TAG`: another application in a shared project may well name a trace
+    `time`. Only the legacy path names, which predate the tag, pass without it.
     """
 
     def __init__(
@@ -277,13 +282,15 @@ class LangfuseTraceFinder:
         }
 
     def _ours(self, rows: Sequence[dict[str, Any]]) -> list[str]:
-        return [
-            str(row["id"])
-            for row in rows
-            if row.get("environment") == self._environment
-            and row.get("name") in TRACE_NAMES
-            and row.get("id")
-        ]
+        return [str(row["id"]) for row in rows if row.get("id") and self._is_ours(row)]
+
+    def _is_ours(self, row: dict[str, Any]) -> bool:
+        if row.get("environment") != self._environment:
+            return False
+        name = row.get("name")
+        if name in LEGACY_TRACE_NAMES:
+            return True
+        return name in FEATURES and APP_TAG in (row.get("tags") or ())
 
 
 SUPPORTED_MAJOR = 3

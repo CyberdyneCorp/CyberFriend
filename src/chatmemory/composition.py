@@ -271,6 +271,10 @@ class AnswerStack:
     #: describes the same configuration for a bare mention as `answers` does
     #: for "what can you do?".
     capabilities: Capabilities = Capabilities()
+    #: The tracer `answers` exports through, carried so the routes the ask
+    #: service answers before that chain (catch-up, said-by) export through
+    #: the same one.
+    tracer: RunTracer = NoRunTracer()
 
 
 def declared_capabilities(settings: Settings) -> frozenset[ModelCapability] | None:
@@ -1671,8 +1675,9 @@ async def build_answer_stack(
         federated_tool_calls=proposer is not None,
         ask_min_confidence=settings.ask_min_confidence,
     )
-    tracer = build_tracer(settings, engine, edges.http_transport)
-    log.info("composition.tracing", enabled=tracer is not None)
+    built_tracer = build_tracer(settings, engine, edges.http_transport)
+    log.info("composition.tracing", enabled=built_tracer is not None)
+    tracer: RunTracer = built_tracer or NoRunTracer()
     reasoning = build_answers(
         retrieval,
         chat,
@@ -1712,8 +1717,9 @@ async def build_answer_stack(
                 ),
                 capabilities,
             ),
-            tracer or NoRunTracer(),
+            tracer,
         ),
+        tracer=tracer,
         capabilities=capabilities,
         reasoning=reasoning,
         obligations=obligations,
@@ -1851,6 +1857,7 @@ def build_ask_service(
     catchup: CatchUpService | None = None,
     alerts: AlertRequests | None = None,
     said_by: SaidByService | None = None,
+    tracer: RunTracer | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -1888,6 +1895,10 @@ def build_ask_service(
         # "What did Ana say about X", from Ana's own messages under the same
         # viewer. None answers it by the ordinary search, as before.
         said_by=said_by,
+        # The answer stack's tracer, for the two routes above: they answer
+        # before `answers` and its tracer seam, so without it neither is ever
+        # traced.
+        tracer=tracer,
         # Without this the withheld-evidence notice is built, tested, and
         # structurally unable to fire: retrieval is pre-scoped to
         # asker INTERSECT audience, so nothing is ever dropped later for the

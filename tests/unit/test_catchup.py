@@ -544,3 +544,49 @@ async def test_the_directive_tells_the_model_not_to_invent_activity() -> None:
     assert "Do not invent activity" in asked
     # The asker's own words ride along: they usefully narrow the summary.
     assert "about pricing" in asked
+
+
+# --- the run behind the answer, for tracing --------------------------------
+
+
+async def test_a_summary_is_a_corpus_catchup_run_with_its_evidence() -> None:
+    from chatmemory.app.reasoning import features
+    from chatmemory.app.reasoning.contract import RunStatus
+
+    catchup, _ = service(evidence())
+    found = catch_up_request("what did I miss in <#100>")
+    assert found is not None
+    outcome = await catchup.summarise_run(question("what did I miss in <#100>"), found, None)
+
+    assert outcome.record.feature == features.CORPUS_CATCHUP
+    assert outcome.record.status is RunStatus.ANSWERED
+    assert outcome.record.evidence_window_ids == (WINDOW_ID,)
+    assert outcome.record.spend.model_calls == 1
+    assert [e.window_id for e in outcome.evidence] == [WINDOW_ID]
+
+
+async def test_a_refused_or_quiet_catch_up_is_still_a_named_run() -> None:
+    from chatmemory.app.reasoning import features
+    from chatmemory.app.reasoning.contract import TerminalCause
+
+    refusing, _ = service(evidence())
+    refused_request = catch_up_request("what did I miss in <#300>")
+    assert refused_request is not None
+    refused = await refusing.summarise_run(
+        question("what did I miss in <#300>", readable=frozenset({GENERAL})),
+        refused_request,
+        None,
+    )
+    quiet_service, _ = service()
+    quiet_request = catch_up_request("what did I miss in <#100>")
+    assert quiet_request is not None
+    quiet = await quiet_service.summarise_run(
+        question("what did I miss in <#100>"), quiet_request, None
+    )
+
+    assert refused.record.feature == quiet.record.feature == features.CORPUS_CATCHUP
+    assert refused.record.cause is TerminalCause.ACCESS_BLOCKED
+    assert [d.outcome for d in refused.record.decisions] == ["refused"]
+    assert "300" not in refused.record.decisions[0].detail
+    assert quiet.record.cause is TerminalCause.CORPUS_EMPTY
+    assert refused.evidence == quiet.evidence == ()

@@ -9,7 +9,7 @@
 - [x] 2.1 `RunRecord.feature` set by the router/answer service; test that every route decision maps to a feature
 - [x] 2.2 Trace name = feature; tags `app:cyberfriend`, feature/path/lang/tool; `LANGFUSE_ENVIRONMENT` setting
 - [x] 2.3 Evidence exported as references only (window id, channel, source, score); test that no evidence text or excerpt is in the batch
-- [x] 2.4 Move the tracer seam to the outermost answer service; capabilities/obligations/decisions traced
+- [x] 2.4 Move the tracer seam to the outermost answer service; capabilities/obligations/decisions traced; catch-up/said-by (answered before that chain) traced through the same tracer
 - [ ] 2.5 `ModelUsage` in `BudgetLedger`; thread completion tokens and model through `Plan`/`Grounded`
 - [ ] 2.6 `generation-create` per model call; `span-create` per federated tool call, no arguments
 - [ ] 2.7 `scripts/langfuse_models.py` + checked-in price table; docs
