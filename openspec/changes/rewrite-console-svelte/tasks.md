@@ -22,6 +22,13 @@ which 3.5 deletes; it arrives with the Svelte tree in 2.1/2.7 and covers
 SignIn and Status are ported in `console-svelte/` as the template screen, with
 an end-to-end test against the stub; 3.1 stays open for Settings and Audit.
 
+`architecture.test.ts` reads each file with the TypeScript parser and the
+Svelte compiler rather than a pattern, holds `main.ts` to the network rule and
+the domain to "no packages", and the shell's role filter has its own component
+test. The Svelte client resolves `api` against the page it was loaded from, so
+behind a path prefix it calls `<prefix>/api` (the React client still calls the
+origin's `/api` until 3.5).
+
 ## 3. Screens and the swap
 
 - [ ] 3.1 SignIn, Status, Settings (+ SettingsTable), Audit

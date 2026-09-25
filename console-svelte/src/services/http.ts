@@ -15,9 +15,18 @@
 
 import { currentToken, signOut } from "./session";
 
-/** Absolute: the API is at /api on the origin serving this bundle, whatever
- * path the bundle itself is mounted under. */
-const API_ROOT = "/api";
+/**
+ * Where the API is: `api` beside the page that loaded this bundle.
+ *
+ * The admin API serves the console at its own root and the API at `/api`
+ * under the same root, so mounted under a prefix (`/ops/`) the API is at
+ * `/ops/api`, not the origin's `/api`. Resolved against the document on each
+ * call rather than once, so it follows the page it runs in; with no document
+ * (a node test) the page is taken to be at `/`.
+ */
+export function apiRoot(baseURI: string | undefined = globalThis.document?.baseURI): string {
+  return new URL("api", new URL(".", baseURI ?? "http://localhost/")).pathname;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -55,7 +64,7 @@ export function requestInit(
 
 /** `/api/tokens/{id}` with each segment escaped: names come from the API, not us. */
 export function apiPath(...segments: string[]): string {
-  return [API_ROOT, ...segments.map(encodeURIComponent)].join("/");
+  return [apiRoot(), ...segments.map(encodeURIComponent)].join("/");
 }
 
 function firstMessage(parsed: unknown): string | null {

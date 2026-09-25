@@ -46,7 +46,8 @@ export class SessionVM {
    */
   submit = async (): Promise<void> => {
     if (!this.canSubmit) return;
-    const token = this.candidate;
+    // Pasted credentials arrive with a newline more often than not.
+    const token = this.candidate.trim();
     this.checking = true;
     this.error = null;
     try {

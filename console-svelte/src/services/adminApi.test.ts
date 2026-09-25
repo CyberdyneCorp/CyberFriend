@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { adminApi } from "./adminApi";
-import { apiPath, requestInit } from "./http";
+import { apiPath, apiRoot, requestInit } from "./http";
 import { signIn, signOut } from "./session";
 
 afterEach(() => signOut());
@@ -34,8 +34,15 @@ describe("apiPath", () => {
     );
   });
 
-  it("targets /api on the origin serving the bundle", () => {
+  it("targets /api beside a console served at the root", () => {
     expect(apiPath("status")).toBe("/api/status");
+    expect(apiRoot("https://ops.example/")).toBe("/api");
+    expect(apiRoot("https://ops.example/index.html#/status")).toBe("/api");
+  });
+
+  it("targets /api under the prefix the console is mounted behind", () => {
+    expect(apiRoot("https://ops.example/cyberfriend/")).toBe("/cyberfriend/api");
+    expect(apiRoot("https://ops.example/cyberfriend/index.html#/tokens")).toBe("/cyberfriend/api");
   });
 });
 

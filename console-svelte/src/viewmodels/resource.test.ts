@@ -64,4 +64,20 @@ describe("Resource", () => {
     expect(resource.data).toBe("new");
     expect(resource.loading).toBe(false);
   });
+
+  it("stays loading while the newest request is out, even if an older one finishes", async () => {
+    const answers = [deferred<string>(), deferred<string>()];
+    let call = 0;
+    const resource = new Resource(() => answers[call++]!.promise);
+    const first = resource.reload();
+    const second = resource.reload();
+    answers[0]!.resolve("old");
+    await first;
+    expect(resource.loading).toBe(true);
+    expect(resource.data).toBeNull();
+    answers[1]!.resolve("new");
+    await second;
+    expect(resource.loading).toBe(false);
+    expect(resource.data).toBe("new");
+  });
 });

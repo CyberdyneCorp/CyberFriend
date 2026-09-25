@@ -10,9 +10,16 @@
  * or imported a service, would put state and I/O back in a component where no
  * node test can reach it, which is what the view-models exist to prevent.
  *
- * Files at the top of `src/` (the composition root `main.ts`, the guards) and
- * `*.test.ts` files are outside the rule: they are where the layers are wired
- * together or faked.
+ * The domain imports no packages either, only other domain files.
+ *
+ * Files at the top of `src/` (the composition root `main.ts`) are outside the
+ * import rule, because they are where the layers are wired together, but not
+ * outside the network rule. `*.test.ts` files and the helpers in `test/` are
+ * outside both: they are where the layers are faked.
+ *
+ * The files are read with the TypeScript parser and the Svelte compiler (see
+ * `test/moduleFacts.ts`), not a pattern: a pattern misses every spelling it
+ * did not anticipate, and a guard that misses silently is worse than none.
  */
 
 import { dirname, join, relative, resolve } from "node:path";
@@ -20,7 +27,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { codeOf, sourceFiles } from "./test/sourceScan";
+import { factsOf, type Import } from "./test/moduleFacts";
+import { sourceFiles } from "./test/sourceScan";
 
 const SRC = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURES = fileURLToPath(new URL("../fixtures/architecture/", import.meta.url));
@@ -38,28 +46,14 @@ const MAY_IMPORT: Record<Layer, readonly Layer[]> = {
 /** Imports a layer may make only with `import type`. */
 const TYPES_ONLY: Partial<Record<Layer, readonly Layer[]>> = { services: ["domain"] };
 
+/** Layers that may not import packages either: the domain is plain TypeScript. */
+const NO_PACKAGES: readonly Layer[] = ["domain"];
+
 /** The one file that talks to the network. */
 const NETWORK_CLIENT = "services/http.ts";
 
-const NETWORK = /\b(fetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon)/;
-
-interface Import {
-  specifier: string;
-  typeOnly: boolean;
-}
-
-/** Static imports, re-exports and dynamic imports, multi-line ones included. */
-function importsOf(code: string): Import[] {
-  const found: Import[] = [];
-  const statement = /(?:^|[;\n])\s*(?:import|export)\s+(type\s+)?(?:[^"';]*?\sfrom\s*)?["']([^"']+)["']/g;
-  for (const match of code.matchAll(statement)) {
-    found.push({ specifier: match[2] ?? "", typeOnly: match[1] !== undefined });
-  }
-  for (const match of code.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)) {
-    found.push({ specifier: match[1] ?? "", typeOnly: false });
-  }
-  return found;
-}
+/** Test helpers: fakes and scanners, outside the rule like `*.test.ts`. */
+const TEST_HELPERS = "test/";
 
 function layerOf(path: string): Layer | null {
   const top = path.split("/")[0];
@@ -74,28 +68,40 @@ function refusal(from: Layer, target: Layer, typeOnly: boolean): string | null {
   return null;
 }
 
-function importViolations(root: string, file: string, from: Layer): string[] {
-  return importsOf(codeOf(join(root, file))).flatMap(({ specifier, typeOnly }) => {
-    if (!specifier.startsWith(".")) return [];
-    const target = layerOf(relative(root, resolve(dirname(join(root, file)), specifier)));
-    const why = target === null ? `${from} may not import outside the layers` : refusal(from, target, typeOnly);
-    return why === null ? [] : [`${file} -> ${specifier}: ${why}`];
+/** Why this one import breaks the rule, or null when it does not. */
+function importRefusal(root: string, file: string, from: Layer, { specifier, typeOnly }: Import): string | null {
+  if (specifier === null) return `${from} may not import a computed path`;
+  if (!specifier.startsWith(".")) {
+    return NO_PACKAGES.includes(from) ? `${from} may not import packages` : null;
+  }
+  const target = layerOf(relative(root, resolve(dirname(join(root, file)), specifier)));
+  return target === null ? `${from} may not import outside the layers` : refusal(from, target, typeOnly);
+}
+
+function importViolations(root: string, file: string, from: Layer, imports: Import[]): string[] {
+  return imports.flatMap((made) => {
+    const why = importRefusal(root, file, from, made);
+    return why === null ? [] : [`${file} -> ${made.specifier ?? "(computed)"}: ${why}`];
   });
 }
 
-/** Every broken rule under `root`, as `file -> import: reason`. */
+/**
+ * Every broken rule under `root`, as `file -> import: reason`. The network
+ * rule covers every file, the composition root included; the import rule
+ * covers the layers.
+ */
 function violations(root: string): string[] {
-  const files = sourceFiles(root, (name) => name.endsWith(".test.ts")).map((path) =>
-    relative(root, path),
-  );
+  const files = sourceFiles(root, (name) => name.endsWith(".test.ts"))
+    .map((path) => relative(root, path))
+    .filter((file) => !file.startsWith(TEST_HELPERS));
   return files.flatMap((file) => {
+    const facts = factsOf(join(root, file));
     const from = layerOf(file);
-    if (from === null) return [];
     const network =
-      file !== NETWORK_CLIENT && NETWORK.test(codeOf(join(root, file)))
+      file !== NETWORK_CLIENT && facts.network.length > 0
         ? [`${file}: only ${NETWORK_CLIENT} makes network requests`]
         : [];
-    return [...importViolations(root, file, from), ...network];
+    return [...(from === null ? [] : importViolations(root, file, from, facts.imports)), ...network];
   });
 }
 
@@ -121,11 +127,20 @@ describe("the layer rule itself", () => {
   it("catches every import and request the rule forbids", () => {
     expect(violations(join(FIXTURES, "leaks"))).toEqual([
       "domain/impure.ts -> ../services/http: domain may not import services",
+      "domain/usesPackage.ts -> svelte/store: domain may not import packages",
+      "main.ts: only services/http.ts makes network requests",
+      "services/computedImport.ts -> (computed): services may not import a computed path",
       "services/dynamic.ts -> ../viewmodels/status.svelte: services may not import viewmodels",
       "services/valueFromDomain.ts -> ../domain/format: services may import only types from domain",
+      "viewmodels/aliasesFetch.svelte.ts: only services/http.ts makes network requests",
+      "viewmodels/computedGlobal.svelte.ts: only services/http.ts makes network requests",
       "viewmodels/usesView.svelte.ts -> ../views/App.svelte: viewmodels may not import views",
       "views/Fetches.svelte: only services/http.ts makes network requests",
+      "views/FetchesInMarkup.svelte: only services/http.ts makes network requests",
       "views/Leaky.svelte -> ../services/adminApi: views may not import services",
+      "views/NoSpaceBeforeFrom.svelte -> ../services/http: views may not import services",
+      "views/SameLineAsScript.svelte -> ../services/http: views may not import services",
+      "views/TypeFromService.svelte -> ../services/adminApi: views may not import services",
     ]);
   });
 

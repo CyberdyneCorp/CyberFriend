@@ -75,4 +75,34 @@ describe("SessionVM", () => {
     expect(vm.role).toBeNull();
     vm.dispose();
   });
+
+  it("checks a credential once, however often the form is submitted meanwhile", async () => {
+    let calls = 0;
+    let accept!: () => void;
+    const vm = new SessionVM(fakeSession(), () => {
+      calls += 1;
+      return new Promise<void>((resolve) => (accept = resolve));
+    });
+    vm.candidate = "cfa_good";
+    const first = vm.submit();
+    expect(vm.checking).toBe(true);
+    expect(vm.canSubmit).toBe(false);
+    await vm.submit();
+    accept();
+    await first;
+    expect(calls).toBe(1);
+    expect(vm.checking).toBe(false);
+  });
+
+  it("checks and holds the credential without the whitespace it was pasted with", async () => {
+    const session = fakeSession();
+    const checked: string[] = [];
+    const vm = new SessionVM(session, async (token) => {
+      checked.push(token);
+    });
+    vm.candidate = "  cfa_good \n";
+    await vm.submit();
+    expect(checked).toEqual(["cfa_good"]);
+    expect(session.held()).toBe("cfa_good");
+  });
 });

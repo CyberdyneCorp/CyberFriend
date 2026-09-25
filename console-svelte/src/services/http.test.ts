@@ -47,4 +47,17 @@ describe("verifyCredential", () => {
     await expect(verifyCredential("cfa_wrong")).rejects.toThrow(REFUSED_MESSAGE);
     expect(isSignedIn()).toBe(true);
   });
+
+  it.each([500, 403])("rejects a %i with the API's reason instead of accepting it", async (status) => {
+    respond(status, { detail: "admin database unreachable" });
+    await expect(verifyCredential("cfa_candidate")).rejects.toEqual(
+      new ApiError(status, "admin database unreachable"),
+    );
+    expect(isSignedIn()).toBe(false);
+  });
+
+  it("accepts a credential the API answers with a 2xx", async () => {
+    respond(200, { status: "ok" });
+    await expect(verifyCredential("cfa_candidate")).resolves.toBeUndefined();
+  });
 });

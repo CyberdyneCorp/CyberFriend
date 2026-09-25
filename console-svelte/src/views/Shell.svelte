@@ -3,13 +3,17 @@
 -->
 <script lang="ts">
   import type { ConsoleVM } from "../viewmodels/console.svelte";
-  import { ROUTES } from "./routes";
+  import type { Route } from "../viewmodels/router.svelte";
+  import { ROUTES, type ScreenView } from "./routes";
 
-  let { app }: { app: ConsoleVM } = $props();
+  // `routes` is the real table unless a test hands it one with a route the
+  // signed-in role may not open.
+  let { app, routes = ROUTES }: { app: ConsoleVM; routes?: readonly Route<ScreenView>[] } =
+    $props();
 
-  // The console is built once and never replaced, so its first value is the value.
+  // The console and its table are fixed for the shell's life, so their first values are the values.
   // svelte-ignore state_referenced_locally
-  const router = app.router(ROUTES);
+  const router = app.router(routes);
   const nav = $derived(router.visibleTo(app.session.role));
 
   $effect(() => {
