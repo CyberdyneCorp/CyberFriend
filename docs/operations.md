@@ -901,11 +901,19 @@ called, and nothing about a voice note or image is searchable yet.
 | | |
 |---|---|
 | `MEDIA_ENABLED_AT` | Unset by default: nothing is recorded. An ISO timestamp (UTC when it has no zone); messages created at or after it are recorded. Ingest only |
-| `MEDIA_BACKFILL_DAYS` | Default 0. Days before `MEDIA_ENABLED_AT` also recorded, when history is re-read by backfill or reconciliation |
+| `MEDIA_BACKFILL_DAYS` | Default 0. Days before `MEDIA_ENABLED_AT` also recorded, for messages ingest writes from now on (see below). History already imported is not re-read |
 
 A moment rather than a switch, on purpose: members posted their earlier voice
 notes without expecting them to be transcribed, so set it to when they were
 told, and leave the backfill at 0 unless they were told that too.
+
+Both are checked only when ingest writes a message: live, on an edit, in a
+channel's first backfill (one newly indexed, or returned to scope), or when
+reconciliation finds a message posted while ingest was down. A message already
+imported and never edited is not written again, so on an existing deployment
+`MEDIA_BACKFILL_DAYS` records nothing of the channels already indexed: backfill
+has finished with their history, and reconciliation rewrites only what
+changed. There is no command yet to re-read a window of history for media.
 
 ### What is recorded
 
@@ -920,9 +928,12 @@ note, and the signed CDN URL — never the bytes.
 - **Only stored messages.** A row references its message, so DMs, private
   threads, channels out of scope, bot messages and opted-out authors — none of
   which become a stored message — can have none.
-- **Re-reading refreshes, never resets.** A CDN URL expires in about a day;
-  each re-read of a message replaces a pending row's URL and leaves its status
-  and attempts alone.
+- **Re-writing refreshes, never resets.** When a message is written again (an
+  edit, a gateway re-delivery) a pending row takes its new URL and keeps its
+  status and attempts. That is rare, so the stored URL — which expires in about
+  a day — is usually stale by the time anything reads it; the transcription
+  worker (not yet built) re-fetches the message for a fresh one right before
+  downloading.
 - **Edits.** An edit that removes an attachment removes its row.
 - **Deletion.** Deleting a message withdraws its rows in the same transaction:
   status `withdrawn`, any derived text and the URL cleared.

@@ -36,9 +36,13 @@ after the message:
 - `INSERT ... SELECT FROM message WHERE id = :id AND deleted_at IS NULL`, so a
   message refused by the 0008 opt-out trigger, or born tombstoned, gets none.
 - `ON CONFLICT (message_id, attachment_id)` refreshes `source_url` only while
-  the row is pending, and never touches status or attempts: a CDN URL expires
-  in about a day and a re-read is the only way to renew it, but a re-read is
-  not a reason to process anything again.
+  the row is pending, and never touches status or attempts: a newer read
+  carries a fresher CDN URL, but a re-read is not a reason to process anything
+  again. This is opportunistic. An unedited message is written once: backfill
+  never re-reads imported history (its cursor only moves older) and
+  reconciliation writes only messages whose revision changed. So the stored
+  URL, which expires in about a day, is normally stale by the time a worker
+  reads it; see "A fresh URL at download".
 - Every write first deletes the rows of attachments the message no longer
   carries. Correct because every writer -- live capture, edits, backfill,
   reconciliation -- writes a full re-read of the platform's message. A
@@ -54,10 +58,30 @@ harness standing in for it, so the moment recording starts is decided once.
 
 `MEDIA_ENABLED_AT` is a timestamp rather than a boolean. Members posted their
 earlier voice notes without expecting them to be transcribed; naming the
-moment they were told keeps a later restart, or a backfill re-reading history,
-from sweeping those in. It is stated in configuration rather than recorded by
-the process at first start, so it cannot drift if the feature is switched off
-and on.
+moment they were told keeps a later restart, or a newly indexed channel's
+backfill, from sweeping those in. It is stated in configuration rather than
+recorded by the process at first start, so it cannot drift if the feature is
+switched off and on.
+
+`MEDIA_BACKFILL_DAYS` moves `media_since` earlier, but only for messages
+ingest writes after that: a channel's first backfill (newly indexed or
+returned to scope), edits, and messages reconciliation finds were posted while
+ingest was down. History already imported is never written again, so on a
+deployment whose channels are already indexed it records nothing. A one-shot
+re-read of `[media_since, now)` for the indexed channels would close that gap;
+it is not part of this change, and the operator docs say so.
+
+### A fresh URL at download
+
+The signed CDN URL on a row cannot be trusted at download time: rows recorded
+before the worker is switched on, or waiting behind the monthly cap, outlive
+its ~24 h. From PR 9 the worker re-fetches the message by channel and message
+id through the Discord client ingest already uses for backfill and
+reconciliation, immediately before downloading, and takes the attachment's
+URL from that read (through `media_of`, so the host check applies again),
+never the stored one. The same read settles the edge cases: a message that no longer exists is
+tombstoned (its rows withdrawn), and an attachment it no longer carries loses
+its row, both without downloading anything.
 
 ### Deletion paths
 
@@ -101,7 +125,8 @@ aggregates done text and `_render` appends `[audio 0:42] ...` /
   foreign key means no media row can exist without one. This is structural,
   not a check that could be forgotten.
 - Nothing is recorded before `MEDIA_ENABLED_AT`; no historical media unless an
-  operator sets `MEDIA_BACKFILL_DAYS`.
+  operator sets `MEDIA_BACKFILL_DAYS`, and then only for history ingest has
+  not imported yet.
 - Capture never downloads or sends anything. From PR 9, the claim re-checks
   deletion, scope, the global opt-out and the per-person media opt-out
   immediately before download, and bytes are never persisted.
@@ -121,6 +146,13 @@ aggregates done text and `_render` appends `[audio 0:42] ...` /
 - The per-person media opt-out lands with the worker (PR 9): until then rows
   are recorded for people who will opt out of processing, which is harmless
   because nothing processes them.
-- A backlog over budget can outlive the CDN URL's ~24 h; re-reads repair it
-  only within the reconciliation lookback, and older rows end up failed.
+- The CDN URL stored at capture expires in about a day and is almost never
+  renewed, because an unedited message is not written again. PR 9's worker
+  must re-fetch the message for a fresh URL before every download (see "A
+  fresh URL at download"); relying on the stored URL would fail every row
+  recorded more than a day before it is processed, including all rows
+  recorded between enabling capture and switching the worker on.
+- `MEDIA_BACKFILL_DAYS` does nothing for history already imported (see "An
+  operator names the moment"). An operator expecting it to sweep in the last
+  N days of an existing channel would get nothing; the docs state it.
 - Redaction runs on the model's output, after the bytes have left.

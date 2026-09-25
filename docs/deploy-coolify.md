@@ -91,7 +91,7 @@ Set at **runtime** scope, not build scope — the image must contain no secrets.
 | `MEDIA_AUDIO_MONTHLY_MINUTES` | Optional, default `1500`. Hard cap for the whole deployment per month: the ceiling on the transcription bill. |
 | `MEDIA_TIMEOUT_SECONDS` | Optional, default `30`. Bound on one download and on one transcription. |
 | `MEDIA_ENABLED_AT` | Optional, unset by default. Ingest only. From this moment (ISO timestamp, UTC when unzoned), voice notes and images posted in indexed channels are recorded as pending rows: metadata only, nothing downloaded. Unset records nothing. |
-| `MEDIA_BACKFILL_DAYS` | Optional, default `0`. Days before `MEDIA_ENABLED_AT` also recorded when history is re-read. |
+| `MEDIA_BACKFILL_DAYS` | Optional, default `0`. Days before `MEDIA_ENABLED_AT` also recorded, but only for messages ingest writes from now on: a newly indexed channel's backfill, edits, messages posted while ingest was down. History already imported is not re-read. |
 | `ANSWER_TIMEZONE` | Optional. IANA zone whose days "ontem" and "semana passada" mean; defaults to `America/Sao_Paulo`. An unknown name stops the bot at boot. |
 
 ### MCP tokens are bound to a person

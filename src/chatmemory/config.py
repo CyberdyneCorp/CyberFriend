@@ -356,8 +356,10 @@ class Settings(BaseSettings):
     """
 
     media_backfill_days: int = 0
-    """Days before MEDIA_ENABLED_AT whose media is recorded too, when history is
-    re-read. 0 records only what was posted after it."""
+    """Days before MEDIA_ENABLED_AT whose media is recorded too. 0 records only
+    what was posted after it. Applies only to messages ingest writes from now
+    on (a channel's first backfill, edits, messages missed while down): history
+    already imported is never re-read, so it records nothing of it."""
 
     # --- Time ----------------------------------------------------------
     answer_timezone: str = "America/Sao_Paulo"

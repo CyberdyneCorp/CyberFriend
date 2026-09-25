@@ -9,6 +9,7 @@ or withdraws what hangs off it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -17,6 +18,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.discord.source import Reconciler
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.app.optout import OptOutService
@@ -94,6 +96,66 @@ async def test_nothing_is_recorded_before_media_is_enabled(clean: AsyncEngine) -
     await store(clean).upsert_messages([msg(2, note(20), at=ENABLED - timedelta(seconds=1))])
 
     assert await rows(clean) == []
+
+
+async def test_a_message_created_exactly_at_the_moment_is_recorded(
+    clean: AsyncEngine,
+) -> None:
+    """"At or after": the cutoff itself is inside the window."""
+    await store(clean).upsert_messages([msg(1, note(10), at=ENABLED)])
+
+    assert [r["message_id"] for r in await rows(clean)] == [1]
+
+
+class LiveHistory:
+    """What Discord says the channel holds now, newest first."""
+
+    def __init__(self, *messages: Message) -> None:
+        self._messages = sorted(messages, key=lambda m: -m.platform_message_id)
+
+    async def backfill(
+        self, channel: ChannelRef, before_message_id: int | None, limit: int
+    ) -> Sequence[Message]:
+        older = [
+            m
+            for m in self._messages
+            if before_message_id is None or m.platform_message_id < before_message_id
+        ]
+        return older[:limit]
+
+
+class StoreSink:
+    """Reconciliation's corrections, written straight to the store."""
+
+    def __init__(self, corpus: PostgresStore) -> None:
+        self._corpus = corpus
+
+    async def handle_edit(self, message: Message) -> None:
+        await self._corpus.upsert_messages([message])
+
+    async def handle_delete(self, platform_message_id: int, at: datetime | None = None) -> None:
+        await self._corpus.tombstone_message(platform_message_id, at or NOW)
+
+
+async def test_a_backfill_window_does_not_reach_history_already_imported(
+    clean: AsyncEngine,
+) -> None:
+    """MEDIA_BACKFILL_DAYS applies to what ingest writes from now on, not to
+    what it already holds: an unchanged message is never written again.
+
+    Pins what docs/operations.md promises. Should a re-read of imported history
+    for media ever be added, this is the test that changes.
+    """
+    in_window = ENABLED - timedelta(days=2)
+    imported = msg(1, note(10), at=in_window)
+    await PostgresStore(clean).upsert_messages([imported])  # before media was on
+
+    missed = msg(2, note(20), at=in_window + timedelta(hours=1))  # posted while down
+    widened = PostgresStore(clean, media_since=ENABLED - timedelta(days=7))
+    reconciler = Reconciler(LiveHistory(imported, missed), widened, StoreSink(widened))
+    await reconciler.reconcile(CHANNEL, ENABLED - timedelta(days=7))
+
+    assert [r["message_id"] for r in await rows(clean)] == [2]
 
 
 async def test_a_re_read_refreshes_the_url_and_never_the_status(clean: AsyncEngine) -> None:

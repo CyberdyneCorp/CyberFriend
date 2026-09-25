@@ -7,11 +7,12 @@
 - [x] 8.5 Settings `MEDIA_ENABLED_AT`, `MEDIA_BACKFILL_DAYS`; `build_corpus_store` for ingest and the e2e harness; compose declares them for ingest only
 - [x] 8.6 Tests: unit (`media_of`, settings), integration (capture, refresh, edit, delete-before-insert, opt-out trigger, tombstone, retention/opt-out/channel purge cascade), e2e through the gateway handler (DM, private thread, unindexed channel create no row; an indexed channel creates exactly one pending row; nothing fetched, no model call)
 - [x] 8.7 docs/operations.md, docs/deploy-coolify.md
+- [x] 8.8 Review: `MEDIA_BACKFILL_DAYS` documented as applying only to history not yet imported; the stored URL documented as stale, with the PR 9 re-fetch recorded; tests for the cutoff boundary and for reconciliation not re-recording unchanged history
 
 ## PR 9. Transcribe voice notes into the windows
 
 - [ ] 9.1 `MediaWorker` and the claim statement (scope array, opt-outs incl. per-person media opt-out, attempts, backoff, monthly audio budget shared with `media_usage`)
-- [ ] 9.2 Download over the process transport from the CDN only; magic-byte sniffing; 403/404 as an attempt with backoff
+- [ ] 9.2 Re-fetch the message by channel/message id through the ingest Discord client right before each download and take the attachment's fresh URL from it (through `media_of`); a missing message tombstones, a missing attachment drops its row. Download over the process transport from the CDN only; magic-byte sniffing; 403/404 as an attempt with backoff
 - [ ] 9.3 Post-processing: contact withholding (spelled-out digits), secret redaction, hallucination filter, truncation
 - [ ] 9.4 Rewindow aggregation and `_render` markers; settings and validators; docs/media-ingestion.md
 - [ ] 9.5 Unit and e2e scenarios from the plan

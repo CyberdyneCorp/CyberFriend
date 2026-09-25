@@ -4,7 +4,9 @@
 
 The system SHALL NOT record any attachment as media unless `MEDIA_ENABLED_AT`
 is set, and SHALL then record only attachments of messages created at or after
-`MEDIA_ENABLED_AT` minus `MEDIA_BACKFILL_DAYS` (default 0).
+`MEDIA_ENABLED_AT` minus `MEDIA_BACKFILL_DAYS` (default 0). The cutoff is
+applied when ingest writes a message; history already imported and not
+changed since is not written again, so it gains no media rows.
 
 #### Scenario: Not enabled
 - WHEN `MEDIA_ENABLED_AT` is unset and a voice note is posted in an indexed
@@ -16,10 +18,23 @@ is set, and SHALL then record only attachments of messages created at or after
   reconciliation and `MEDIA_BACKFILL_DAYS` is 0
 - THEN no media row SHALL be created for it
 
+#### Scenario: Created exactly at the moment
+- WHEN a message created exactly at `MEDIA_ENABLED_AT` is written
+- THEN its attachments SHALL be recorded
+
 #### Scenario: A backfill window
 - WHEN `MEDIA_BACKFILL_DAYS` is N and a message created within N days before
-  `MEDIA_ENABLED_AT` is re-read
+  `MEDIA_ENABLED_AT` is first written by ingest -- a newly indexed channel's
+  backfill, or reconciliation finding a message posted while ingest was down
+  -- or is written again because it was edited
 - THEN its attachments SHALL be recorded
+
+#### Scenario: A backfill window over history already imported
+- WHEN `MEDIA_BACKFILL_DAYS` is N and a message within N days before
+  `MEDIA_ENABLED_AT` was imported before media was enabled and has not
+  changed since
+- THEN reconciliation SHALL NOT write it again and no media row SHALL be
+  created for it
 
 #### Scenario: A negative backfill
 - WHEN `MEDIA_BACKFILL_DAYS` is negative

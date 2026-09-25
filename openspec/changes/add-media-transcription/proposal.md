@@ -35,7 +35,8 @@ Non-goals:
 - **The document corpus.** Transcripts are message text, not documents; the
   document retrieval path is not wired in production.
 - **GIF and video.**
-- **Media posted before it was enabled**, unless an operator sets a backfill.
+- **Media posted before it was enabled**, unless an operator sets a backfill,
+  and even then not in history already imported.
 
 ## Impact
 

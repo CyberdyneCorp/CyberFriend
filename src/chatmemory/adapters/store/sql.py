@@ -118,9 +118,11 @@ SELECT m.id, :attachment_id, :kind, :declared_type, :filename, :byte_size,
 FROM message m
 WHERE m.id = :message_id AND m.deleted_at IS NULL
 ON CONFLICT (message_id, attachment_id) DO UPDATE SET
-    -- A CDN URL expires in about a day, and re-reading the message is the only
-    -- way to get a fresh one. Nothing else changes, and the status never does:
-    -- a re-read is not a reason to process an attachment again.
+    -- A CDN URL expires in about a day and a newer read carries a fresher one,
+    -- so keep it -- but an unedited message is rarely written again, so the
+    -- worker must re-fetch the message before downloading rather than trust
+    -- this. Nothing else changes, and the status never does: a re-read is not
+    -- a reason to process an attachment again.
     source_url = EXCLUDED.source_url
 WHERE message_media.status = 'pending'
 """)
