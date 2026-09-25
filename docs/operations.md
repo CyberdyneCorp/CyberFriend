@@ -94,8 +94,9 @@ never works. Before 0028 scheduled tasks, MCP tokens and the fetch log
 survived an opt-out; the migration purges the first two for everyone already
 opted out, and deletes fetch-log rows whose message no longer exists (the old
 opt-out had deleted those messages, so nothing else links the rows to the
-person). One store is still left behind: Langfuse copies of runs the person
-asked before opting out (see [Tracing](#tracing) below).
+person). The opt-out also schedules the person's exported traces for deletion:
+the runs of questions they asked and every run quoting one of their messages
+(see [Tracing](#tracing) below).
 
 **It survives re-ingestion.** Discord still holds their messages, and backfill
 re-reads history from Discord. The exclusion is therefore enforced by a database
@@ -250,6 +251,7 @@ to say later whether the assistant is getting better.
 | `TRACING_ENABLED` | Off by default. Both `bot` and `ingest` need it |
 | `LANGFUSE_HOST` | e.g. `https://langfuse.example.com`, no trailing path |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
+| `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
 
 Turning it on with a host but no keys is refused at startup rather than
@@ -272,10 +274,32 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   in the `ingest` process every five minutes.
 - **An opt-out stops new exports.** Nothing is exported for a person who has
   opted out of indexing. If the opt-out registry cannot be read, the run is
-  withheld rather than exported. Traces exported *before* the opt-out are not
-  yet withdrawn: a run of a question the person asked stays in Langfuse until
-  it is deleted there by hand (withdrawing them is task 2 of the
-  `add-privacy-dashboard` change).
+  withheld rather than exported.
+- **An opt-out withdraws earlier exports.** Each export records the asker's
+  platform id (`trace_export.asker_platform_user_id`, migration 0029). An
+  opt-out, from the console or otherwise, marks every trace asked by any of
+  the person's platform ids and every trace quoting a message they wrote as
+  pending deletion, and queues a search (`trace_asker_search`). Traces
+  exported before 0029 carry no recorded asker, so the `ingest` sweep pages
+  `GET /api/public/traces?userId=<id>&environment=<LANGFUSE_ENVIRONMENT>`
+  for each queued id and records what it finds as pending, keeping only rows
+  in our environment named after one of our answer paths (`fixed`, `loop`):
+  another app's or environment's traces in a shared project are never
+  deleted. The same sweep then deletes everything pending. The console only
+  marks: it holds no Langfuse keys, and `bot` and `ingest` are the processes
+  that hold the pair. A search or deletion Langfuse refuses or cannot receive
+  (a 400 included) stays pending and is retried every five minutes. The
+  migration queues a search for everyone who had already opted out, which
+  finds the traces of questions they asked. It cannot find the traces that
+  *quote* their messages: that link runs through their `message` rows, and
+  the earlier opt-out deleted them, so for people who opted out before 0029
+  those traces stay in Langfuse. To withdraw them, mark every trace exported
+  before the 0029 deploy as pending and let the sweep delete it:
+  `UPDATE trace_export SET deletion_requested_at = now() WHERE deleted_at IS NULL AND created_at < '<0029 deploy time>';`
+  This deletes other people's older traces too; no narrower query exists. A run
+  already answering when the opt-out lands is recorded as pending the moment
+  it is exported. Langfuse deletes asynchronously, so "withdrawn" means the
+  deletion was accepted.
 
 Neither of these makes the destination safe to share widely. They keep the
 deletion guarantee true across the copy, and the opt-out guarantee for

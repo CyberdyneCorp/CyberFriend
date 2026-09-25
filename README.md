@@ -467,6 +467,7 @@ lists the common ones. The settings worth knowing:
 | `MEDIA_ENABLED_AT`, `MEDIA_BACKFILL_DAYS` | From when channel voice notes and images are recorded (unset: never), and how many days before that also count for messages ingest writes from now on (default 0) |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
+| `LANGFUSE_ENVIRONMENT` | Langfuse environment to export to and search on opt-out (`production`) |
 
 Anything that reaches outside the server is off by default. A deployment should
 acquire an outbound boundary because somebody chose it.

@@ -74,6 +74,8 @@ services:
       - LANGFUSE_HOST=${LANGFUSE_HOST}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      # The Langfuse environment exported to and the only one searched on opt-out.
+      - LANGFUSE_ENVIRONMENT=${LANGFUSE_ENVIRONMENT}
       - TRACING_TIMEOUT_SECONDS=${TRACING_TIMEOUT_SECONDS}
       - HEALTH_PORT=8080
     healthcheck:
@@ -165,6 +167,8 @@ services:
       - LANGFUSE_HOST=${LANGFUSE_HOST}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      # The Langfuse environment exported to and the only one searched on opt-out.
+      - LANGFUSE_ENVIRONMENT=${LANGFUSE_ENVIRONMENT}
       - TRACING_TIMEOUT_SECONDS=${TRACING_TIMEOUT_SECONDS}
       # Conversation memory: turns kept verbatim, and the size past which older
       # turns are summarised on EXTRACTION_MODEL in the background.
