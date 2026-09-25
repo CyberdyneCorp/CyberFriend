@@ -117,6 +117,23 @@ function toolRow(name: string): HTMLElement {
   return row;
 }
 
+/** The card for a federated server. */
+function serverCard(name: string): HTMLElement {
+  const card = screen.getByRole("heading", { name }).closest("article");
+  if (card === null) throw new Error(`no card for ${name}`);
+  return card;
+}
+
+/** The allowlist table's row for `server/tool`. */
+function allowlistRow(server: string, tool: string): HTMLElement {
+  const row = Array.from(document.querySelectorAll<HTMLElement>("tbody tr")).find((candidate) => {
+    const cells = Array.from(candidate.querySelectorAll("td"), (cell) => cell.textContent?.trim());
+    return cells[0] === server && cells[1] === tool;
+  });
+  if (row === undefined) throw new Error(`no allowlist row for ${server}/${tool}`);
+  return row;
+}
+
 /** The table row that mentions `text`. */
 function rowOf(text: string): HTMLElement {
   const row = screen.getByText(text).closest("tr");
@@ -169,6 +186,48 @@ describe("the federation screen", () => {
       { server: "ops", tool: "restart_service", read_only: false, confirm_tool_name: "restart_service" },
     ]);
   });
+
+  it("adds a server with the name and target typed", async () => {
+    await fireEvent.input(screen.getByLabelText("Name"), { target: { value: " issues " } });
+    await fireEvent.input(screen.getByLabelText("Target"), { target: { value: "https://mcp.example/issues" } });
+    await fireEvent.click(button("Add server"));
+    await screen.findByText(/issues answered and offers 0 tool\(s\)\. Nothing it offers is enabled yet\./);
+    expect(api.writes).toEqual([
+      'POST /api/federation/servers {"name":"issues","target":"https://mcp.example/issues"}',
+    ]);
+    await screen.findByText("https://mcp.example/issues");
+  });
+
+  it("removes a server only on the second click, and only that server", async () => {
+    await fireEvent.click(within(serverCard("stale")).getByRole("button", { name: "Remove" }));
+    expect(api.writes).toEqual([]);
+    await press(within(serverCard("stale")).getByRole("button", { name: "Remove this server" }));
+    await screen.findByText("stale removed");
+    expect(api.writes).toEqual(["DELETE /api/federation/servers/stale"]);
+    await waitFor(() => expect(screen.queryByText("probe timed out after 5s")).toBeNull());
+  });
+
+  it("will not remove a server while another change is in flight", async () => {
+    await fireEvent.click(within(serverCard("stale")).getByRole("button", { name: "Remove" }));
+    // The allow's request is still open when the remove is pressed.
+    await fireEvent.click(within(toolRow("search")).getByRole("button", { name: "Allow" }));
+    const remove = within(serverCard("stale")).getByRole("button", { name: "Remove this server" });
+    expect((remove as HTMLButtonElement).disabled).toBe(true);
+    await screen.findByText(/is now available to the agent/);
+    expect(api.writes).toEqual([]);
+  });
+
+  it("revokes an allowlisted tool only on the second click", async () => {
+    await fireEvent.click(within(toolRow("search")).getByRole("button", { name: "Allow" }));
+    await screen.findByText(/is now available to the agent/);
+    const entry = await waitFor(() => allowlistRow("wikipedia", "search"));
+    await fireEvent.click(within(entry).getByRole("button", { name: "Revoke" }));
+    expect(api.writes).toEqual([]);
+    await press(within(allowlistRow("wikipedia", "search")).getByRole("button", { name: "Revoke this tool" }));
+    await screen.findByText("wikipedia/search is no longer available");
+    expect(api.writes).toEqual(["DELETE /api/federation/allowlist/wikipedia/search"]);
+    await screen.findByText("Nothing is allowlisted.");
+  });
 });
 
 describe("the channels screen", () => {
@@ -220,11 +279,31 @@ describe("the settings screen", () => {
   });
 });
 
+describe("the retention screen without a retention setting", () => {
+  it("says there is none rather than showing an editor that would not save", async () => {
+    api.state.settings = (api.state.settings as { key: string }[]).filter((row) => row.key !== "retention_days");
+    await open("Retention", "discord:42");
+    expect(screen.getByText(/The API exposes no retention setting/)).toBeTruthy();
+  });
+});
+
 describe("the retention screen", () => {
   beforeEach(() => open("Retention", "discord:42"));
 
-  it("says there is no retention setting rather than showing an editor that would not save", () => {
-    expect(screen.getByText(/The API exposes no retention setting/)).toBeTruthy();
+  it("shows only the retention settings, and saves one under its own key", async () => {
+    expect(screen.queryByText("window_max_tokens")).toBeNull();
+    await fireEvent.click(within(rowOf("retention_days")).getByRole("button", { name: "Edit" }));
+    await fireEvent.input(within(rowOf("retention_days")).getByRole("textbox"), { target: { value: "90" } });
+    await fireEvent.click(within(rowOf("retention_days")).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.writes).toEqual(['PUT /api/settings/retention_days {"value":"90"}']));
+  });
+
+  it("opts a person out by platform and id", async () => {
+    await fireEvent.input(screen.getByLabelText("Platform user id"), { target: { value: " 77 " } });
+    await fireEvent.click(button("Opt this person out"));
+    await screen.findByText("the exclusion is enforced in the database");
+    expect(api.writes).toEqual(['POST /api/optouts {"platform":"discord","platform_user_id":"77"}']);
+    await screen.findByText("discord:77");
   });
 
   it("opts a person back in only on the second click, by platform and id", async () => {

@@ -52,6 +52,14 @@ function fixtures(): Json {
         summary: "tokens per retrieval window",
       },
       {
+        key: "retention_days",
+        value: 365,
+        text: "365",
+        source: "default",
+        editable: true,
+        summary: "days a message is kept before the sweep removes it",
+      },
+      {
         key: "indexed_channel_ids",
         value: ["100", "200"],
         text: "100 200",
@@ -222,6 +230,25 @@ const WRITES: WriteRoute[] = [
     if (token !== undefined) token.revoked_at = "2026-09-16T10:00:00+00:00";
     return [200, { changed: "mcp_token" }];
   }],
+  ["POST", "/api/federation/servers", (state, _last, body) => {
+    const server = { name: String(body.name), target: String(body.target), reachable: true, failure: null, tools: [] };
+    rows(state, "servers").push(server);
+    return [200, { changed: "federation_servers", detail: `${server.name} answered and offers 0 tool(s)`, server }];
+  }],
+  ["DELETE", "/api/federation/servers/", (state, last) => {
+    state.servers = rows(state, "servers").filter((server) => server.name !== last);
+    return [200, { changed: "federation_servers", detail: `${last} removed` }];
+  }],
+  ["DELETE", "/api/federation/allowlist/", (state, last, _body, path) => {
+    const [, , , , server] = path.split("/");
+    state.allowlist = rows(state, "allowlist").filter((entry) => !(entry.server === server && entry.tool === last));
+    return [200, { changed: "federation_tool_allowlist", detail: `${server}/${last} is no longer available` }];
+  }],
+  ["POST", "/api/optouts", (state, _last, body) => {
+    const person = `${String(body.platform)}:${String(body.platform_user_id)}`;
+    rows(state, "optouts").push({ person, since: "2026-09-16T10:00:00+00:00" });
+    return [200, { changed: `opt_out:${person}`, detail: "the exclusion is enforced in the database", removed: {} }];
+  }],
   ["DELETE", "/api/optouts/", (state, _last, _body, path) => {
     const [, , , platform, id] = path.split("/");
     state.optouts = rows(state, "optouts").filter((row) => row.person !== `${platform}:${id}`);
@@ -240,6 +267,8 @@ function otherWrites(state: Json, method: string, path: string, body: Json): Rep
 
 export interface StubApi {
   origin: string;
+  /** The stub's data, which a test may change before the console reads it. */
+  state: Json;
   /** Every allowlist POST the console made, to assert on what it sent. */
   allowCalls: Json[];
   /** Every other write, as `METHOD /path body`, in order. */
@@ -311,6 +340,7 @@ export async function startStubApi(): Promise<StubApi> {
   if (address === null || typeof address === "string") throw new Error("no port");
   return {
     origin: `http://127.0.0.1:${address.port}`,
+    state,
     allowCalls,
     writes,
     close: () =>

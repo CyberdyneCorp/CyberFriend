@@ -286,15 +286,20 @@ cd console && npm test
   enable button and the two-click removal, in a DOM.
 - `views/Shell.test.ts` — the navigation leaves out a route the role may not
   open.
+- `views/routes.test.ts` — every screen's `minRole` equals the access the
+  server's `ROUTE_ACCESS` asks for the reads that screen makes (it reads
+  `src/chatmemory/admin/server.py`, so a role change on either side fails it).
 - `architecture.test.ts` and `no-browser-storage.test.ts` — source scans; see
   above. Each checks itself against the fixtures in `console/fixtures/`.
 - `console.e2e.test.ts` — the whole app against a stub API it starts itself
   (`src/test/stubApi.ts`): sign-in refused and accepted, sign-out, an unknown
   address, the badge distinction, allowlisting read-only, the typed gate end to
-  end, channel readability and adding an unreadable channel, settings
-  provenance and a save the environment overrides, the retention message,
-  two-click removals of a channel, an opt-out and a token, and the audit's
-  refusals and filter.
+  end, adding a server, two-click removal of one server (and no removal while
+  another change is in flight), revoking an allowlisted tool, channel
+  readability and adding an unreadable channel, settings provenance and a save
+  the environment overrides, the retention message, saving a retention setting
+  under its own key, adding an opt-out, two-click removals of a channel, an
+  opt-out and a token, and the audit's refusals and filter.
 
 The end-to-end test is here because of the bug it caught. Sign-in used to put
 the token in the session and verify it afterwards, so a refused credential
