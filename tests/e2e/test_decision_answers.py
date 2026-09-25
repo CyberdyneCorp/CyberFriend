@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import discord
 import pytest
 
+from chatmemory.app.disclosure import SUPPRESSED_ANSWER
 from chatmemory.domain.identity import PersonRef
 from tests.e2e.harness.conversation import PLATFORM, E2EBot
 from tests.e2e.harness.model import ASK_EXTRACTION
@@ -32,6 +33,8 @@ FREEZE = "fechado: congelamos o deploy até outubro"
 FREEZE_SUMMARY = "O deploy fica congelado até outubro"
 
 COFFEE = "a máquina de café será trocada na sexta"
+#: What #general itself said about the deploy, for retrieval to answer from.
+ROLLOUT = "o deploy de hoje vai ser às 18h"
 
 
 def link(bot: E2EBot, content: str, channel: int = GENERAL) -> str:
@@ -86,7 +89,10 @@ async def test_a_leadership_decision_asked_about_in_general_falls_through_unleak
     lia = bot.person("Lia", roles=[LEAD])
     # Somebody in #general who cannot read #leadership, or the room's
     # audience would be Lia alone and could read everything she can.
-    bot.person("Bea")
+    bea = bot.person("Bea")
+    await bot.seed_conversation(
+        "general", [(PersonRef(PLATFORM, bea.id), "Bea", ROLLOUT, NOW - timedelta(hours=1))]
+    )
     bot.chat.script_decisions(
         FREEZE, {"summary": FREEZE_SUMMARY, "topic": "deploy", "confidence": 0.9}
     )
@@ -98,7 +104,12 @@ async def test_a_leadership_decision_asked_about_in_general_falls_through_unleak
     assert "Decisões sobre" not in public.text
     for secret in (FREEZE_SUMMARY, FREEZE, f"/{LEADERSHIP}/"):
         assert secret not in public.text, f"{secret!r} reached #general"
-    assert public.searched, "fell through to ordinary retrieval"
+    # Reasoning answered, from what #general may read. Not `searched` alone:
+    # the withheld-evidence probe searches too, and a decision reply that
+    # only the audience check stopped becomes the refusal, not this answer.
+    assert "grounded_answer" in public.schemas, "fell through to ordinary retrieval"
+    assert SUPPRESSED_ANSWER not in public.text
+    assert ROLLOUT in public.text
 
     private = await bot.dm(lia).say("o que decidimos sobre o deploy?")
     assert FREEZE_SUMMARY in private.text

@@ -41,6 +41,8 @@ def parse(text: str) -> tuple[str, str | None, Language] | None:
         ("O que ficou decidido sobre o deploy?", ("o deploy", None, PT)),
         ("o que foi decidido sobre o Postgres semana passada?", ("o Postgres", "last_week", PT)),
         ("o que a gente decidiu do banco?", ("banco", None, PT)),
+        ("o que o time decidiu sobre o deploy?", ("o deploy", None, PT)),
+        ("o que decidimos sobre o C#?", ("o C#", None, PT)),
         ("e o que nós combinamos sobre a migração?", ("a migração", None, PT)),
         ("o que ficou definido ontem sobre o release", ("o release", "yesterday", PT)),
         ("qual foi a decisão sobre o preço?", ("o preço", None, PT)),
@@ -78,6 +80,9 @@ def test_decision_questions_are_claimed(
         "what did you decide about the deploy?",
         "o que você decidiu sobre o deploy?",
         "o que o João decidiu sobre o deploy?",
+        # Portuguese drops the subject: a bare singular is "you", not "we".
+        "o que decidiu?",
+        "o que decidiu sobre o deploy?",
         # Asks for help choosing.
         "help me decide between Postgres and MySQL",
         "what did we decide between Postgres and MySQL?",
@@ -87,6 +92,17 @@ def test_decision_questions_are_claimed(
         # A pronoun needs the conversation, which retrieval has.
         "o que decidimos sobre isso?",
         "what did we decide about it?",
+        "what did we decide about me?",
+        "o que decidimos sobre mim?",
+        "o que decidimos sobre você?",
+        # A topic-less follow-up continues a conversation retrieval has.
+        "e o que decidimos?",
+        "and what did we decide?",
+        "so what was decided?",
+        # A channel is a place, not a topic.
+        "o que decidiram no #leadership?",
+        "what did we decide about <#123>?",
+        "what did we decide about the deploy in #general?",
         # Two lookups, or a range no single span covers: retrieval's.
         "what did we decide about the deploy and who is doing it?",
         "o que decidimos de segunda a quarta?",

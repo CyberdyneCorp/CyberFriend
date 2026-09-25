@@ -159,11 +159,19 @@ citation of the message that settled it.
   say so
 
 #### Scenario: Not a lookup of the log
-- WHEN the question asks the bot what it decided ("what did you decide"), asks
-  about one person's decision, asks for help choosing ("decide between A and
-  B"), names its topic only by a pronoun, asks more than one thing, or is a
-  market, fact, catch-up, said-by or obligation question
+- WHEN the question asks the bot what it decided ("what did you decide", or
+  the subjectless "o que decidiu?"), asks about one person's decision, asks
+  for help choosing ("decide between A and B"), names its topic only by a
+  pronoun ("sobre isso", "about me") or a channel ("no #leadership"), asks
+  more than one thing, or is a market, fact, catch-up, said-by or obligation
+  question
 - THEN the decision log SHALL NOT answer it
+
+#### Scenario: A follow-up with no topic
+- WHEN the question names no topic and opens as a continuation ("e o que
+  decidimos?", "and what did we decide?")
+- THEN the decision log SHALL NOT answer it, and retrieval, which has the
+  conversation, SHALL
 
 ### Requirement: A decision answer never discloses what the room cannot read
 

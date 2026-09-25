@@ -796,13 +796,17 @@ class DecisionQuestion:
 
 _DECISION_END = r"\s*[?.!]*\s*$"
 _PT_WHAT = r"(?:e\s+)?(?:o\s*que|oq|o\s+q)(?:\s+(?:e\s+)?que)?"
-_PT_WE = r"(?:(?:nos|a\s+gente|agente|o\s+time|a\s+equipe|o\s+pessoal|a\s+galera)\s+)?"
+_PT_GROUP = r"(?:a\s+gente|agente|o\s+time|a\s+equipe|o\s+pessoal|a\s+galera)"
+_PT_WE = rf"(?:(?:nos|{_PT_GROUP})\s+)?"
 _PT_DECIDED = (
-    r"(?:decidimos|decidiram|decidiu|combinamos|combinaram|definimos|definiram"
+    r"(?:decidimos|decidiram|combinamos|combinaram|definimos|definiram"
     r"|fechamos|acordamos|se\s+decidiu"
     r"|(?:foi|foram|ficou|ficaram|tinha\s+ficado)\s+"
     r"(?:decidid|combinad|definid|acordad|fechad)[oa]s?)"
 )
+#: The singular only after a group: Portuguese drops the subject, and a bare
+#: "o que decidiu?" is "what did you decide?".
+_PT_GROUP_DECIDED = rf"{_PT_GROUP}\s+(?:decidiu|combinou|definiu)"
 _PT_DECISION = r"decis(?:ao|oes)(?:\s+tomadas?)?"
 _PT_TOPIC = (
     r"(?:\s+(?:sobre|a\s+respeito\s+d[aeo]s?|acerca\s+d[aeo]s?|(?:em|com)\s+relacao\s+a[os]?"
@@ -820,7 +824,11 @@ _DECISION_SHAPES: tuple[tuple[re.Pattern[str], Language], ...] = tuple(
     (re.compile(rf"^{head}{topic}{_DECISION_END}"), language)
     for head, topic, language in (
         # "o que decidimos (sobre Y)", "o que ficou decidido do Y", "o que a gente combinou"
-        (rf"{_PT_WHAT}\s+{_PT_WE}{_PT_DECIDED}", _PT_TOPIC, Language.PORTUGUESE),
+        (
+            rf"{_PT_WHAT}\s+(?:{_PT_GROUP_DECIDED}|{_PT_WE}{_PT_DECIDED})",
+            _PT_TOPIC,
+            Language.PORTUGUESE,
+        ),
         # "qual foi a decisão sobre Y", "quais as decisões do Y"
         (
             rf"(?:e\s+)?(?:qual|quais)(?:\s+(?:foi|foram|e|sao|era|eram))?"
@@ -892,9 +900,19 @@ _CHOOSING = re.compile(r"\b(?:between|entre)\b")
 #: A topic that is a pronoun needs the conversation to resolve it, which
 #: retrieval has and this route does not.
 _PRONOUN_TOPICS = frozenset(
-    {"it", "that", "this", "those", "these", "isso", "isto", "aquilo", "ele", "ela", "esse",
-     "essa", "este", "esta"}
+    {"it", "that", "this", "those", "these", "me", "you", "isso", "isto", "aquilo", "ele",
+     "ela", "esse", "essa", "este", "esta", "mim", "voce", "vc"}
 )
+
+#: "E o que decidimos?" continues a conversation about something, which
+#: retrieval has and this route does not; with no topic it would list every
+#: recent decision instead.
+_FOLLOW_UP_OPENING = re.compile(r"^(?:e|and|so)\s")
+
+#: A channel is a place, not a topic: ranking decisions against "#leadership"
+#: lists other channels' decisions under that heading. Retrieval takes these,
+#: in both languages.
+_CHANNEL_MENTION = re.compile(r"<#\d+>|(?:^|\s)#[\w-]")
 
 
 def _decision_deferred(text: str, folded: str) -> bool:
@@ -934,9 +952,16 @@ def decision_question(text: str, now: datetime, tz: tzinfo) -> DecisionQuestion 
     match, language = found
     typed = cut.typed[match.start("topic") : match.end("topic")] if match["topic"] else ""
     topic = cut_topic(typed)
-    if fold(topic) in _PRONOUN_TOPICS:
+    if _topic_needs_context(topic, cut.folded):
         return None
     return DecisionQuestion(topic, cut.span, language)
+
+
+def _topic_needs_context(topic: str, folded: str) -> bool:
+    """Whether the topic, or its absence, is something only retrieval can read."""
+    if not topic:
+        return _FOLLOW_UP_OPENING.match(folded) is not None
+    return fold(topic) in _PRONOUN_TOPICS or _CHANNEL_MENTION.search(topic) is not None
 
 
 # --- questions that must not be answered from the corpus ----------------
