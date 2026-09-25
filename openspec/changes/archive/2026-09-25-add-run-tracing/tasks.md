@@ -44,5 +44,6 @@
 5.2 was verified by running `LangfuseTracer` itself against the deployed
 instance: the trace came back with its question, answer, status, cause and
 evidence text intact, and deleting it through the same API the withdrawal path
-uses removed it. That covers the adapter and the destination. 5.3 is the
-Discord leg, and needs somebody to ask the bot something.
+uses removed it. That covers the adapter and the destination. 5.3, the
+Discord leg, was confirmed once tracing went into use in production: questions
+asked of the bot in Discord show up as traces in the deployed instance.
