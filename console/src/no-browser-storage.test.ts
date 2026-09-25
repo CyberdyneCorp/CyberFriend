@@ -60,8 +60,12 @@ function sources(dir: string): string[] {
  * truncating the code before it.
  */
 function code(path: string): string {
-  return readFileSync(path, "utf8")
-    .replace(/<!--[\s\S]*?-->/g, "")
+  const source = readFileSync(path, "utf8");
+  // HTML comments exist only in Svelte markup. In TypeScript `<!--` and `-->`
+  // are ordinary characters (a string, `x-->0`), and stripping between them
+  // would hide real code from the scan.
+  const markup = path.endsWith(".svelte") ? source.replace(/<!--[\s\S]*?-->/g, "") : source;
+  return markup
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
     .filter((line) => !line.trimStart().startsWith("//"))
@@ -106,6 +110,7 @@ describe("the storage guard itself", () => {
   it("catches storage use in Svelte markup and in .svelte.ts modules", () => {
     expect(storageUses(join(FIXTURES, "leaks"))).toEqual([
       "/RememberMe.svelte: localStorage",
+      "/html-comment-markers.ts: localStorage",
       "/session.svelte.ts: sessionStorage",
     ]);
   });
