@@ -37,7 +37,7 @@
 - [x] 4.4 Real Postgres: `TEST_DATABASE_URL` with a testcontainers pgvector fallback, `E2E_REQUIRE_DB=1` turning a skip into a failure, a TRUNCATE per test
 - [x] 4.5 Network canary: httpx's real transports raise inside the suite
 - [x] 4.6 discord.py pinned `~=2.7.1` in the dev extras; a canary test naming each internal the wire uses
-- [x] 4.7 A 60-second budget for the suite, enforced
+- [x] 4.7 A 60-second budget for the suite, enforced (since raised to 90 s)
 - [x] 4.8 CI step: `pytest tests/e2e` with `E2E_REQUIRE_DB=1` after the migration
 - [x] 4.9 Docs: end-to-end tests in `docs/operations.md`, including the rule that a production fix replays its transcript as a scenario
 

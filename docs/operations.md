@@ -212,9 +212,10 @@ These are real and are not fixed by anything on this page:
   `chatmemory.config.Settings` and no loop in `entrypoints/ingest.py` that calls
   `run_once`. Until both exist, retention runs only when an operator runs it.
 - **Nothing exposes opt-out to the people it is for.** There is no Discord
-  command and no MCP tool; an opt-out today is an operator running
-  `OptOutService.opt_out` on somebody's behalf. A consent control that requires
-  filing a ticket is a weak one.
+  command and no MCP tool; an opt-out today is an operator acting on
+  somebody's behalf, from the admin console (`/api/optouts`) or by running
+  `OptOutService.opt_out`. A consent control that requires filing a ticket is a
+  weak one.
 - **`OptOutService.filter_messages` is not called by ingestion.** It is an
   optimisation, not the guarantee — the trigger is the guarantee — but until it
   is wired into `IngestService`, every excluded message costs a round trip to
