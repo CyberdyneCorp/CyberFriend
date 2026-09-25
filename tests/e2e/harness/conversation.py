@@ -356,10 +356,21 @@ class E2EBot:
         self.corpus[content] = message.platform_message_id
         return message.platform_message_id
 
+    async def delete(self, name: str, content: str) -> None:
+        """Somebody deletes the message in #`name` whose text is `content`."""
+        channel = ChannelRef(PLATFORM, self.discord.channel(name).id)
+        await self.ingest.delete(self.corpus[content], channel)
+
     async def extract_asks(self) -> tuple[str, ...]:
         """Run the ingest extraction pass; returns the model stages it called."""
         calls = len(self.chat.calls)
         await self.ingest.extract()
+        return tuple(schema for schema, _ in self.chat.calls[calls:])
+
+    async def drain_backlog(self) -> tuple[str, ...]:
+        """Run one backlog extraction pass; returns the model stages it called."""
+        calls = len(self.chat.calls)
+        await self.ingest.drain_backlog()
         return tuple(schema for schema, _ in self.chat.calls[calls:])
 
     async def seed_corpus(self, windows: Sequence[tuple[str, str, datetime]]) -> None:
@@ -412,7 +423,8 @@ class E2EBot:
         return dict(await self.fact_rows(who))
 
     async def decision_rows(self) -> list[Row[Any]]:
-        """Every stored decision, oldest first, by SQL. There is no read path yet."""
+        """Every stored decision, oldest first, by SQL: what was stored, whatever
+        the read path would show."""
         async with self.engine.connect() as conn:
             rows = await conn.execute(
                 text(

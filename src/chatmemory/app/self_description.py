@@ -203,7 +203,7 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "ask_heading": "Things you can ask me:",
         "asks": (
             "what did people ask me to do today?",
-            "what was decided about the deploy last week?",
+            "what did we decide about the deploy last week?",
             "what did Ana say about pricing yesterday?",
             "summarise the discussion in #general yesterday",
         ),
@@ -247,7 +247,7 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "ask_heading": "Coisas que você pode me perguntar:",
         "asks": (
             "o que me pediram para fazer hoje?",
-            "o que foi decidido sobre o deploy na semana passada?",
+            "o que decidimos sobre o deploy na semana passada?",
             "o que o João disse sobre o preço ontem?",
             "resuma a conversa no #general ontem",
         ),

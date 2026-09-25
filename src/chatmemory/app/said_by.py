@@ -59,13 +59,7 @@ from chatmemory.app.routing import (
     obligation_question,
     single_lookup,
 )
-from chatmemory.app.timespan import (
-    Span,
-    fold,
-    names_unresolved_time,
-    parse_span,
-    span_phrases,
-)
+from chatmemory.app.timespan import Span, cut_span, cut_topic, fold
 from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.domain.search import PersonCandidate, SearchQuery
 from chatmemory.ports.answers import Answer, Question
@@ -216,16 +210,6 @@ _ASK_VERBS = re.compile(
     r"\b(?:pediu|pediram|pedir|pedindo|mandou|asked|ask|requested|request)\b"
 )
 
-#: A span cut out of "sobre o deploy da semana passada" leaves "o deploy da",
-#: and one cut out of "about X in the last 3 days" leaves "X in the". An
-#: article goes only with the link before it, so "o plano a" keeps its "a".
-_TRAILING_LINK = re.compile(
-    r"\s+(?:de|da|do|na|no|em|in|on|at|from|during|durante|this|last|of)"
-    r"(?:\s+(?:the|o|a|os|as))?$",
-    re.IGNORECASE,
-)
-
-
 def _deferred(text: str) -> bool:
     """Whether another route owns this question, or it asks more than one thing."""
     return (
@@ -236,13 +220,6 @@ def _deferred(text: str) -> bool:
         or market_question(text) is not None
         or fact_intent(text) is not None
     )
-
-
-def _blank(text: str, phrases: Sequence[tuple[int, int]]) -> str:
-    """`text` with each phrase replaced by spaces, so offsets stay put."""
-    for start, end in phrases:
-        text = text[:start] + " " * (end - start) + text[end:]
-    return text
 
 
 def _slot(typed: str) -> PersonSlot | None:
@@ -257,13 +234,6 @@ def _slot(typed: str) -> PersonSlot | None:
     if set(folded.split()) & _NOT_A_PERSON:
         return None
     return PersonSlot(SlotKind.NAME, name=" ".join(typed.removeprefix("@").split()))
-
-
-def _topic(typed: str) -> str:
-    topic = " ".join(typed.split()).strip(" ?.!,")
-    while (trimmed := _TRAILING_LINK.sub("", topic).strip()) != topic:
-        topic = trimmed
-    return topic
 
 
 def _shape(folded: str) -> tuple[re.Match[str], Language] | None:
@@ -287,28 +257,18 @@ def said_by_request(text: str, now: datetime, tz: tzinfo) -> SaidByRequest | Non
     """
     if _deferred(text):
         return None
-    typed = " ".join(text.split())
-    folded = fold(typed)
-    # Folding keeps offsets for anything typed on a keyboard; when it does
-    # not, the slot and topic are simply cut from the folded text instead.
-    source = typed if len(folded) == len(typed) else folded
-    phrases = span_phrases(folded, now.astimezone(tz).date())
-    span = parse_span(typed, now, tz)
-    if phrases and span is None:
+    cut = cut_span(text, now, tz)
+    if cut is None:
         return None
-    blanked = _blank(folded, phrases)
-    if names_unresolved_time(blanked):
-        return None
-    found = _shape(blanked)
+    found = _shape(cut.folded)
     if found is None:
         return None
     match, language = found
-    cut = _blank(source, phrases)
-    person = _slot(cut[match.start("slot") : match.end("slot")])
+    person = _slot(cut.typed[match.start("slot") : match.end("slot")])
     if person is None:
         return None
-    topic = _topic(cut[match.start("topic") : match.end("topic")]) if match["topic"] else ""
-    return SaidByRequest(person, topic, span, language)
+    topic = cut.typed[match.start("topic") : match.end("topic")] if match["topic"] else ""
+    return SaidByRequest(person, cut_topic(topic), cut.span, language)
 
 
 # --- the replies ----------------------------------------------------------

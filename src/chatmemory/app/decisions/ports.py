@@ -1,9 +1,10 @@
-"""The port the extraction pass writes decisions through.
+"""The ports decisions are written and read through.
 
-There is no read method yet. When one is added it takes a `Viewer` as a
-required positional argument, for the reason `app/asks/ports.py` gives: a
-decision is a summary of a conversation, and an unfiltered read of summaries
-must be unrepresentable.
+The read takes a `Viewer` as a required positional argument, for the reason
+`app/asks/ports.py` gives: a decision is a summary of a conversation, and an
+unfiltered read of summaries must be unrepresentable. It is its own protocol
+because the two halves live in different processes: ingest writes, the bot
+reads.
 """
 
 from __future__ import annotations
@@ -11,7 +12,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from chatmemory.app.decisions.model import Decision
+from chatmemory.app.decisions.model import Decision, DecisionRequest, ReportedDecision
+from chatmemory.domain.identity import Viewer
 
 
 class DecisionStore(Protocol):
@@ -41,5 +43,23 @@ class DecisionStore(Protocol):
         A user's deletion is a tombstone, so the source's cascade never fires,
         and it does not bump the extraction revision, so no re-run prunes
         either. The summary may restate the retracted words, so it goes now.
+        """
+        ...
+
+
+class DecisionSearch(Protocol):
+    async def search(
+        self,
+        viewer: Viewer,
+        request: DecisionRequest,
+        query_embedding: Sequence[float] | None,
+    ) -> Sequence[ReportedDecision]:
+        """The decisions the viewer may read that answer `request`, newest first.
+
+        Scoped in the statement: a decision from a channel outside the viewer's
+        set, or resting on a message that is deleted or outside that set, is
+        never returned. With a topic, only decisions that clear
+        `request.min_similarity` (or match its words, when a decision has no
+        vector) are returned; `query_embedding` is None when there is no topic.
         """
         ...

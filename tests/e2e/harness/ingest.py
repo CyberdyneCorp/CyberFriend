@@ -19,7 +19,7 @@ production's. Decisions are embedded by the offline `HashEmbeddings`.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import cast
 
 import discord
@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.discord.gateway import GatewayEventHandler
 from chatmemory.adapters.discord.source import DiscordChatSource, RawMessage, to_message
+from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.prompt import (
     OUTPUT_SCHEMA,
@@ -34,12 +35,17 @@ from chatmemory.app.asks.prompt import (
     parse_extraction,
     render_candidate,
 )
+from chatmemory.app.asks.worker import BacklogExtractionWorker
+from chatmemory.app.decisions.backfill import BackfillReport
 from chatmemory.app.ingest import IngestService
+from chatmemory.app.scope import LiveScope
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import build_ask_pipeline, build_corpus_store
 from chatmemory.config import Settings
+from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
-from chatmemory.entrypoints.ingest import live_loop
+from chatmemory.entrypoints.decisions_backfill import backfill, indexing_scope
+from chatmemory.entrypoints.ingest import ScopedExtractionLedger, live_loop
 from chatmemory.health import HealthState
 from chatmemory.ports.sources import ChatSource
 from tests.e2e.harness.model import ASK_EXTRACTION, HashEmbeddings, ScriptedChat
@@ -93,6 +99,13 @@ class Ingest:
         # The ingest entrypoint's builder, so channel media is recorded from
         # the moment the settings say and not from whenever a copy says.
         store = build_corpus_store(settings, engine)
+        self._engine = engine
+        self._store = store
+        self._settings = settings
+        self._configuration = PostgresConfigurationStore(engine)
+        self.asks = build_ask_pipeline(
+            settings, engine, extractor=ChatAskExtractor(chat), embeddings=embeddings
+        )
         self.service = IngestService(
             # Only backfill reads the source, and no scenario backfills.
             source=cast(ChatSource, None),
@@ -103,9 +116,9 @@ class Ingest:
                 gap=timedelta(seconds=settings.window_gap_seconds),
             ),
             indexed_channels=settings.indexed_channel_ids,
-        )
-        self.asks = build_ask_pipeline(
-            settings, engine, extractor=ChatAskExtractor(chat), embeddings=embeddings
+            # As the ingest entrypoint passes it: a deletion withdraws the
+            # decisions resting on the deleted message.
+            decisions=self.asks.decisions,
         )
         self.asks.worker.records_through(store)
 
@@ -136,6 +149,27 @@ class Ingest:
             await live_loop(source, self.service, HealthState(), self.asks.worker)
         return feed.published[0] if feed.published else None
 
+    async def delete(self, message: int, channel: ChannelRef) -> None:
+        """A user deleting a message, as the gateway's delete event reaches ingest."""
+        await self.service.handle_delete(message, channel=channel)
+
     async def extract(self) -> int:
         """Run the extraction pass over everything captured, ready or not."""
         return await self.asks.worker.flush_all()
+
+    async def backfill_decisions(self, since: date) -> BackfillReport:
+        """`just decisions-backfill --since`, over the scope the command itself reads."""
+        channels = await indexing_scope(self._configuration, self._settings, {})
+        return await backfill(self._engine, since, channels)
+
+    async def drain_backlog(self) -> int:
+        """One pass of the backlog worker, built as the ingest entrypoint builds it:
+        over the ledger narrowed to the scope stored configuration puts in force."""
+        scope = LiveScope.from_settings(self._configuration, self._settings, {})
+        await scope.refresh()
+        worker = BacklogExtractionWorker(
+            self.asks.worker,
+            ScopedExtractionLedger(self._store, scope),
+            batch_messages=self._settings.ask_extraction_window_messages,
+        )
+        return await worker.run_once()

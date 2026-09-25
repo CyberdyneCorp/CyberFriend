@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     # errs: a false "you need to do X" costs trust in every other entry.
     ask_min_confidence: float = 0.6
 
+    # The cosine a stored decision must reach against the topic of "what did
+    # we decide about Y?" to be listed. Below it the question is answered by
+    # ordinary retrieval instead, never by "nothing was decided". Tuned to the
+    # embedding model: a multilingual one scores a Portuguese question against
+    # an English decision lower than against a Portuguese one.
+    decision_min_similarity: float = 0.4
+
     # When an unanswered ask becomes stale. Stale, never closed: an ask nobody
     # answered in three weeks is exactly what somebody asking "what do I need
     # to do" wants to see.
@@ -367,10 +374,10 @@ class Settings(BaseSettings):
 
     An IANA name. Where a day starts is a property of the deployment, not of
     UTC: cut at UTC midnight, "yesterday" asked at 22:00 in Sao Paulo is the
-    day before the one meant. Nothing reads it yet: the said-by route (PR 3)
-    will pass it into `app.timespan.parse_span`, which takes the zone as an
-    argument and never reads settings itself. The prompt's clock notice and
-    the older period tables still speak UTC.
+    day before the one meant. The said-by and decision routes pass it into
+    `app.timespan.parse_span`, which takes the zone as an argument and never
+    reads settings itself. The prompt's clock notice and the older period
+    tables still speak UTC.
     """
 
     # --- Windowing -----------------------------------------------------
@@ -457,7 +464,7 @@ class Settings(BaseSettings):
             raise ValueError("embedding_dimensions must be positive")
         return v
 
-    @field_validator("ask_min_confidence")
+    @field_validator("ask_min_confidence", "decision_min_similarity")
     @classmethod
     def _confidence_is_a_probability(cls, v: float) -> float:
         """Refused rather than clamped.
@@ -467,7 +474,7 @@ class Settings(BaseSettings):
         anything" -- which is the failure this project keeps shipping.
         """
         if not 0.0 <= v <= 1.0:
-            raise ValueError("ask_min_confidence must be between 0 and 1")
+            raise ValueError("must be between 0 and 1")
         return v
 
     @field_validator(

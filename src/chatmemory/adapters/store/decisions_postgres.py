@@ -2,35 +2,46 @@
 
 Embeds at write time, with the embeddings client the ingest process already
 owns. Decisions are few, so this is one small call per extracted message that
-concluded something -- and doing it here means the read path, when it comes,
-needs no backfill before it can rank anything.
+concluded something -- and doing it here means the read path needs no
+backfill before it can rank anything.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy import text
+from sqlalchemy.engine.row import RowMapping
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from chatmemory.adapters.store import decisions_sql
 from chatmemory.adapters.store.sql import vector_literal
-from chatmemory.app.decisions.model import Decision
-from chatmemory.app.decisions.ports import DecisionStore
-from chatmemory.domain.identity import PersonRef
+from chatmemory.app.decisions.backfill import BackfillLedger, ScannedMessage
+from chatmemory.app.decisions.model import (
+    Decision,
+    DecisionRequest,
+    ReportedDecision,
+    search_terms,
+)
+from chatmemory.app.decisions.ports import DecisionSearch, DecisionStore
+from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.sources import EmbeddingClient
 
 log = structlog.get_logger()
 
 
 class PostgresDecisionStore:
-    """Implements `DecisionStore`."""
+    """Implements `DecisionStore` and `DecisionSearch`."""
 
-    def __init__(self, engine: AsyncEngine, embeddings: EmbeddingClient) -> None:
+    def __init__(
+        self, engine: AsyncEngine, embeddings: EmbeddingClient, platform: str = "discord"
+    ) -> None:
         self._engine = engine
         self._embeddings = embeddings
+        self._platform = platform
 
     async def record_decisions(
         self, source_message_id: int, decisions: Sequence[Decision]
@@ -91,6 +102,45 @@ class PostgresDecisionStore:
             )
             return int(removed.rowcount or 0)
 
+    async def search(
+        self,
+        viewer: Viewer,
+        request: DecisionRequest,
+        query_embedding: Sequence[float] | None,
+    ) -> Sequence[ReportedDecision]:
+        channels = [c.platform_channel_id for c in viewer.visible_channels]
+        if not channels:
+            return []
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                decisions_sql.SEARCH_DECISIONS,
+                {
+                    "channel_ids": channels,
+                    "embedding": (
+                        vector_literal(query_embedding) if query_embedding is not None else None
+                    ),
+                    "terms": search_terms(request.topic),
+                    "has_topic": bool(request.topic),
+                    "min_confidence": request.min_confidence,
+                    "min_similarity": request.min_similarity,
+                    "since": request.since,
+                    "until": request.until,
+                    "limit": request.limit,
+                },
+            )
+            return [self._reported(row) for row in rows.mappings()]
+
+    def _reported(self, row: RowMapping) -> ReportedDecision:
+        return ReportedDecision(
+            source_message_id=int(row["source_message_id"]),
+            channel=ChannelRef(self._platform, int(row["channel_id"])),
+            summary=row["summary"],
+            topic=row["topic"],
+            decided_at=row["decided_at"],
+            author_display=row["author_display"],
+            source_excerpt=row["source_content"],
+        )
+
     async def _embed(self, decisions: Sequence[Decision]) -> list[str | None]:
         if not decisions:
             return []
@@ -133,7 +183,45 @@ class PostgresDecisionStore:
         return person_id
 
 
+class PostgresDecisionBackfill:
+    """Implements `BackfillLedger` over the message table."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+
+    async def live_messages_since(
+        self,
+        since: datetime,
+        until: datetime | None,
+        channel_ids: frozenset[int],
+        after_id: int,
+        limit: int,
+    ) -> Sequence[ScannedMessage]:
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                decisions_sql.BACKFILL_SCAN,
+                {
+                    "since": since,
+                    "until": until,
+                    "indexed_channel_ids": sorted(channel_ids),
+                    "after_id": after_id,
+                    "limit": limit,
+                },
+            )
+            return [ScannedMessage(int(r.id), str(r.content)) for r in rows]
+
+    async def reset_extraction(self, message_ids: Sequence[int]) -> int:
+        async with self._engine.begin() as conn:
+            result = await conn.execute(decisions_sql.BACKFILL_RESET, {"ids": list(message_ids)})
+            return result.rowcount or 0
+
 if TYPE_CHECKING:  # pragma: no cover - exists to fail type-checking, not to run
 
     def _conforms(store: PostgresDecisionStore) -> DecisionStore:
         return store
+
+    def _searches(store: PostgresDecisionStore) -> DecisionSearch:
+        return store
+
+    def _backfills(ledger: PostgresDecisionBackfill) -> BackfillLedger:
+        return ledger

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import NamedTuple
@@ -449,3 +449,74 @@ def parse_span(text: str, now: datetime, tz: tzinfo) -> Span | None:
     if start >= end:
         return None
     return Span(start, end, label)
+
+
+# --- the rest of the sentence ---------------------------------------------
+#
+# A route that reads "about what" out of a question needs the time taken out
+# of it first: "o que ela disse sobre o deploy semana passada" is a question
+# about the deploy, not about "o deploy semana passada".
+
+
+@dataclass(frozen=True, slots=True)
+class Cut:
+    """A question with every time phrase blanked out, and the span it named.
+
+    Blanked with spaces rather than removed, so an offset matched in `folded`
+    cuts the same words out of `typed`, which keeps the accents and capitals
+    they were written with.
+    """
+
+    #: Folded (see `fold`) and blanked: what a route matches its shapes on.
+    folded: str
+    #: As typed, blanked the same way. The folded text instead when folding
+    #: moved offsets, which nothing typed on a keyboard does.
+    typed: str
+    #: None when the question named no time.
+    span: Span | None
+
+
+def _blank(text: str, phrases: Sequence[tuple[int, int]]) -> str:
+    """`text` with each phrase replaced by spaces, so offsets stay put."""
+    for start, end in phrases:
+        text = text[:start] + " " * (end - start) + text[end:]
+    return text
+
+
+def cut_span(text: str, now: datetime, tz: tzinfo) -> Cut | None:
+    """`text` with its time taken out, or None when that time is unreadable.
+
+    None for a question that names a range or two spans, which `parse_span`
+    refuses, and for one that names a day no rule can read ("de segunda a
+    quarta", "on monday"): a route that dropped it would answer about all of
+    history under words that read as if bounded.
+    """
+    typed = " ".join(text.split())
+    folded = fold(typed)
+    source = typed if len(folded) == len(typed) else folded
+    phrases = span_phrases(folded, now.astimezone(tz).date())
+    span = parse_span(typed, now, tz)
+    if phrases and span is None:
+        return None
+    blanked = _blank(folded, phrases)
+    if names_unresolved_time(blanked):
+        return None
+    return Cut(blanked, _blank(source, phrases), span)
+
+
+#: A span cut out of "sobre o deploy da semana passada" leaves "o deploy da",
+#: and one cut out of "about X in the last 3 days" leaves "X in the". An
+#: article goes only with the link before it, so "o plano a" keeps its "a".
+_TRAILING_LINK = re.compile(
+    r"\s+(?:de|da|do|na|no|em|in|on|at|from|during|durante|this|last|of)"
+    r"(?:\s+(?:the|o|a|os|as))?$",
+    re.IGNORECASE,
+)
+
+
+def cut_topic(typed: str) -> str:
+    """A topic cut from a `Cut`, without the words a removed span left behind."""
+    topic = " ".join(typed.split()).strip(" ?.!,")
+    while (trimmed := _TRAILING_LINK.sub("", topic).strip()) != topic:
+        topic = trimmed
+    return topic

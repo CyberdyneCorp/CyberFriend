@@ -128,3 +128,138 @@ it or wrote any message it rests on opts out.
   proposal that person wrote
 - THEN that decision SHALL be removed
 - AND the opt-out report SHALL count it
+
+### Requirement: Decision questions are answered from the decision log
+
+The system SHALL answer a question about what a group decided -- in
+Portuguese ("o que decidimos sobre Y?", "o que ficou decidido sobre Y?",
+"qual foi a decisão sobre Y?") or English ("what did we decide about Y?",
+"what was decided about Y?") -- from stored decisions, recognised without a
+model call, rendered without a chat-model call, in the language the question
+was asked in, listing each decision with its local date, newest first, and a
+citation of the message that settled it.
+
+#### Scenario: A Portuguese question
+- WHEN a person asks "o que decidimos sobre o deploy?" and a decision about
+  the deploy is stored in a channel they and the room can read
+- THEN the reply SHALL be in Portuguese, list that decision dated in
+  `ANSWER_TIMEZONE`, and cite the message that settled it with a link to it
+- AND no chat model SHALL be called; only the topic SHALL be embedded
+
+#### Scenario: An English question
+- WHEN a person asks "what did we decide about the deploy?"
+- THEN the reply SHALL be in English, with the decision's summary in the
+  language it was decided in
+
+#### Scenario: A period
+- WHEN the question names a time ("semana passada", "yesterday")
+- THEN only decisions taken in that span, read as calendar days in
+  `ANSWER_TIMEZONE`, SHALL be listed, and the heading SHALL state the span
+- AND a question with neither topic nor time SHALL list the last 30 days and
+  say so
+
+#### Scenario: Not a lookup of the log
+- WHEN the question asks the bot what it decided ("what did you decide", or
+  the subjectless "o que decidiu?"), asks about one person's decision, asks
+  for help choosing ("decide between A and B"), names its topic only by a
+  pronoun ("sobre isso", "about me") or a channel ("no #leadership"), asks
+  more than one thing, or is a market, fact, catch-up, said-by or obligation
+  question
+- THEN the decision log SHALL NOT answer it
+
+#### Scenario: A follow-up with no topic
+- WHEN the question names no topic and opens as a continuation ("e o que
+  decidimos?", "and what did we decide?")
+- THEN the decision log SHALL NOT answer it, and retrieval, which has the
+  conversation, SHALL
+
+### Requirement: A decision answer never discloses what the room cannot read
+
+The system SHALL list a decision only when its channel, and the channel of
+every message it rests on, are readable by both the asker and everyone the
+reply reaches, and only while its source and every message it rests on are
+alive.
+
+#### Scenario: A private decision asked about in a public channel
+- WHEN a decision was taken in #leadership and a lead asks about it in
+  #general, which not everyone there can read #leadership from
+- THEN the decision SHALL NOT be listed and the question SHALL be answered by
+  ordinary retrieval under the same scope
+- AND the same question asked by the lead in a direct message SHALL list it
+
+#### Scenario: A deleted conclusion or proposal
+- WHEN the message that settled a decision, or a message it rests on such as
+  the proposal it settled, is deleted
+- THEN the decision SHALL NOT be listed, even before its row is withdrawn
+
+#### Scenario: Evidence from an unreadable channel
+- WHEN a decision rests on a message in a channel the viewer cannot read
+- THEN the decision SHALL NOT be listed
+
+### Requirement: No match falls through to retrieval
+
+The system SHALL answer a decision question by ordinary retrieval, never by a
+statement that nothing was decided, when no readable decision is similar
+enough to the question's topic.
+
+#### Scenario: Below the similarity floor
+- WHEN no stored decision reaches `DECISION_MIN_SIMILARITY` against the
+  topic, and none stored without an embedding carries the topic's words
+- THEN the question SHALL be answered by ordinary retrieval
+
+#### Scenario: The topic cannot be embedded
+- WHEN embedding the topic fails
+- THEN the question SHALL be answered by ordinary retrieval
+
+### Requirement: History extracted before the decision log can be backfilled
+
+The system SHALL provide an operator command (`just decisions-backfill
+--since YYYY-MM-DD [--until YYYY-MM-DD]`) that marks pending for extraction
+only the messages that are live, created on or after the `--since` day and,
+when `--until` is given, before the `--until` day (both midnight UTC), in a
+channel in indexing scope read as ingest reads it (stored configuration, then
+the environment), and matched by the candidate filter's own `DECISION_MARKERS`
+pattern; it SHALL print how many it reset and extract nothing itself, leaving
+the reset messages to the existing backlog worker and its rate bound. The days
+SHALL reach the database only as bound parameters.
+
+#### Scenario: Only marker-bearing messages inside the window are reset
+- WHEN the command runs over history that holds, besides marker-bearing live
+  messages in scope inside the window, a message without a marker, one
+  before the window, one in a channel outside scope and a deleted one
+- THEN only the marker-bearing live messages in scope inside the window
+  SHALL become pending
+- AND a second run SHALL reset nothing still pending
+
+#### Scenario: The window ends where decision extraction began
+- WHEN the command runs with `--until` the day decision extraction was
+  deployed
+- THEN no message created on or after that day SHALL be reset
+- AND an `--until` not later than `--since` SHALL be refused
+
+#### Scenario: Stored scope narrows the environment's
+- WHEN stored configuration lists fewer indexed channels than the environment
+- THEN only messages in the stored channels SHALL be reset
+
+#### Scenario: Stored scope cannot be read
+- WHEN stored configuration cannot be read
+- THEN the command SHALL stop without resetting anything
+
+#### Scenario: Re-extraction keeps the asks already recorded
+- WHEN the backlog worker re-extracts a reset message that carries asks
+- THEN every ask the new pass reports with the same kind and addressee SHALL
+  keep its key and status
+- AND a corrected ask SHALL be kept, with its correction, even if the new
+  pass does not find it
+
+#### Scenario: Re-extraction reclassifies an uncorrected ask
+- WHEN the new pass reports an uncorrected ask with a different kind or
+  addressee
+- THEN the old ask SHALL be withdrawn, whatever its status, and the new one
+  SHALL be recorded open under its own key
+
+#### Scenario: Old history becomes answerable
+- WHEN history captured and extracted before decisions existed is backfilled
+  and the backlog worker drains it
+- THEN a decision question about it SHALL get a dated answer citing the
+  message that settled it

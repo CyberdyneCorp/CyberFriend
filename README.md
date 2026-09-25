@@ -2,7 +2,7 @@
 
 An ACL-aware chat-memory agent for Discord. It indexes channel history into
 Postgres with pgvector and answers questions about it — *what did people ask me
-today*, *what was decided about the deploy* — filtered to the channels the
+today*, *what did we decide about the deploy* — filtered to the channels the
 person asking is actually permitted to read.
 
 When your own conversations do not hold the answer, it can look outside: the
@@ -17,6 +17,7 @@ internet said.
 | **Answers from your channels** | Hybrid lexical and vector retrieval over conversation windows, scoped to what you may read, with citations that link back to the message |
 | **What someone said** | *o que o João disse sobre o deploy semana passada?*, *what did Ana say about pricing yesterday?*, *o que eu falei sobre X?*, *@Maria comentou algo sobre Y ontem?* — only that person's own messages, from channels you and the room can read, cited. Days and weeks are calendar ones in `ANSWER_TIMEZONE`. Two Joãos get *Qual João?*; a name nobody visible goes by is answered as an ordinary question |
 | **Audience-aware answers** | In a channel it only cites what everyone there can read; ask in a DM for your full view |
+| **Decisions** | *o que decidimos sobre o deploy?*, *o que ficou decidido semana passada?*, *what did we decide about pricing?* — read from conversation as it arrives, answered from the decision log with no model call, dated and newest first, each line citing the message that settled it. Only decisions from channels you and the room can read; deleting the conclusion or the proposal it settled removes it. No match is answered as an ordinary question, never as "nothing was decided" |
 | **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve` |
 | **Conversation memory** | Follow-ups keep context, per person and per place, and stop being recalled if you lose access to a channel behind them |
 | **Personal facts** | *my name is …*, *call me Leo*, *my email is …*, *my phone is …*, *my wallet is 0x…*, *reply in Portuguese*. Contact details and wallets are only ever shown in a DM to you |
@@ -51,6 +52,8 @@ mindmap
       Catch-up on a channel
       What someone said, and when
       o que o João disse semana passada
+      What we decided, dated and cited
+      o que decidimos sobre o deploy
     What you owe
       Asks extracted from chat
       what do I need to do
@@ -108,7 +111,7 @@ graph LR
     P(("You"))
 
     P --> CORPUS["Your channels"]
-    CORPUS --> C1["what was decided about the deploy"]
+    CORPUS --> C1["o que decidimos sobre o deploy? &middot; what did we decide about pricing?"]
     CORPUS --> C2["what did I miss in #infra"]
     CORPUS --> C3["/ask &middot; /channels"]
     CORPUS --> C4["o que o João disse sobre o deploy semana passada?"]
@@ -380,6 +383,7 @@ archive is a decision rather than a default.
 | `just db-reset` | Back to a clean database |
 | `just build` | The production image, as the platform builds it |
 | `just admin-token leonardo` | A console credential for one operator |
+| `just decisions-backfill --since 2026-06-01 [--until YYYY-MM-DD]` | Re-extract older history for decisions (paid; see docs/operations.md first) |
 
 ## Tests
 
@@ -432,7 +436,8 @@ lists the common ones. The settings worth knowing:
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ANSWER_TIMEZONE` | The calendar "ontem" and "last week" are read in (IANA name, default `America/Sao_Paulo`) |
-| `ASK_EXTRACTION_ENABLED` | Whether obligations are extracted |
+| `ASK_EXTRACTION_ENABLED` | Whether obligations and decisions are extracted |
+| `DECISION_MIN_SIMILARITY` | How close a stored decision must be to the question's topic to be listed (cosine, default 0.4); below it the question is answered by retrieval |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
 | `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Alerts (range, range edge, health factor, BTC/ETH price), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
 | `VOICE_QUESTIONS_ENABLED`, `MEDIA_API_KEY` | Voice messages in a DM, transcribed at `MEDIA_BASE_URL` with `MEDIA_AUDIO_MODEL`. Off by default; enabling without a key stops the bot at boot |
