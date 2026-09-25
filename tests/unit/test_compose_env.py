@@ -101,6 +101,7 @@ DEPLOYMENT_SETTINGS = {
     "LANGFUSE_HOST": ("ingest", "bot"),
     "LANGFUSE_PUBLIC_KEY": ("ingest", "bot"),
     "LANGFUSE_SECRET_KEY": ("ingest", "bot"),
+    "LANGFUSE_ENVIRONMENT": ("ingest", "bot"),
     "TRACING_TIMEOUT_SECONDS": ("ingest", "bot"),
 }
 

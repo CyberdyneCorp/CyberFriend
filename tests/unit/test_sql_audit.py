@@ -311,6 +311,7 @@ UNSCOPED: dict[str, str] = {
     "retention_sql.PURGE_PERSON_MESSAGES": "write; opt-out",
     "retention_sql.PURGE_PERSON_ASKS": "write; opt-out",
     "retention_sql.PURGE_PERSON_DECISIONS": "write; opt-out",
+    "retention_sql.PURGE_PERSON_FETCHES": "write; opt-out, the fetch log of their messages",
     "retention_sql.PURGE_PERSON_REACTIONS": "write; opt-out",
     "retention_sql.PURGE_PERSON_MENTIONS": "write; opt-out",
     # --- admin_sql -------------------------------------------------------

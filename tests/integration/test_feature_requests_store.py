@@ -2,8 +2,9 @@
 
 Resubmission is one row, the rolling daily limit is part of the insert, an
 opted-out person stores nothing, and recording an opt-out (or deleting the
-person) removes what they suggested -- by the triggers of migration 0030, so
-no path that records an opt-out can keep a suggestion.
+person, or erasing them through `purge_person_derived`) removes what they
+suggested: 0030 adds its delete to that function, so no path that records an
+opt-out or erases a person can keep a suggestion.
 """
 
 from __future__ import annotations
@@ -150,8 +151,7 @@ async def test_opting_out_deletes_their_suggestions_and_only_theirs(clean: Async
 
 
 async def test_deleting_the_person_deletes_their_suggestions(clean: AsyncEngine) -> None:
-    """The person-row cascade. Erasure through `purge_person_derived` is not
-    on this base yet; see tasks 1.1/1.5 of add-feature-requests."""
+    """The person-row cascade."""
     suggestions = service(clean)
     await suggestions.submit(LEO, "dark mode", COMMAND)
     await suggestions.submit(ANA, "light mode", COMMAND)
@@ -220,3 +220,23 @@ async def test_a_placeholder_name_is_replaced_by_the_discord_name(clean: AsyncEn
     async with clean.connect() as conn:
         name = await conn.scalar(text("SELECT display_name FROM person"))
     assert name == "Leo"
+
+
+async def test_erasure_deletes_their_suggestions_and_only_theirs(clean: AsyncEngine) -> None:
+    """Self-service erasure calls `purge_person_derived` directly, without an
+    opt-out row, so the delete must live in that function, not a trigger."""
+    suggestions = service(clean)
+    await suggestions.submit(LEO, "dark mode", COMMAND)
+    await suggestions.submit(ANA, "light mode", COMMAND)
+
+    async with clean.begin() as conn:
+        person_id = await conn.scalar(
+            text(
+                "SELECT person_id FROM person_platform_id "
+                "WHERE platform = :p AND platform_user_id = :u"
+            ),
+            {"p": PLATFORM, "u": LEO.platform_user_id},
+        )
+        await conn.execute(text("SELECT purge_person_derived(:i)"), {"i": person_id})
+
+    assert [r[1] for r in await rows(clean)] == ["light mode"]

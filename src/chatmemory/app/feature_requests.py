@@ -15,7 +15,8 @@
     with its number; at most five are accepted per person in any 24 hours. Both
     are decided by the store, inside the write.
 *   **Privacy choices hold.** Nothing is stored for somebody who opted out, and
-    an opt-out deletes what they suggested (migration 0030's triggers).
+    an opt-out or erasure deletes what they suggested (0030's insert guard and
+    its delete in `purge_person_derived`).
 """
 
 from __future__ import annotations

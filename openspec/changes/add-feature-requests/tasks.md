@@ -1,12 +1,12 @@
 ## 1. Store and commands
 
 - [x] 1.1 Migration 0028 `feature_request`; add its delete to `purge_person_derived`; insert guard for opted-out people
-  (shipped as 0030; `purge_person_derived` did not exist on this base, so a trigger on `person_opt_out` deletes the rows. Merge step, not done yet: re-chain 0030 onto 0028 (fix/opt-out-leftovers), add `DELETE FROM feature_request WHERE person_id = p_person_id` to that function's PURGES and drop 0030's own purge trigger)
+  (shipped as 0030, chained after 0029; it adds `DELETE FROM feature_request` to `purge_person_derived` from 0028, with no trigger of its own; downgrade restores the 0028 body)
 - [x] 1.2 Port + Postgres adapter; `FeatureRequestService` (submit, list_own, rate limit, dedupe, contact refusal)
 - [x] 1.3 `/suggest` and `/suggestions` in the command table; update `commands.json` snapshot
 - [x] 1.4 Acknowledgement with notify [Yes]/[No]
 - [x] 1.5 Tests: duplicate is idempotent; email/phone/wallet refused; 6th in 24h refused (also under parallel submits); opted-out refused; opt-out purge and person-row cascade
-  (erasure through `purge_person_derived` is not covered yet: that function is not on this base. Add the test when the merge step in 1.1 is done)
+  (erasure through `purge_person_derived` is covered too)
 - [x] 1.6 e2e: FakeDiscord `/suggest` then `/suggestions` against real Postgres
 
 ## 2. Natural language

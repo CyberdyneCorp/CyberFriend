@@ -163,8 +163,10 @@ language. Both say the deletion cannot be undone.
   opt-out and self-service erasure share one path.
 - `trace_export.asker_platform_user_id bigint NULL` plus an index, written by
   `record_export`.
-- `build_trace_withdrawal` passes `edges.http_transport` to
-  `LangfuseTraceDeleter`.
+- `build_trace_withdrawal` takes an optional HTTP transport for
+  `LangfuseTraceDeleter` and `LangfuseTraceFinder`. The ingest entrypoint has
+  no `Edges` and passes none, so production uses httpx's default transport;
+  the end-to-end harness passes FakeWeb's so a withdrawal is observable.
 
 ### Statements are true when shown
 
@@ -186,4 +188,11 @@ sweep. The one-time disclosure notice (add-usage-and-cost-view) points to
   Idempotent steps. Re-import is stopped in step 2, before anything is purged.
 - [Only platform ids can be queried in Langfuse] -> Every platform id of the
   person is queried. Traces carry only the platform user id, so this covers
-  every exported trace.
+  every trace of a question they asked.
+- [People who opted out before 0029 lost their `message` rows to the earlier
+  purge] -> The traces quoting their messages can no longer be linked to them
+  (`trace_export_message` joins through `message.author_person_id`), and
+  orphaned `trace_export_message` rows cannot be told apart from messages
+  removed by retention, channel removal or never stored (federated and web
+  ids). Accepted: `docs/operations.md` states the gap and names the manual
+  cleanup, marking every trace exported before the 0029 deploy as pending.
