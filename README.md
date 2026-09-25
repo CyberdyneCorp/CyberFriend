@@ -381,6 +381,7 @@ archive is a decision rather than a default.
 | `just db-reset` | Back to a clean database |
 | `just build` | The production image, as the platform builds it |
 | `just admin-token leonardo` | A console credential for one operator |
+| `just decisions-backfill --since 2026-06-01` | Re-extract older history for decisions (paid; see docs/operations.md first) |
 
 ## Tests
 

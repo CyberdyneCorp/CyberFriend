@@ -170,6 +170,12 @@ UNSCOPED: dict[str, str] = {
     "decisions_sql.WITHDRAW_MESSAGE_DECISIONS": (
         "write; withdraws decisions resting on a message somebody deleted"
     ),
+    "decisions_sql.BACKFILL_SCAN": (
+        "operator CLI only (`just decisions-backfill`); bound to the configured "
+        "indexing scope, and the text is matched against DECISION_MARKERS "
+        "in-process and discarded, never shown to anybody"
+    ),
+    "decisions_sql.BACKFILL_RESET": "write; puts marker-bearing history back in the queue",
     "asks_sql.CLOSE_ANSWERED_BY_REPLY": "write; state transition from an event",
     "asks_sql.CLOSE_ANSWERED_BY_REACTION": "write; state transition from an event",
     "asks_sql.CLOSE_ANSWERED_BY_REACTION_FOR_MESSAGE": (

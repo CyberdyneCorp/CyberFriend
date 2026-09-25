@@ -19,7 +19,7 @@ production's. Decisions are embedded by the offline `HashEmbeddings`.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import cast
 
 import discord
@@ -34,13 +34,16 @@ from chatmemory.app.asks.prompt import (
     parse_extraction,
     render_candidate,
 )
+from chatmemory.app.asks.worker import BacklogExtractionWorker
+from chatmemory.app.decisions.backfill import BackfillReport
 from chatmemory.app.ingest import IngestService
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import build_ask_pipeline
 from chatmemory.config import Settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
-from chatmemory.entrypoints.ingest import live_loop
+from chatmemory.entrypoints.decisions_backfill import backfill
+from chatmemory.entrypoints.ingest import channels_in, live_loop
 from chatmemory.health import HealthState
 from chatmemory.ports.sources import ChatSource
 from tests.e2e.harness.model import ASK_EXTRACTION, HashEmbeddings, ScriptedChat
@@ -82,6 +85,9 @@ class Ingest:
         embeddings: HashEmbeddings,
     ) -> None:
         store = PostgresStore(engine)
+        self._engine = engine
+        self._store = store
+        self._settings = settings
         self.asks = build_ask_pipeline(
             settings, engine, extractor=ChatAskExtractor(chat), embeddings=embeddings
         )
@@ -120,3 +126,17 @@ class Ingest:
     async def extract(self) -> int:
         """Run the extraction pass over everything captured, ready or not."""
         return await self.asks.worker.flush_all()
+
+    async def backfill_decisions(self, since: date) -> BackfillReport:
+        """`just decisions-backfill --since`, over the configured indexing scope."""
+        return await backfill(self._engine, since, self._settings.indexed_channel_ids)
+
+    async def drain_backlog(self) -> int:
+        """One pass of the backlog worker, built as the ingest entrypoint builds it."""
+        worker = BacklogExtractionWorker(
+            self.asks.worker,
+            self._store,
+            channels=channels_in(self._settings.indexed_channel_ids),
+            batch_messages=self._settings.ask_extraction_window_messages,
+        )
+        return await worker.run_once()

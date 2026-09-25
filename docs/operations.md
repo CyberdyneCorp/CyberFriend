@@ -609,6 +609,58 @@ a retrieval answer, never as a claim that nothing was settled.
 **Cost.** One topic embedding (none without a topic), no chat-model call.
 Logged as `decisions.looked_up` with `found` and `model_calls=0`.
 
+### Backfilling history captured before the decision log
+
+History the ask pass read before decisions were extracted is recorded as
+extracted (`message.asks_extracted_seq` equals `asks_extraction_seq`), so the
+backlog worker never reads it again and the decisions in it cannot be
+answered. To put it back in the queue:
+
+```
+just decisions-backfill --since 2026-06-01
+```
+
+(`python -m chatmemory.entrypoints.decisions_backfill --since YYYY-MM-DD` in a
+container.) It resets `asks_extracted_seq` to NULL only for messages that are
+
+- live (not deleted),
+- created on or after `--since`, from midnight UTC,
+- in a channel in indexing scope, read as ingest reads it (stored
+  configuration, then the environment; if stored configuration cannot be read
+  the command stops and resets nothing),
+- matching `DECISION_MARKERS`, the candidate filter's own pattern, matched in
+  Python so the command resets exactly what the filter will send to the model.
+
+It prints how many it reset, how many matched but were already pending, and
+how many it scanned, then exits. Nothing is extracted by the command: the
+ingest process's `BacklogExtractionWorker` drains the reset messages at its
+usual rate bound (100 messages a pass), and `pending` on the ingest health
+endpoint shows it draining. Running it twice is harmless; the second run
+resets nothing still pending.
+
+**Cost.** One extraction call per reset message, on `EXTRACTION_MODEL`,
+metered in the usual ask usage. Pick `--since` deliberately: resetting the
+whole corpus would re-pay the entire ask history for nothing.
+
+**Warning: asks on those messages are re-extracted too.** The model reads
+asks and decisions in one call, so every reset message has its asks
+extracted again. What stays and what can move:
+
+- **Keys are stable.** An ask's key is derived from its source message, kind
+  and addressee, never from generated text, so a re-found ask updates its row
+  in place rather than duplicating it.
+- **Status is kept.** The upsert never touches `status`, `closed_at` or
+  `closed_by`: an answered or stale ask stays so.
+- **Corrections are kept, and outrank the new pass.** A corrected ask is
+  exempt from pruning even if the model no longer finds it, and the
+  correction row is untouched.
+- **What can change:** a re-found ask's text, confidence and thread are
+  refreshed from the new reply; an *uncorrected* ask the model no longer finds
+  is withdrawn; and an ask the first pass missed can appear. A new ask older
+  than `NOTIFICATION_MAX_AGE_HOURS` is never notified.
+
+`tests/integration/test_decisions_backfill.py` holds the first three.
+
 ## Scheduled tasks
 
 With `SCHEDULED_TASKS_ENABLED=true`, a person can have a question asked on
