@@ -31,6 +31,7 @@ from chatmemory.adapters.store.admin_postgres import (
     grant_console_access,
     withdraw_console_access,
 )
+from chatmemory.admin.access import Access, RouteAccess
 from chatmemory.admin.audit import ChangeKind, applied, escalation, refused
 from chatmemory.admin.auth import (
     AdminAuthenticator,
@@ -264,9 +265,11 @@ def _console(engine: AsyncEngine) -> Starlette:
         return JSONResponse({"operator": current_operator().name})
 
     app = Starlette(routes=[Route("/api/whoami", whoami, methods=["GET", "POST"])])
+    table = {("GET", "/api/whoami"): Access.OPERATOR, ("POST", "/api/whoami"): Access.ADMIN}
     app.add_middleware(
         AdminAuthMiddleware,
         authenticator=AdminAuthenticator(PostgresOperatorTokens(engine)),
+        access=RouteAccess(table, app.router.routes),
     )
     return app
 

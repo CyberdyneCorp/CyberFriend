@@ -1,11 +1,11 @@
 ## 1. Principal and roles (bearer only)
 
-- [ ] 1.1 `Principal(subject, display, roles, via)` replacing role-less `Operator`; `cfa_` -> admin while no issuer is configured, operator once it is
-- [ ] 1.2 Route-to-role table beside `api_routes()` with an explicit row for every mounted `(method, path)` (`public`, `user`, `operator`, `admin`, `admin_oidc`); no per-method default; a route without a row is refused
-- [ ] 1.3 403 `{"error":"requires admin"}`; 401 stays byte-identical
-- [ ] 1.4 Test: enumerate every mounted route; fail on a route without a row, on a non-GET route below admin, and on `GET /api/usage/people/{id}/questions` not `admin_oidc` (the last row lands with the usage change)
-- [ ] 1.5 Test: an operator principal gets 403 on POST /api/optouts and POST /api/federation/allowlist
-- [ ] 1.6 Test: with the issuer set, a `cfa_` token is operator and gets 403 on every admin route
+- [x] 1.1 `Principal(subject, display, roles, via)` replacing role-less `Operator`; `cfa_` -> admin while no issuer is configured, operator once it is
+- [x] 1.2 Route-to-role table beside `api_routes()` with an explicit row for every mounted `(method, path)` (`public`, `user`, `operator`, `admin`, `admin_oidc`); no per-method default; a route without a row is refused
+- [x] 1.3 403 `{"error":"requires admin"}`; 401 stays byte-identical
+- [x] 1.4 Test: enumerate every mounted route; fail on a route without a row, on a non-GET route below admin, and on `GET /api/usage/people/{id}/questions` not `admin_oidc` (the last row lands with the usage change)
+- [x] 1.5 Test: an operator principal gets 403 on POST /api/optouts and POST /api/federation/allowlist
+- [x] 1.6 Test: with the issuer set, a `cfa_` token is operator and gets 403 on every admin route
 
 ## 2. OIDC BFF (backend only, JSON `/api/session`)
 

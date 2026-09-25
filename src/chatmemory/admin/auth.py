@@ -1,4 +1,4 @@
-"""Admin authentication: the credential names the operator, and nothing else does.
+"""Admin authentication: the credential names the principal, and nothing else does.
 
 Static bearer tokens were chosen over an OAuth flow, and the honest cost of
 that choice is recorded in the change's design note. What is *not* conceded is
@@ -20,6 +20,12 @@ Three properties are load-bearing here:
     withdrawing one person's access leaves everybody else working -- which is
     what decides whether revocation actually happens when someone leaves.
 
+*   **The credential also decides the role.** A `cfa_` token is admin while
+    no identity provider is configured, exactly as before roles existed, and
+    operator (read-only) once one is: admin rights then come only from the
+    provider's role, which is named, managed and revocable there. Which role
+    each route needs is `access.py`'s question, not this module's.
+
 Header parsing is deliberately not imported from `mcp.auth`. The two surfaces
 authenticate different principals against different tables, and sharing the
 code would mean a change made for one silently changes the other.
@@ -33,7 +39,8 @@ from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol, cast
+from enum import StrEnum
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import structlog
 
@@ -47,6 +54,9 @@ from starlette._utils import get_route_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from chatmemory.app.tokens import TOKEN_ENTROPY_BYTES, hash_token
+
+if TYPE_CHECKING:
+    from chatmemory.admin.access import RouteAccess, Rule
 
 log = structlog.get_logger()
 
@@ -63,7 +73,7 @@ OPERATOR_NAME = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
 
 
 class Unauthenticated(Exception):
-    """No authenticated operator is in scope.
+    """No authenticated principal is in scope.
 
     Raised by `current_operator` rather than returning a permissive default:
     an unattributed configuration change must be impossible to express, not
@@ -73,13 +83,11 @@ class Unauthenticated(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Operator:
-    """A named person who may change configuration.
+    """The named holder of a console token, and the actor the change record names.
 
-    A name, and nothing else. No roles, no permissions, no grants: every
-    operator may change everything the console exposes. That is a real
-    limitation and it is deliberate -- a permission model nobody maintains
-    reads as a boundary while enforcing nothing, and the console's actual
-    boundary is that it holds no credentials and cannot reach the corpus.
+    A name, and nothing else. What the holder may do is not a property of the
+    name but of the request: the authenticator turns the token into a
+    `Principal`, whose roles depend on how the console is configured.
     """
 
     name: str
@@ -92,6 +100,51 @@ class Operator:
 
     def __str__(self) -> str:
         return self.name
+
+
+class Role(StrEnum):
+    """A console role. Admin implies operator."""
+
+    OPERATOR = "operator"
+    ADMIN = "admin"
+
+
+Via = Literal["oidc", "token"]
+"""How the principal authenticated: a CyberdyneAuth session or a `cfa_` token."""
+
+
+@dataclass(frozen=True, slots=True)
+class Principal:
+    """Who is acting on this request, and with which roles.
+
+    `subject` is the stable identity (the operator name for a token, the OIDC
+    `sub` for a session) and `display` is what a screen shows. Built only by
+    the authenticator from a verified credential; nothing in a request can
+    name one.
+    """
+
+    subject: str
+    display: str
+    roles: frozenset[Role]
+    via: Via
+
+    def has(self, role: Role) -> bool:
+        if role in self.roles:
+            return True
+        return role is Role.OPERATOR and Role.ADMIN in self.roles
+
+    @classmethod
+    def for_token(cls, operator: Operator, *, oidc_configured: bool) -> Principal:
+        """A `cfa_` token's principal: admin until an issuer is configured.
+
+        Once sign-in through the identity provider is configured, a token is
+        operator only. A leaked token then reads counts and configuration and
+        changes nothing; rolling back is unsetting the issuer.
+        """
+        roles = {Role.OPERATOR} if oidc_configured else {Role.OPERATOR, Role.ADMIN}
+        return cls(
+            subject=operator.name, display=operator.name, roles=frozenset(roles), via="token"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,36 +276,49 @@ class InMemoryOperatorTokens:
         return tuple(r for r in self._records.values() if r.is_active)
 
 
-# --- the operator in scope ---------------------------------------------
+# --- the principal in scope --------------------------------------------
 
-_current_operator: ContextVar[Operator | None] = ContextVar(
-    "chatmemory_operator", default=None
+_current_principal: ContextVar[Principal | None] = ContextVar(
+    "chatmemory_admin_principal", default=None
 )
 
 
-def current_operator() -> Operator:
-    """The operator established by the credential on this request."""
-    operator = _current_operator.get()
-    if operator is None:
+def current_principal() -> Principal:
+    """The principal established by the credential on this request."""
+    principal = _current_principal.get()
+    if principal is None:
         # Unreachable while the middleware guards every console route; kept
         # because "the guard was removed" must fail closed rather than let a
         # change be applied with nobody's name against it.
-        raise Unauthenticated("no authenticated operator in this request")
-    return operator
+        raise Unauthenticated("no authenticated principal in this request")
+    return principal
 
 
-def bind_operator(operator: Operator) -> Token[Operator | None]:
-    """Bind an operator to this context, returning a handle that undoes it.
+def current_operator() -> Operator:
+    """The token holder acting on this request, as the change record names them.
 
-    The single writer of the operator context. In production only the
+    Only a token principal has an `Operator`. A session principal is recorded
+    as `oidc:<sub>`, which is not an operator name by construction, so asking
+    for one here refuses rather than inventing it.
+    """
+    principal = current_principal()
+    if principal.via != "token":
+        raise Unauthenticated("this request was not made with an operator token")
+    return Operator(principal.subject)
+
+
+def bind_principal(principal: Principal) -> Token[Principal | None]:
+    """Bind a principal to this context, returning a handle that undoes it.
+
+    The single writer of the principal context. In production only the
     middleware calls it, immediately after a credential has been verified;
     tests call it to exercise handlers without an HTTP round trip.
     """
-    return _current_operator.set(operator)
+    return _current_principal.set(principal)
 
 
-def unbind_operator(handle: Token[Operator | None]) -> None:
-    _current_operator.reset(handle)
+def unbind_principal(handle: Token[Principal | None]) -> None:
+    _current_principal.reset(handle)
 
 
 # --- request authentication --------------------------------------------
@@ -260,17 +326,22 @@ def unbind_operator(handle: Token[Operator | None]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class AdminAuthenticator:
-    """Turns a credential into an operator. The only path to one there is.
+    """Turns a credential into a principal. The only path to one there is.
 
     Deliberately thinner than the MCP authenticator: there is no ACL lookup
     behind it, because the console grants no view of the corpus that a
-    permission set could narrow.
+    permission set could narrow. `oidc_configured` is whether an identity
+    provider issuer is set, which is what downscopes tokens to operator.
     """
 
     tokens: OperatorTokens
+    oidc_configured: bool = False
 
-    async def operator_for_token(self, token: str) -> Operator | None:
-        return await self.tokens.operator_for_token(token)
+    async def principal_for_token(self, token: str) -> Principal | None:
+        operator = await self.tokens.operator_for_token(token)
+        if operator is None:
+            return None
+        return Principal.for_token(operator, oidc_configured=self.oidc_configured)
 
 
 def bearer_token(header_value: str | None) -> str | None:
@@ -284,62 +355,89 @@ def bearer_token(header_value: str | None) -> str | None:
 
 
 _UNAUTHORIZED_BODY = b'{"error":"unauthorized"}'
+_REQUIRES_ADMIN_BODY = b'{"error":"requires admin"}'
+_NO_RULE_BODY = b'{"error":"forbidden"}'
 
 
 class AdminAuthMiddleware:
-    """Rejects unauthenticated calls, and binds the operator for the rest.
+    """Authenticates, decides the route's role, and binds the principal.
 
-    Runs at the ASGI layer so an unauthenticated request never reaches a
-    handler that could change anything. The response is byte-identical for a
-    missing, a malformed, an unknown and a revoked credential -- a refusal
-    that distinguished them would let anyone holding one dead token learn
-    which names still have live ones.
+    Runs at the ASGI layer so a request never reaches a handler it may not
+    use. The 401 is byte-identical for a missing, a malformed, an unknown and
+    a revoked credential -- a refusal that distinguished them would let anyone
+    holding one dead token learn which names still have live ones. A
+    principal below the route's role gets 403, and so does any route the
+    table has no row for (deny by default).
     """
 
     def __init__(
         self,
         app: ASGIApp,
         authenticator: AdminAuthenticator,
+        access: RouteAccess,
         protected_prefix: str = "/api",
     ) -> None:
         self._app = app
         self._authenticator = authenticator
+        self._access = access
         self._prefix = protected_prefix
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # `get_route_path`, never `scope["path"]`: the router matches routes on
-        # the path with `root_path` stripped, and a guard that matched on the
-        # raw path would disagree with it under any non-empty root_path -- a
-        # console mounted at /console/ (a shape the deployment notes advertise)
-        # would show this middleware "/console/api/settings", miss the prefix
-        # and wave the request through to the handler the router then resolves
-        # for "/api/settings". The guard has to answer the same question the
-        # router will, or it is guarding a different application.
-        if scope["type"] != "http" or not get_route_path(scope).startswith(self._prefix):
-            # Health, readiness and the static console bundle stay open: a
-            # probe holds no credential, and the bundle is code, not
-            # configuration. Everything that reads or writes configuration
-            # lives under the protected prefix.
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        rule = self._access.rule_for(scope)
+        if self._is_open(scope, rule):
             await self._app(scope, receive, send)
             return
 
-        operator = await self._operator_for(scope)
-        if operator is None:
+        principal = await self._principal_for(scope)
+        if principal is None:
             log.info("admin.unauthenticated", path=scope.get("path"))
-            await _unauthorized(send)
+            await _refuse(send, 401, _UNAUTHORIZED_BODY)
+            return
+
+        if not rule.permits(principal):
+            log.info(
+                "admin.forbidden",
+                path=scope.get("path"),
+                principal=principal.subject,
+                required=rule.access.value if rule.access else None,
+            )
+            await _refuse(send, 403, _REQUIRES_ADMIN_BODY if rule.access else _NO_RULE_BODY)
             return
 
         # Note what is *not* read here: no header, query parameter or body
-        # field can name an operator, because only the credential is
+        # field can name a principal, because only the credential is
         # consulted. `receive` is passed through untouched, so the body has
         # not even been read at the point identity is settled.
-        handle = bind_operator(operator)
+        handle = bind_principal(principal)
         try:
             await self._app(scope, receive, send)
         finally:
-            unbind_operator(handle)
+            unbind_principal(handle)
 
-    async def _operator_for(self, scope: Scope) -> Operator | None:
+    def _is_open(self, scope: Scope, rule: Rule) -> bool:
+        """Outside the protected prefix: a public row, or a path no route claims.
+
+        `get_route_path`, never `scope["path"]`: the router matches routes on
+        the path with `root_path` stripped, and a guard that matched on the
+        raw path would disagree with it under any non-empty root_path -- a
+        console mounted at /console/ would show this middleware
+        "/console/api/settings", miss the prefix and wave the request through
+        to the handler the router then resolves for "/api/settings". The
+        guard has to answer the same question the router will.
+        """
+        # Under the prefix a request is authenticated first, whatever claims
+        # it: the bundle's Mount at "/" also matches "/api" and "/apix", and
+        # a public row reached that way must not open the prefix.
+        if get_route_path(scope).startswith(self._prefix):
+            return False
+        # A public row, or nothing claims it (the router answers 404 and no
+        # handler runs).
+        return rule.is_public or not rule.matched
+
+    async def _principal_for(self, scope: Scope) -> Principal | None:
         raw = cast("list[tuple[bytes, bytes]]", scope["headers"])
         presented = [v for k, v in raw if k.lower() == b"authorization"]
         # Exactly one, or none. A dict of headers would keep the last of a
@@ -353,19 +451,15 @@ class AdminAuthMiddleware:
         token = bearer_token(presented[0].decode("latin-1"))
         if token is None:
             return None
-        return await self._authenticator.operator_for_token(token)
+        return await self._authenticator.principal_for_token(token)
 
 
-async def _unauthorized(send: Send) -> None:
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"www-authenticate", b'Bearer realm="chatmemory-admin"'),
-                (b"content-length", str(len(_UNAUTHORIZED_BODY)).encode()),
-            ],
-        }
-    )
-    await send({"type": "http.response.body", "body": _UNAUTHORIZED_BODY})
+async def _refuse(send: Send, status: int, body: bytes) -> None:
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+    ]
+    if status == 401:
+        headers.insert(1, (b"www-authenticate", b'Bearer realm="chatmemory-admin"'))
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": body})

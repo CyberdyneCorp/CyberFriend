@@ -9,10 +9,13 @@ this file adds no CORS middleware at all and none is missing.
 
 What is authenticated and what is not:
 
-*   Everything under `/api` requires a credential, which names the operator.
+*   Everything under `/api` requires a credential, which names the principal.
     The middleware runs at the ASGI layer, so an unauthenticated request never
     reaches a handler that could change anything, and missing, malformed,
     unknown and revoked all produce byte-identical refusals.
+*   Which role each route needs is `ROUTE_ACCESS`, one explicit row per
+    mounted `(method, path)`. A route with no row is refused before its
+    handler runs; every write is admin; reads are operator.
 *   `/health` and `/ready` are open. A probe holds no credential and neither
     route reveals configuration.
 *   The interface bundle is open. It is code, not configuration: it contains
@@ -28,7 +31,7 @@ answer to that is a boundary, not a typo.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import structlog
@@ -38,6 +41,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from chatmemory.admin.access import Access, RouteAccess, RouteKey
 from chatmemory.admin.auth import AdminAuthenticator, AdminAuthMiddleware, OperatorTokens
 from chatmemory.admin.handlers import (
     changes,
@@ -101,10 +105,69 @@ def api_routes(services: AdminServices) -> list[Route]:
     ]
 
 
+_PUBLIC = Access.PUBLIC
+_OPERATOR = Access.OPERATOR
+_ADMIN = Access.ADMIN
+
+NO_CORPUS_PATH = f"{API_PREFIX}/{{rest:path}}"
+
+ROUTE_ACCESS: Mapping[RouteKey, Access] = {
+    # Probes and the interface bundle hold no configuration.
+    ("GET", "/health"): _PUBLIC,
+    ("GET", "/ready"): _PUBLIC,
+    ("GET", "/"): _PUBLIC,  # the "bundle missing" placeholder
+    ("GET", "/{path:path}"): _PUBLIC,  # the static bundle, mounted at /
+    # Status and the change record.
+    ("GET", "/api/status"): _OPERATOR,
+    ("GET", "/api/audit"): _OPERATOR,
+    # Settings.
+    ("GET", "/api/settings"): _OPERATOR,
+    ("PUT", "/api/settings/{key}"): _ADMIN,
+    # Federation: adding a server or allowing a tool widens what the agent reaches.
+    ("GET", "/api/federation/servers"): _OPERATOR,
+    ("POST", "/api/federation/servers"): _ADMIN,
+    ("DELETE", "/api/federation/servers/{name}"): _ADMIN,
+    ("GET", "/api/federation/allowlist"): _OPERATOR,
+    ("POST", "/api/federation/allowlist"): _ADMIN,
+    ("DELETE", "/api/federation/allowlist/{server}/{tool}"): _ADMIN,
+    # Channels.
+    ("GET", "/api/channels"): _OPERATOR,
+    ("POST", "/api/channels"): _ADMIN,
+    ("DELETE", "/api/channels/{id}"): _ADMIN,
+    # Opt-outs: adding one purges a person's messages.
+    ("GET", "/api/optouts"): _OPERATOR,
+    ("POST", "/api/optouts"): _ADMIN,
+    ("DELETE", "/api/optouts/{platform}/{id}"): _ADMIN,
+    # MCP credentials: review and revoke only.
+    ("GET", "/api/tokens"): _OPERATOR,
+    ("DELETE", "/api/tokens/{id}"): _ADMIN,
+    # The refusal for anything unclaimed under /api. Its non-read verbs are
+    # admin like every other write, so an operator's POST is a 403 rather than
+    # a tour of which paths exist.
+    ("GET", NO_CORPUS_PATH): _OPERATOR,
+    ("POST", NO_CORPUS_PATH): _ADMIN,
+    ("PUT", NO_CORPUS_PATH): _ADMIN,
+    ("PATCH", NO_CORPUS_PATH): _ADMIN,
+    ("DELETE", NO_CORPUS_PATH): _ADMIN,
+    ("OPTIONS", NO_CORPUS_PATH): _ADMIN,
+}
+"""The access every mounted `(method, path)` requires. Deny by default.
+
+Kept beside `api_routes()` so a new route and its row are one diff. There is
+no per-method default: a route missing here is refused with 403 for everyone,
+and `tests/unit/test_admin_roles.py` walks every mounted route and fails on a
+missing row, on a write below admin, and on a row for a route that no longer
+exists.
+"""
+
+
 def build_app(
     services: AdminServices,
     tokens_store: OperatorTokens,
     console_dir: Path | None = None,
+    *,
+    oidc_configured: bool = False,
+    route_access: Mapping[RouteKey, Access] = ROUTE_ACCESS,
 ) -> Starlette:
     """The console application: ports in, one ASGI app out.
 
@@ -112,6 +175,10 @@ def build_app(
     fakes and in production against Postgres -- and so that a test which
     forgets to pass something fails to construct the app rather than serving a
     screen that silently does nothing.
+
+    `oidc_configured` is whether an identity provider issuer is set; it
+    downscopes `cfa_` tokens from admin to operator. `route_access` is
+    injectable so a test can prove that a route without a row is refused.
     """
 
     async def health(_: Request) -> JSONResponse:
@@ -138,7 +205,7 @@ def build_app(
         # answers a wrong method with this refusal rather than a 405, which
         # tells a caller nothing about which verbs exist.
         Route(
-            f"{API_PREFIX}/{{rest:path}}",
+            NO_CORPUS_PATH,
             no_corpus,
             # Every verb, explicitly. A route left to default to GET would let
             # a POST fall through to a 405 assembled from the routes above,
@@ -153,11 +220,14 @@ def build_app(
 
     app = Starlette(routes=routes, exception_handlers={Refused: refusal})
     # Added after the routes and around the whole app: every path under /api
-    # is authenticated before a handler sees the request, and the handlers
-    # read the operator from the context the middleware bound.
+    # is authenticated and checked against its row before a handler sees the
+    # request, and the handlers read the principal the middleware bound. The
+    # table is resolved against the router's own route list, so the guard and
+    # the router always agree on which route a request is.
     app.add_middleware(
         AdminAuthMiddleware,
-        authenticator=AdminAuthenticator(tokens_store),
+        authenticator=AdminAuthenticator(tokens_store, oidc_configured=oidc_configured),
+        access=RouteAccess(route_access, app.router.routes),
         protected_prefix=API_PREFIX,
     )
     return app
