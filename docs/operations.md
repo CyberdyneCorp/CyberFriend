@@ -837,8 +837,9 @@ surrounding conversation is stored.
   sends those DMs arrives with the admin triage screen.
 - **Privacy**: nothing is written for an opted-out person, not even their
   name; an opt-out deletes a person's suggestions in the same
-  transaction, and deleting the person cascades. When `purge_person_derived`
-  (add-privacy-dashboard) lands, its delete replaces 0030's trigger.
+  transaction, and deleting the person cascades. The delete is in
+  `purge_person_derived` (added by 0030), so self-service erasure reaches
+  suggestions as well.
 
 ## Position alerts
 

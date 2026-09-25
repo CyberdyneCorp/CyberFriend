@@ -5,16 +5,14 @@ conversation around them: no message text, no channel name, only the ids a
 console can resolve itself.
 
 Privacy follows the pattern of 0013 and 0014. A suggestion from an opted-out
-person is dropped before it is stored, and recording an opt-out deletes every
-suggestion the person made, in the same transaction as the flag. Deleting the
-person cascades. When the shared `purge_person_derived` function lands
-(0028 on fix/opt-out-leftovers), this revision must be re-chained onto it,
-its DELETE added to that function, and the purge trigger here dropped:
-self-service erasure calls the function directly, not the opt-out trigger,
-so until then erasure without opt-out relies on the person-row cascade.
+person is dropped before it is stored, and deleting the person cascades.
+Opt-out and self-service erasure both go through `purge_person_derived`
+(0028), so this revision adds its DELETE to that function rather than a
+trigger of its own: recording an opt-out deletes every suggestion the person
+made, in the same transaction as the flag, and erasure reaches them too.
 
 Revision ID: 0030
-Revises: 0027
+Revises: 0029
 """
 from __future__ import annotations
 
@@ -23,7 +21,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0030"
-down_revision = "0027"
+down_revision = "0029"
 branch_labels = None
 depends_on = None
 
@@ -47,14 +45,35 @@ END;
 $$ LANGUAGE plpgsql
 """
 
-PURGE_ON_OPT_OUT = """
-CREATE OR REPLACE FUNCTION purge_feature_requests_on_opt_out() RETURNS trigger AS $$
-BEGIN
-    DELETE FROM feature_request WHERE person_id = NEW.person_id;
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql
-"""
+#: `purge_person_derived` as 0028 left it. Restated rather than imported so this
+#: revision stays what it was when applied, whatever a later one does.
+PURGES_0028 = (
+    "DELETE FROM conversation_turn WHERE person_id = p_person_id",
+    "DELETE FROM conversation_summary WHERE person_id = p_person_id",
+    "DELETE FROM person_fact WHERE person_id = p_person_id",
+    "DELETE FROM notification WHERE person_id = p_person_id",
+    "DELETE FROM position_alert WHERE person_id = p_person_id",
+    "DELETE FROM scheduled_task WHERE person_id = p_person_id",
+    """DELETE FROM mcp_token t
+        USING person_platform_id p
+        WHERE p.person_id = p_person_id
+          AND t.platform = p.platform
+          AND t.platform_user_id = p.platform_user_id""",
+)
+
+PURGES = (
+    *PURGES_0028,
+    "DELETE FROM feature_request WHERE person_id = p_person_id",
+)
+
+
+def _purge_function(statements: tuple[str, ...]) -> str:
+    return (
+        "CREATE OR REPLACE FUNCTION purge_person_derived(p_person_id bigint) "
+        "RETURNS void AS $$\nBEGIN\n"
+        + "".join(f"    {statement};\n" for statement in statements)
+        + "END;\n$$ LANGUAGE plpgsql"
+    )
 
 
 def _quoted(values: tuple[str, ...]) -> str:
@@ -130,18 +149,10 @@ def upgrade() -> None:
         "BEFORE INSERT OR UPDATE ON feature_request "
         "FOR EACH ROW EXECUTE FUNCTION reject_opted_out_feature_request()"
     )
-    op.execute(PURGE_ON_OPT_OUT)
-    op.execute(
-        "CREATE TRIGGER trg_person_opt_out_purges_feature_requests "
-        "AFTER INSERT OR UPDATE ON person_opt_out "
-        "FOR EACH ROW EXECUTE FUNCTION purge_feature_requests_on_opt_out()"
-    )
+    op.execute(_purge_function(PURGES))
 
 
 def downgrade() -> None:
-    op.execute(
-        "DROP TRIGGER IF EXISTS trg_person_opt_out_purges_feature_requests ON person_opt_out"
-    )
-    op.execute("DROP FUNCTION IF EXISTS purge_feature_requests_on_opt_out()")
+    op.execute(_purge_function(PURGES_0028))
     op.drop_table("feature_request")
     op.execute("DROP FUNCTION IF EXISTS reject_opted_out_feature_request()")
