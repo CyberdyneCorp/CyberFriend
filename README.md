@@ -15,14 +15,15 @@ internet said.
 | | |
 |---|---|
 | **Answers from your channels** | Hybrid lexical and vector retrieval over conversation windows, scoped to what you may read, with citations that link back to the message |
-| **What someone said** | *o que o João disse sobre o deploy semana passada?*, *what did Ana say about pricing yesterday?*, *o que eu falei sobre X?*, *@Maria comentou algo sobre Y ontem?* — only that person's own messages, from channels you and the room can read, cited. Days and weeks are calendar ones in `ANSWER_TIMEZONE`. Two Joãos get *Qual João?*; a name nobody visible goes by is answered as an ordinary question |
+| **What someone said** | *o que o João disse sobre o deploy semana passada?*, *what did Ana say about pricing yesterday?*, *o que eu falei sobre X?*, *@Maria comentou algo sobre Y ontem?* — only that person's own messages, from channels you and the room can read, cited. Days and weeks are calendar ones in `ANSWER_TIMEZONE`. *o que o Leo falou com você hoje?* works too. Two Joãos get *Qual João?*; a name nobody visible goes by is answered as an ordinary question. People archived before names were recorded are named from the member list when ingest starts, so they can be asked about by name and are named in citations |
 | **Audience-aware answers** | In a channel it only cites what everyone there can read; ask in a DM for your full view |
+| **Catch-up** | *o que eu perdi no #general?*, *what did I miss in #infra this week?* — a cited digest of one channel for the period you name (since yesterday otherwise), in sections: decisions, open questions, requests, other highlights. A typed `#name` works when one channel has it. `/schedule` it for a daily digest. A channel you or the room cannot read gets one refusal that says nothing about why |
 | **Decisions** | *o que decidimos sobre o deploy?*, *o que ficou decidido semana passada?*, *what did we decide about pricing?* — read from conversation as it arrives, answered from the decision log with no model call, dated and newest first, each line citing the message that settled it. Only decisions from channels you and the room can read; deleting the conclusion or the proposal it settled removes it. No match is answered as an ordinary question, never as "nothing was decided" |
-| **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve` |
+| **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve`; a DM when someone asks you for something, switched with `/notifications` |
 | **Conversation memory** | Follow-ups keep context, per person and per place, and stop being recalled if you lose access to a channel behind them |
-| **Personal facts** | *my name is …*, *call me Leo*, *my email is …*, *my phone is …*, *my wallet is 0x…*, *reply in Portuguese*. Contact details and wallets are only ever shown in a DM to you |
+| **Personal facts** | *my name is …*, *call me Leo*, *my email is …*, *my phone is …*, *moro em …*, *nasci em …*, *my wallet is 0x…* / *bc1…*, *reply in Portuguese*. Contact details and wallets are only ever shown in a DM to you |
 | **Knows the time** | Every answering prompt carries the current date and time in UTC, so *today* and *recent* mean something |
-| **Answers in your language** | An answer is written in the language you asked in; a saved preferred language still wins |
+| **Answers in your language** | An answer is written in the language you asked in, and fixed replies come in Portuguese or English to match; a saved preferred language still wins |
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
 | **Web and MCP** | Wikipedia, Google via SerpApi, and any MCP server an operator allowlists |
 | **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
@@ -35,6 +36,7 @@ internet said.
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
 | **Voice questions** | Send the bot a voice message in a DM and get an answer as if you had typed it, with a small quoted line of what it understood. Transcribed by `gpt-4o-mini-transcribe`; the audio is never stored. Hard monthly caps per person and for the server. Off by default |
+| **Channel media (recording only)** | From `MEDIA_ENABLED_AT`, voice notes and images posted in indexed channels are recorded as pending rows: metadata and a CDN link, nothing downloaded and nothing searchable yet. Transcribing voice notes and reading images come later. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
 | **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |
@@ -50,6 +52,8 @@ mindmap
       Audience-aware in channels
       Documents and links
       Catch-up on a channel
+      o que eu perdi no #general
+      Daily digest with /schedule
       What someone said, and when
       o que o João disse semana passada
       What we decided, dated and cited
@@ -65,7 +69,7 @@ mindmap
       /forget here or everywhere
     About you
       Full and preferred name
-      Email and phone, DM only
+      Email, phone, address, birth date, DM only
       ETH and BTC wallets
       Several facts in one message
       Replies in your language
@@ -102,6 +106,7 @@ mindmap
       MCP interface to the corpus
       Langfuse tracing
       Retention and opt-outs
+      Channel media recorded, off by default
 ```
 
 ### What you can ask for
@@ -112,7 +117,7 @@ graph LR
 
     P --> CORPUS["Your channels"]
     CORPUS --> C1["o que decidimos sobre o deploy? &middot; what did we decide about pricing?"]
-    CORPUS --> C2["what did I miss in #infra"]
+    CORPUS --> C2["o que eu perdi no #general? &middot; what did I miss in #infra"]
     CORPUS --> C3["/ask &middot; /channels"]
     CORPUS --> C4["o que o João disse sobre o deploy semana passada?"]
 
@@ -135,11 +140,12 @@ graph LR
     YOU --> Y2["my wallet is 0x... then: my wallet balance?"]
     YOU --> Y3["answers in the language you asked in"]
     YOU --> Y4["/forget &middot; /notifications"]
+    YOU --> Y5["a voice message in a DM, answered as typed"]
 
     P --> WHEN["On a schedule"]
     WHEN --> W1["/schedule create, hourly to daily"]
     WHEN --> W2["/schedule list &middot; delete"]
-    WHEN --> W3["a DM only when there is something"]
+    WHEN --> W3["a DM only when there is something &middot; a daily digest of #general"]
     WHEN --> W4["tell me when my LP goes out of range &middot; Confirm"]
     WHEN --> W5["/alert list &middot; delete"]
 
@@ -286,7 +292,7 @@ guarantee that deleted content disappears everywhere.
 | Process | Role | Public |
 |---|---|---|
 | `migrate` | Applies migrations once per deploy, then exits | no |
-| `ingest` | Capture, backfill, windowing, embeddings, ask extraction, retention | no |
+| `ingest` | Capture, backfill, windowing, embeddings, ask and decision extraction, media rows, naming people, retention | no |
 | `bot` | Answers questions in Discord | no |
 | `mcp` | MCP interface to the corpus | yes |
 | `admin` | Operator console and its API | yes |
@@ -383,6 +389,7 @@ archive is a decision rather than a default.
 | `just db-reset` | Back to a clean database |
 | `just build` | The production image, as the platform builds it |
 | `just admin-token leonardo` | A console credential for one operator |
+| `just mcp-token 123456789` | An MCP credential bound to one Discord account |
 | `just decisions-backfill --since 2026-06-01 [--until YYYY-MM-DD]` | Re-extract older history for decisions (paid; see docs/operations.md first) |
 
 ## Tests
@@ -437,11 +444,12 @@ lists the common ones. The settings worth knowing:
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ANSWER_TIMEZONE` | The calendar "ontem" and "last week" are read in (IANA name, default `America/Sao_Paulo`) |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations and decisions are extracted |
-| `DECISION_MIN_SIMILARITY` | How close a stored decision must be to the question's topic to be listed (cosine, default 0.4); below it the question is answered by retrieval |
+| `DECISION_MIN_SIMILARITY` | How close a stored decision must be to the question's topic to be listed (cosine, default 0.4); below it the question is answered by retrieval. Not yet declared in `docker-compose.yml`, so a Coolify deployment runs the default |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
 | `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Alerts (range, range edge, health factor, BTC/ETH price), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
 | `VOICE_QUESTIONS_ENABLED`, `MEDIA_API_KEY` | Voice messages in a DM, transcribed at `MEDIA_BASE_URL` with `MEDIA_AUDIO_MODEL`. Off by default; enabling without a key stops the bot at boot |
 | `VOICE_PERSON_MONTHLY_MINUTES`, `MEDIA_AUDIO_MONTHLY_MINUTES` | Hard monthly caps on transcription, per person (default 60) and overall (default 1500) |
+| `MEDIA_ENABLED_AT`, `MEDIA_BACKFILL_DAYS` | From when channel voice notes and images are recorded (unset: never), and how many days before that also count for messages ingest writes from now on (default 0) |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 
@@ -466,6 +474,7 @@ Further reading:
 - [docs/operations.md](docs/operations.md) — running it day to day
 - [docs/mcp-interface.md](docs/mcp-interface.md) — the MCP interface
 - [docs/document-ingestion.md](docs/document-ingestion.md) — attachments and links
+- [docs/roadmap.md](docs/roadmap.md) — what has shipped, what is in progress, and what is next
 
 ## Two things to know before running this anywhere real
 

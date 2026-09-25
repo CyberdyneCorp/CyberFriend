@@ -46,19 +46,23 @@ curl -X PATCH -H "Authorization: Bearer $COOLIFY_CYBERDYNE_TOKEN" \
 Create an **Application** from this repository, build pack **Docker Compose**,
 compose file `/docker-compose.yml`.
 
-Two services come from one image:
+Five services come from one image:
 
-| Service  | Role                                   | Domain |
-|----------|----------------------------------------|--------|
-| `ingest` | Discord gateway client plus workers    | none   |
-| `bot`    | Conversational surface (mentions, DMs, `/ask`) | none |
-| `mcp`    | HTTP retrieval interface               | FQDN   |
+| Service   | Role                                   | Domain |
+|-----------|----------------------------------------|--------|
+| `migrate` | Applies migrations once per deploy, then exits | none |
+| `ingest`  | Discord gateway client plus workers    | none   |
+| `bot`     | Conversational surface (mentions, DMs, slash commands) | none |
+| `mcp`     | HTTP retrieval interface               | FQDN   |
+| `admin`   | Operator console and its API, database credentials only | FQDN (its own) |
 
 `bot` and `ingest` each hold their own gateway connection and each run one
 replica.
 
-Assign a domain to `mcp` only. `ingest` must not be publicly reachable; it has
-a health port for Coolify's check and nothing else.
+Assign domains to `mcp` and `admin` only, and keep them separate so the console
+can be closed to the internet without taking retrieval with it (see
+[admin-console.md](admin-console.md)). `ingest` and `bot` must not be publicly
+reachable; each has a health port for Coolify's check and nothing else.
 
 ### `ingest` runs exactly one replica
 
@@ -93,7 +97,8 @@ Set at **runtime** scope, not build scope — the image must contain no secrets.
 | `MEDIA_ENABLED_AT` | Optional, unset by default. Ingest only. From this moment (ISO timestamp, UTC when unzoned), voice notes and images posted in indexed channels are recorded as pending rows: metadata only, nothing downloaded. Unset records nothing. |
 | `MEDIA_BACKFILL_DAYS` | Optional, default `0`. Days before `MEDIA_ENABLED_AT` also recorded, but only for messages ingest writes from now on: a newly indexed channel's backfill, edits, messages posted while ingest was down. History already imported is not re-read. |
 | `ANSWER_TIMEZONE` | Optional. IANA zone whose days "ontem" and "semana passada" mean; defaults to `America/Sao_Paulo`. An unknown name stops the bot at boot. |
-| `DECISION_MIN_SIMILARITY` | Optional. Cosine a stored decision must reach against the topic of "o que decidimos sobre Y?" to be listed; defaults to `0.4`. Lower it if a multilingual embedding model misses cross-language matches. |
+| `DECISION_MIN_SIMILARITY` | Optional. Cosine a stored decision must reach against the topic of "o que decidimos sobre Y?" to be listed; defaults to `0.4`. Lower it if a multilingual embedding model misses cross-language matches. **Not yet declared in `docker-compose.yml`**, so Coolify refuses it and the default applies until the compose file declares it for `bot`. |
+| Feature switches | All optional and off by default: `WEB_TOOLS_ENABLED` (+ `SERPAPI_KEY`), `MARKET_TOOLS_ENABLED`, `WALLET_TOOLS_ENABLED` (+ `INFURA_KEY`), `SCHEDULED_TASKS_ENABLED`, `ALERTS_ENABLED` (needs `INFURA_KEY`), `TRACING_ENABLED` (+ `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`). `CHAT_MODEL`, `EXTRACTION_MODEL` and `CHAT_MODEL_CAPABILITIES` choose and describe the models. `docker-compose.yml` is the full list, per service, with the reason for each. |
 
 ### MCP tokens are bound to a person
 
@@ -151,6 +156,20 @@ End-to-end check:
 4. Confirm a caller with person A's token cannot retrieve content only person B
    can read.
 
+### Triggering a deploy
+
+Merging to `main` used to deploy on its own through the GitHub integration.
+That stopped firing after PR #74, so check that a deployment actually started
+after a merge, and trigger one when it did not:
+
+```bash
+curl -X POST -H "Authorization: Bearer $COOLIFY_CYBERDYNE_TOKEN" \
+  "$COOLIFY_CYBERDYNE_URL/api/v1/deploy?uuid=<app-uuid>"
+```
+
+The endpoint is `POST /api/v1/deploy?uuid=…` (the application's uuid as a query
+parameter), not a path under `/applications/<uuid>`.
+
 ## 6. Operational notes
 
 - **Backfill is slow and newest-first**, so recent history becomes queryable
@@ -161,6 +180,8 @@ End-to-end check:
   quality degrades quietly before anything else looks wrong.
 - **Deleting a channel from `INDEXED_CHANNEL_IDS`** stops ingestion but does not
   purge existing content on its own; run the purge task for that channel.
+  `/unindex` in Discord (Manage Channels on that channel) stops and purges in
+  one step, without a redeploy.
 
 
 ## 7. What actually went wrong the first time
