@@ -566,6 +566,17 @@ def test_the_answer_stack_puts_obligations_in_front_of_retrieval() -> None:
     )
 
 
+def test_obligation_periods_are_measured_on_the_graphs_clock() -> None:
+    """"This week" is bounded by `edges.clock`, like every other route.
+
+    Left to its wall-clock default, an obligation question on the end-to-end
+    harness's fixed clock asked about a different week from the one the
+    scenario was set in.
+    """
+    stack = _function(SRC / "composition.py", "build_answer_stack")
+    assert _calls(stack, "ObligationAnswerService", keyword="clock")
+
+
 def test_the_bot_receives_the_obligation_aware_service() -> None:
     """`bot.py` hands `stack.answers` to `build_ask_service`; that field is
     what has to be the obligation-aware one."""

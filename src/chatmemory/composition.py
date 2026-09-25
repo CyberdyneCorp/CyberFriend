@@ -123,6 +123,7 @@ from chatmemory.app.asks.candidates import CandidateFilter
 from chatmemory.app.asks.extraction import ExtractionService
 from chatmemory.app.asks.model import AskPolicy
 from chatmemory.app.asks.obligations import ObligationService, discord_message_url
+from chatmemory.app.asks.ports import AskExtractor
 from chatmemory.app.asks.resolution import ObservedDirectory
 from chatmemory.app.asks.state import AskStateService
 from chatmemory.app.asks.worker import ExtractionWorker
@@ -1375,18 +1376,27 @@ class AskPipeline:
     usage: UsageMeter
 
 
-def build_ask_pipeline(settings: Settings, engine: AsyncEngine) -> AskPipeline:
+def build_ask_pipeline(
+    settings: Settings, engine: AsyncEngine, extractor: AskExtractor | None = None
+) -> AskPipeline:
     """Assemble the extraction pass for the ingest process.
 
     On the cheap model, deliberately: extraction runs over traffic rather than
     over questions, so a frontier model here is a standing bill nobody asked
     for.
+
+    `extractor` is the model edge, and the only one: production leaves it
+    unset and gets the OpenAI-compatible extractor named here. An end-to-end
+    test hands a scripted one, so everything behind it -- candidate
+    filtering, resolution, the store -- is the pipeline ingest runs. `usage`
+    then counts nothing, because nothing here was billed.
     """
     store = PostgresAskStore(engine)
     directory = ObservedDirectory()
     usage = UsageMeter()
     extraction = ExtractionService(
-        extractor=OpenAICompatibleAskExtractor(
+        extractor=extractor
+        or OpenAICompatibleAskExtractor(
             ExtractorConfig(
                 api_key=settings.llm_api_key.get_secret_value(),
                 base_url=settings.llm_base_url,
@@ -1530,7 +1540,9 @@ async def build_answer_stack(
         # Outermost, so "what can you do" is answered from configuration
         # before anything can search the corpus for it.
         answers=SelfDescriptionAnswerService(
-            ObligationAnswerService(obligations, reasoning),
+            # The same clock as the reasoning service, so "this week" and
+            # the time route agree on when now is.
+            ObligationAnswerService(obligations, reasoning, clock=edges.clock),
             external_tools=(
                 sorted(federation.federation.permits) if federation is not None else ()
             ),

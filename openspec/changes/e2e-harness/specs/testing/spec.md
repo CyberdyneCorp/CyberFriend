@@ -82,9 +82,9 @@ so they can join the seam without opening a client of their own.
 
 ### Requirement: Answers and loops read the edges' clock
 
-The time route, the clock notice in answer prompts, catch-up, and the
-scheduled-task and notification loops SHALL read the current time from the
-clock the edges hold. Production edges SHALL hold the UTC wall clock.
+The time route, the clock notice in answer prompts, catch-up, obligation
+periods, and the scheduled-task and notification loops SHALL read the current
+time from the clock the edges hold. Production edges SHALL hold the UTC wall clock.
 
 #### Scenario: A fixed clock answers the time route
 - WHEN the edges hold a clock fixed at a moment and a person asks what the
@@ -95,6 +95,12 @@ clock the edges hold. Production edges SHALL hold the UTC wall clock.
 - WHEN the answer service or catch-up is built on a fixed clock
 - THEN the planner's and synthesiser's prompts SHALL state that moment, and a
   catch-up period SHALL be measured from it
+
+#### Scenario: A fixed clock bounds an obligation period
+- WHEN the edges hold a fixed clock and a person asks what was asked of them
+  this week
+- THEN the week SHALL be measured back from that moment, not from the wall
+  clock
 
 ### Requirement: End-to-end scenarios drive the assembled process through the wire
 
@@ -137,3 +143,26 @@ were reached, which model stages ran, and memory and fact rows read by SQL.
   the defect it names -- the reply is no longer the one it names, or a
   harness check fails
 - THEN the scenario SHALL fail rather than count as the expected failure
+
+### Requirement: Scenarios can run the ingest ask-extraction path
+
+The harness SHALL provide the ingest half next to the bot: a message the fake
+wire builds, not addressed to the bot, SHALL be converted by the production
+conversion, persisted by the production ingest service and submitted to the
+extraction worker the ask pipeline assembles, and a harness step SHALL flush
+that worker. The ask extractor SHALL be the only part replaced: it SHALL send
+the production extraction prompt to the scripted chat model under the
+`ask_extraction` schema and read the reply with the production parser.
+Production SHALL build the same OpenAI-compatible extractor as before.
+
+#### Scenario: A captured ask is answered with a citation
+- WHEN someone asks a person something in a channel, ingest captures it, the
+  extraction pass runs, and the person asks what was asked of them this week
+- THEN the reply SHALL cite the source message with a link to it
+- AND an ask from outside the week, or from a channel the person cannot read,
+  SHALL be absent
+- AND the answer SHALL run no corpus search and no model call
+
+#### Scenario: Chatter with no addressee
+- WHEN a captured message mentions nobody and addresses nobody
+- THEN the extraction pass SHALL make no model call for it

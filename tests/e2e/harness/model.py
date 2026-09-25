@@ -43,6 +43,11 @@ _STOPWORDS = frozenset(
 SUMMARY = "summary"
 """What the conversation summariser is told. Its content is never asserted."""
 
+ASK_EXTRACTION = "ask_extraction"
+"""The schema name the ingest-side ask extractor asks for."""
+
+ANALYSED = "Message to analyse:\n"
+
 
 class UnscriptedCall(AssertionError):
     """The graph asked the model for something this script does not know."""
@@ -78,10 +83,24 @@ class ScriptedChat:
 
     `calls` records `(schema or "text" or "tools", user prompt)` for each
     request, in order, so a turn can say which stages ran.
+
+    Ask extraction is the one stage a scenario scripts by hand, through
+    `script_asks`: whether a message creates an obligation is a judgement,
+    not something to derive from its words.
     """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self._asks: dict[str, list[dict[str, object]]] = {}
+
+    def script_asks(self, message: str, *asks: Mapping[str, object]) -> None:
+        """What extraction reports for the message whose text holds `message`.
+
+        Each ask is the model's JSON entry (`kind`, `text`, `addressee`,
+        `addressee_is_group`, `confidence`), so the real parser reads it. An
+        unscripted message extracts nothing.
+        """
+        self._asks[message] = [dict(a) for a in asks]
 
     async def complete_json(
         self, system: str, user: str, schema: Mapping[str, object], schema_name: str
@@ -94,6 +113,8 @@ class ScriptedChat:
             return JsonCompletion({"sub_questions": [_question(user)]})
         if schema_name == "grounded_answer":
             return JsonCompletion(self._grounded(user))
+        if schema_name == ASK_EXTRACTION:
+            return JsonCompletion({"asks": self._extracted(user)})
         raise UnscriptedCall(f"no script for schema {schema_name!r}")
 
     @staticmethod
@@ -107,6 +128,19 @@ class ScriptedChat:
             "text": f"From what was said: {quoted}",
             "cited_window_ids": [window for window, _ in relevant],
         }
+
+    def _extracted(self, prompt: str) -> list[dict[str, object]]:
+        """The asks scripted for the message under analysis, and only it.
+
+        Matched against that one line, not the whole prompt: a scripted
+        message quoted as context or as a reply parent must not be extracted
+        a second time from the message after it.
+        """
+        analysed = prompt.split(ANALYSED, 1)[-1].split("\n", 1)[0]
+        for message, asks in self._asks.items():
+            if message in analysed:
+                return asks
+        return []
 
     async def complete_text(self, system: str, user: str) -> TextCompletion:
         self.calls.append(("text", user))

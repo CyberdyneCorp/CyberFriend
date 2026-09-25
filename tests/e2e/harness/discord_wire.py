@@ -255,13 +255,14 @@ def message_payload(
     guild_id: int | None = None,
     member: Mapping[str, Any] | None = None,
     mentions: Sequence[Mapping[str, Any]] = (),
+    at: datetime | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": str(snowflake()),
         "channel_id": str(channel_id),
         "author": dict(author),
         "content": content,
-        "timestamp": _now(),
+        "timestamp": at.isoformat() if at is not None else _now(),
         "edited_timestamp": None,
         "tts": False,
         "mention_everyone": False,
@@ -519,6 +520,41 @@ class FakeDiscord:
             mentions=[{**self.bot_user, "member": member_payload(self.bot_user, [])}],
         )
         return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
+
+    def chatter(
+        self,
+        member: discord.Member,
+        channel: discord.TextChannel,
+        content: str,
+        *,
+        mentions: Sequence[discord.Member] = (),
+        at: datetime,
+    ) -> discord.Message:
+        """A message in a guild channel that is not addressed to the bot.
+
+        What ingest captures rather than what the bot answers. `at` is when it
+        was said, so a scenario on the fake clock can place it in a period.
+        Required, because discord.py dates a message by its snowflake rather
+        than its timestamp: the id is minted from `at`, and a counter id would
+        date it to 2015.
+        """
+        user = self._users[member.id]
+        data = message_payload(
+            channel_id=channel.id,
+            author=user,
+            content=content,
+            guild_id=self.layout.guild_id,
+            member=member_payload(user, [r.id for r in member.roles[1:]]),
+            mentions=[self._mention(m) for m in mentions],
+            at=at,
+        )
+        # The low 22 bits are free for uniqueness below the millisecond.
+        data["id"] = str(discord.utils.time_snowflake(at) + snowflake() % (1 << 22))
+        return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
+
+    def _mention(self, member: discord.Member) -> dict[str, Any]:
+        user = self._users[member.id]
+        return {**user, "member": member_payload(user, [r.id for r in member.roles[1:]])}
 
     # --- commands ------------------------------------------------------
 

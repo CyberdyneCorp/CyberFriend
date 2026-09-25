@@ -16,6 +16,7 @@ from chatmemory.config import Settings
 from chatmemory.entrypoints.bot import assemble
 from tests.e2e.harness.conversation import E2EBot
 from tests.e2e.harness.discord_wire import ChannelSpec, FakeDiscord, GuildLayout
+from tests.e2e.harness.ingest import Ingest
 from tests.e2e.harness.model import HashEmbeddings, ScriptedChat
 from tests.e2e.harness.web import FakeWeb, NetworkSeal, default_fixtures
 
@@ -81,7 +82,11 @@ def e2e_settings(database_url: str) -> Settings:
 
 
 async def start(settings: Settings, engine: AsyncEngine, seal: NetworkSeal) -> E2EBot:
-    """Assemble the process over fakes, and connect it to the fake guild."""
+    """Assemble the process over fakes, and connect it to the fake guild.
+
+    The ingest half shares the bot's model script and database, so what a
+    scenario captures and extracts is what the bot then answers from.
+    """
     chat = ScriptedChat()
     web = FakeWeb(default_fixtures())
     embeddings = HashEmbeddings(settings.embedding_dimensions)
@@ -96,4 +101,4 @@ async def start(settings: Settings, engine: AsyncEngine, seal: NetworkSeal) -> E
     process = await assemble(settings, edges)
     wire = FakeDiscord(process.graph.client, layout())
     await wire.start()
-    return E2EBot(process, wire, chat, web, embeddings, seal)
+    return E2EBot(process, wire, chat, web, embeddings, seal, Ingest(settings, engine, chat))

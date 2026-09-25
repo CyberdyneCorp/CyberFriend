@@ -138,6 +138,14 @@ made it -- also when the provider that made it caught the error and answered
 "could not be reached". The corpus is seeded through the production store and
 embedding worker, so its windows carry message ids as ingest leaves them.
 
+The ingest half is there too, for asks: `bot.chatter(...)` is a channel message
+not addressed to the bot, captured the way the live loop captures it, and
+`bot.extract_asks()` flushes the extraction worker `build_ask_pipeline`
+assembles. Only the extractor is scripted -- it sends the production prompt to
+the scripted model, which answers with what `bot.chat.script_asks(...)` set for
+that message -- so a scenario runs capture, extraction, question and cited
+answer on the real ask tables.
+
 Scenarios assert only what an outsider could see: what Discord received,
 whether the corpus was searched, which hosts were reached, which model stages
 ran, and the memory and fact rows, read by SQL. Every `/name` the bot says is

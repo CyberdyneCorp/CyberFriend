@@ -44,6 +44,7 @@ from tests.e2e.harness.discord_wire import (
     Sent,
     snowflake,
 )
+from tests.e2e.harness.ingest import Ingest
 from tests.e2e.harness.model import HashEmbeddings, ScriptedChat
 from tests.e2e.harness.web import (
     BLOCKSCOUT_HOSTS,
@@ -254,8 +255,10 @@ class E2EBot:
         web: FakeWeb,
         embeddings: HashEmbeddings,
         seal: NetworkSeal,
+        ingest: Ingest,
     ) -> None:
         self.process = process
+        self.ingest = ingest
         self.seal = seal
         self.discord = discord
         self.chat = chat
@@ -314,6 +317,33 @@ class E2EBot:
                         f"the bot said /{name} in {where}, where Discord does not offer it: "
                         f"{sent.content!r}"
                     )
+
+    async def chatter(
+        self,
+        name: str,
+        who: discord.Member,
+        content: str,
+        *,
+        mentions: Sequence[discord.Member] = (),
+        at: datetime,
+    ) -> int:
+        """`who` says `content` in #`name`, not to the bot, and ingest captures it.
+
+        Returns the message id, and adds the text to `corpus`. Nothing is
+        extracted until `extract_asks`, as nothing is live until a flush.
+        """
+        raw = self.discord.chatter(
+            who, self.discord.channel(name), content, mentions=mentions, at=at
+        )
+        message = await self.ingest.capture(raw)
+        self.corpus[content] = message.platform_message_id
+        return message.platform_message_id
+
+    async def extract_asks(self) -> tuple[str, ...]:
+        """Run the ingest extraction pass; returns the model stages it called."""
+        calls = len(self.chat.calls)
+        await self.ingest.extract()
+        return tuple(schema for schema, _ in self.chat.calls[calls:])
 
     async def seed_corpus(self, windows: Sequence[tuple[str, str, datetime]]) -> None:
         """Archived messages, each its own window, written the way ingest writes them.
