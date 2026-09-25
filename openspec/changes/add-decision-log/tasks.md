@@ -8,6 +8,9 @@
 - [x] 5.6 Retention (`PURGE_DECISIONS_BEFORE`) and opt-out (`PURGE_PERSON_DECISIONS`, evidence authors included); counts in `CorpusPurge`, `PersonPurge` and the admin response
 - [x] 5.7 PT/EN decision eval set beside the ask set, precision gate 0.9; the ask set still passes against gpt-4o-mini
 - [x] 5.8 Unit, integration (idempotency, edit withdrawal, cascade, retention, opt-out) and e2e (a PT decision is stored, a proposal is not)
+- [x] 5.9 Backlog pass reads an edited message's conversation from the corpus (`Store.extraction_context`); a chunk whose conversation cannot be read is retried
+- [x] 5.10 Deleting a message (tombstone) withdraws every decision whose evidence holds it; GIN index on `evidence_message_ids`
+- [x] 5.11 Markers narrowed: "fechada", "vamos de", "going with" dropped; candidate rate and prompt-token cost recorded in design.md
 
 ## PR 6. The answer
 

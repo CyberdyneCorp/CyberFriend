@@ -24,7 +24,7 @@ audit in tests/unit/test_sql_audit.py requires the reason in writing.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
@@ -51,6 +51,20 @@ class PendingExtraction:
 
     message: Message
     generation: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionContext:
+    """What the model is shown beside messages read back out of the corpus.
+
+    `preceding` maps each message asked about to the live messages before it
+    in its channel, oldest first -- empty when there are none, so a caller can
+    tell "nothing came before" from "not asked". `parents` maps a reply
+    parent's id to the parent, the shape `CandidateFilter` looks them up in.
+    """
+
+    preceding: Mapping[int, tuple[Message, ...]] = field(default_factory=dict)
+    parents: Mapping[int, Message] = field(default_factory=dict)
 
 
 class Store(Protocol):
@@ -147,6 +161,18 @@ class Store(Protocol):
         Recording a revision an edit has already moved past leaves the message
         pending, so a message edited mid-extraction is re-read rather than
         being marked done with text nobody extracted.
+        """
+        ...
+
+    async def extraction_context(
+        self, messages: Sequence[Message], limit: int
+    ) -> ExtractionContext:
+        """The conversation around each message, as the live pass would show it.
+
+        The backlog pass reads only what is pending, and after an edit that is
+        the edited message alone. Without this its conclusion reaches the model
+        stripped of the proposal it settled, the model finds no decision, and
+        the re-extraction withdraws a decision that was never taken back.
         """
         ...
 

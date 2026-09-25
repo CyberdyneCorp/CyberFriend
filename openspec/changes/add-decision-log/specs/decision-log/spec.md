@@ -40,6 +40,12 @@ replies to no one and carries no other signal.
 - WHEN a message says "we decided", "let's go with", "agreed" or "final call"
 - THEN the message SHALL be sent to the extraction model
 
+#### Scenario: A marker word used as something else
+- WHEN a message uses a form that mostly describes something else, such as
+  "a loja tá fechada", "vamos de carro" or "going with my family", and
+  carries no other signal
+- THEN the message SHALL NOT be sent to the extraction model
+
 #### Scenario: No marker and no other signal
 - WHEN a message carries neither a decision marker nor an ask signal
 - THEN the message SHALL NOT be sent to the extraction model
@@ -57,6 +63,13 @@ time that message is extracted.
 #### Scenario: An edit takes the decision back
 - WHEN a message is edited so that re-extraction finds no decision in it
 - THEN the system SHALL remove the decision recorded from it
+
+#### Scenario: An edit re-read out of the corpus
+- WHEN the backlog pass re-extracts an edited message on its own
+- THEN the model SHALL be shown the messages before it in its channel and its
+  reply parent, as the live pass would have shown them
+- AND a decision that still stands with that conversation in view SHALL be
+  kept, with the same evidence
 
 #### Scenario: An edit removes every signal
 - WHEN a message is edited so that it is no longer an extraction candidate
@@ -88,13 +101,21 @@ SHALL store the decision without an embedding when embedding fails.
 
 ### Requirement: Decisions leave with the content they came from
 
-The system SHALL remove a decision when its source message is deleted, when
+The system SHALL remove a decision when its source message or any message it
+rests on is deleted, when
 retention purges it or any message it rests on, and when a person who stated
 it or wrote any message it rests on opts out.
 
 #### Scenario: The source message is deleted
-- WHEN the source message row is deleted
-- THEN its decisions SHALL be deleted with it
+- WHEN a person deletes the source message, which tombstones it
+- THEN its decisions SHALL be removed
+- AND when the message row itself is deleted, its decisions SHALL be deleted
+  with it
+
+#### Scenario: A message a decision rests on is deleted
+- WHEN a person deletes a message recorded as evidence of a decision, such as
+  the proposal it settled
+- THEN that decision SHALL be removed
 
 #### Scenario: Retention
 - WHEN retention runs with a cutoff

@@ -29,7 +29,18 @@ set) fixed both. The ask set's precision and recall were unchanged.
 `AddresseeSignal.DECISION` is checked after mention, reply and DM and before
 the English second-person fallback. It is a cost gate, generous on purpose:
 "bora" is as often an invitation as a conclusion, and the model tells them
-apart. Messages that already carry an ask signal cost nothing extra.
+apart. Messages that already carry an ask signal cost nothing extra. Forms
+that are mostly something else and add no conclusion the others miss are left
+out: "fechada" (a shop, a position), "vamos de" (travel) and "going with"
+(company); "bora de", "let's go with" and "we'll go with" still match.
+
+Measured on the golden corpus (167 English messages) the candidate count is
+27 on main and 27 with the markers: no English message there gains a model
+call. The DECISION section and schema add about 660 prompt tokens per call
+(system prompt 335 -> 921, schema 143 -> 215, o200k). There is no real
+Portuguese sample to measure the PT candidate rate on yet; `UsageMeter`
+reports it once deployed. Each stored decision adds one embedding call,
+which, like the window embedding worker's, is not metered.
 
 ### The row
 
@@ -51,6 +62,15 @@ that withdraws a decision an edit took back. A failed embedding stores NULL
 and does not cost the asks from the same message, which are written in their
 own transaction first.
 
+After an edit only the edited message is pending, so the backlog pass would
+read it alone -- and a conclusion that only names what was chosen in the
+message before it reads as no decision, which the prune then turns into a
+withdrawal. `BacklogExtractionWorker` therefore reads each chunk's
+conversation back from the corpus (`Store.extraction_context`: the six live
+messages before each message in its channel, and its reply parent) and a
+chunk whose conversation cannot be read is left pending rather than extracted
+without it.
+
 An edit can also remove the marker altogether, so the message stops being a
 candidate and is never sent to the model. `extract_window` therefore
 withdraws decisions from every message of the batch that was not a
@@ -58,8 +78,12 @@ candidate, in one statement.
 
 ### Deletion, retention, opt-out
 
-- Hard delete of the source cascades. A tombstone is handled on read (PR 6):
-  every read requires the source and every evidence message to be alive.
+- Hard delete of the source cascades. A user's deletion is a tombstone, which
+  no cascade sees and which does not bump the extraction revision, so
+  `IngestService.handle_delete` withdraws every decision whose evidence holds
+  the message (`evidence_message_ids @> ARRAY[id]`, GIN-indexed; the source is
+  always in its own evidence). The read path (PR 6) still requires the source
+  and every evidence message to be alive, for a deletion that lands between.
 - Retention deletes a decision older than the cutoff, or resting on any
   evidence message older than it -- before the messages are purged, since it
   reads them.

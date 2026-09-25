@@ -89,6 +89,7 @@ from chatmemory.app.scope import LiveScope, ScopeChange, ScopeProvider
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import (
     build_ask_pipeline,
+    build_decision_store,
     build_memory_retention,
     build_obligation_notifier,
     build_trace_withdrawal,
@@ -97,7 +98,7 @@ from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
 from chatmemory.health import HealthState, spawn
-from chatmemory.ports.store import PendingExtraction, Store
+from chatmemory.ports.store import ExtractionContext, PendingExtraction, Store
 
 log = structlog.get_logger()
 
@@ -168,6 +169,13 @@ class ScopedExtractionLedger:
 
     async def record_extraction(self, entries: Sequence[PendingExtraction]) -> int:
         return await self._inner.record_extraction(entries)
+
+    async def extraction_context(
+        self, messages: Sequence[Message], limit: int
+    ) -> ExtractionContext:
+        # Unscoped by design: these are the neighbours of messages already
+        # read under the scope in force, in their own channel.
+        return await self._inner.extraction_context(messages, limit)
 
     async def pending_extraction_count(
         self, cap: int = 1000, channels: Sequence[ChannelRef] = ()
@@ -607,6 +615,13 @@ async def main() -> None:
         return cast("HistoryChannel | None", client.get_channel(channel_id))
 
     source = DiscordChatSource(DiscordHistoryReader(channel_provider))
+    # Built before the ingest service, which withdraws decisions on deletion,
+    # and before the TaskGroup so the live loop can be handed the worker it
+    # feeds. None only when an operator has switched extraction off, which is
+    # said out loud below: "obligations are empty" and "extraction is off" are
+    # indistinguishable from the answer side, and one of them is a decision
+    # somebody made.
+    asks = build_ask_pipeline(settings, engine) if settings.ask_extraction_enabled else None
     service = IngestService(
         source=source,
         store=store,
@@ -621,6 +636,9 @@ async def main() -> None:
         # Deleting a message has to reach the trace store too, or the text
         # stays legible in every exported run that quoted it.
         traces=build_trace_withdrawal(settings, engine),
+        # Unconditional: with extraction switched off, decisions recorded
+        # before it was still rest on messages people can delete.
+        decisions=asks.decisions if asks is not None else build_decision_store(settings, engine),
     )
     # Registered before any refresh loop runs, so the first stored change is
     # not missed. A channel added in the console gets its history fetched
@@ -638,12 +656,6 @@ async def main() -> None:
     handler = GatewayEventHandler(sink=service, feed=source)
     client = IngestClient(handler, settings.discord_guild_id, connection_changed)
 
-    # Built before the TaskGroup so the live loop can be handed the worker it
-    # feeds. None only when an operator has switched extraction off, which is
-    # said out loud below: "obligations are empty" and "extraction is off" are
-    # indistinguishable from the answer side, and one of them is a decision
-    # somebody made.
-    asks = build_ask_pipeline(settings, engine) if settings.ask_extraction_enabled else None
     if asks is None:
         log.warning(
             "ingest.ask_extraction_disabled",

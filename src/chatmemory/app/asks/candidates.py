@@ -59,12 +59,19 @@ FIRST_PERSON_COMMITMENT = re.compile(
 # Brazilian Portuguese. Generous on purpose: "bora" is as often an invitation as
 # a conclusion, and the model is what tells them apart. What this has to avoid
 # is missing the ways a group says it has settled something.
+#
+# Generous is not the same as indiscriminate: every match is a model call. Left
+# out are the forms that are mostly something else and add no conclusion the
+# rest do not catch -- "fechada" is how a shop or a position is described,
+# "vamos de" is how people travel ("vamos de carro"), and "going with" is
+# company ("going with my family"), while "bora de", "let's go with" and
+# "we'll go with" still match.
 DECISION_MARKERS = re.compile(
     r"\b("
     r"we(?: have|'ve)? decided|decided to|decision is|final call|it'?s settled|"
-    r"settled on|agreed|let'?s go with|lets go with|we'?ll go with|going with|"
-    r"decidimos|decidido|decidida|fechou|fechado|fechada|bora|combinado|combinada|"
-    r"vamos com|vamos de|vamos seguir com|vamos manter|fica assim|ficou assim|"
+    r"settled on|agreed|let'?s go with|lets go with|we'?ll go with|"
+    r"decidimos|decidido|decidida|fechou|fechado|bora|combinado|combinada|"
+    r"vamos com|vamos seguir com|vamos manter|fica assim|ficou assim|"
     r"ficou definido|está definido|tá definido|ta definido"
     r")\b",
     re.IGNORECASE,
@@ -92,10 +99,19 @@ class CandidateFilter:
         self,
         messages: Sequence[Message],
         parents: Mapping[int, Message] | None = None,
+        preceding: Mapping[int, Sequence[Message]] | None = None,
     ) -> list[AskCandidate]:
-        """Candidates from one window's messages, oldest first."""
+        """Candidates from one window's messages, oldest first.
+
+        `preceding` is the conversation before a message as the corpus holds
+        it, oldest first, and replaces the batch's for the messages it names.
+        The batch is only the conversation when it is contiguous: the backlog
+        pass reads back an edited message on its own, and a conclusion shown
+        without the proposal it settled no longer says what was chosen.
+        """
         by_id = {m.platform_message_id: m for m in messages}
         lookup: dict[int, Message] = {**(parents or {}), **by_id}
+        before = preceding or {}
 
         found: list[AskCandidate] = []
         for index, message in enumerate(messages):
@@ -105,12 +121,14 @@ class CandidateFilter:
             parent = (
                 lookup.get(message.reply_to_id) if message.reply_to_id is not None else None
             )
-            start = max(0, index - self._context)
+            context = before.get(message.platform_message_id)
+            if context is None:
+                context = messages[max(0, index - self._context) : index]
             found.append(
                 AskCandidate(
                     message=message,
                     signal=signal,
-                    context=tuple(messages[start:index]),
+                    context=tuple(context[-self._context :]) if self._context else (),
                     reply_parent=parent,
                 )
             )

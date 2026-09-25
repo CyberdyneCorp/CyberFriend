@@ -46,6 +46,17 @@ class TraceSink(Protocol):
     async def withdraw_message(self, message_id: int) -> None: ...
 
 
+class DecisionSink(Protocol):
+    """The decision log's view of a deletion.
+
+    A decision is a summary of the messages it rests on, kept in its own
+    table. Deleting a message tombstones the row, which no cascade sees, so
+    without this the retracted words stay restated in the decision.
+    """
+
+    async def withdraw_message(self, message_id: int) -> int: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BackfillReport:
     channel: ChannelRef
@@ -64,6 +75,7 @@ class IngestService:
         page_size: int = 100,
         documents: DocumentSink | None = None,
         traces: TraceSink | None = None,
+        decisions: DecisionSink | None = None,
     ) -> None:
         self._source = source
         self._store = store
@@ -75,6 +87,7 @@ class IngestService:
         self._page_size = page_size
         self._documents = documents
         self._traces = traces
+        self._decisions = decisions
 
     @property
     def scope(self) -> ScopeProvider:
@@ -136,6 +149,11 @@ class IngestService:
             withdrawn = await self._documents.handle_message_deleted(platform_message_id, when)
             if withdrawn:
                 log.info("ingest.documents_withdrawn", message_id=platform_message_id,
+                         count=withdrawn)
+        if self._decisions is not None:
+            withdrawn = await self._decisions.withdraw_message(platform_message_id)
+            if withdrawn:
+                log.info("ingest.decisions_withdrawn", message_id=platform_message_id,
                          count=withdrawn)
         if self._traces is not None:
             # Last, and never able to stop the rest. The tombstone above has

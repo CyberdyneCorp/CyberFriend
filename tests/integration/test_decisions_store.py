@@ -9,7 +9,9 @@ an edit withdraws it rather than leaving the old conclusion standing.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 from sqlalchemy import text
@@ -22,9 +24,13 @@ from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.app.asks.extraction import ExtractionService
 from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.resolution import StaticDirectory
+from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
 from chatmemory.app.decisions.model import Decision, ExtractedDecision, decision_key
+from chatmemory.app.ingest import IngestService
+from chatmemory.app.windowing import WindowBuilder
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
+from chatmemory.ports.sources import ChatSource
 
 pytestmark = pytest.mark.asyncio
 
@@ -227,6 +233,75 @@ async def test_deleting_the_source_message_cascades_to_its_decision(clean: Async
         await conn.execute(text("DELETE FROM message WHERE id = 2"))
 
     assert await rows(clean) == []
+
+
+async def test_deleting_a_message_withdraws_every_decision_resting_on_it(
+    clean: AsyncEngine,
+) -> None:
+    """Through the path a user's deletion takes: a tombstone, which no cascade sees."""
+    proposal = msg(1, BEA, PROPOSAL, NOW - timedelta(minutes=2))
+    agreed = msg(2, LEO, CONCLUSION, NOW - timedelta(minutes=1))
+    stated = msg(3, BEA, "combinado, retro quinzenal", NOW)
+    await seed(clean, proposal, agreed, stated)
+    decisions = PostgresDecisionStore(clean, FixedEmbeddings())
+    await decisions.record_decisions(2, [decision(agreed, evidence=[1])])
+    await decisions.record_decisions(3, [decision(stated, topic="retro")])
+    ingest = IngestService(
+        cast(ChatSource, None),
+        PostgresStore(clean),
+        WindowBuilder(),
+        frozenset({CH}),
+        decisions=decisions,
+    )
+
+    # The proposal is only evidence: the decision restating it goes anyway.
+    await ingest.handle_delete(1, channel=CHANNEL)
+    assert [r["decision_key"] for r in await rows(clean)] == ["3:retro"]
+
+    await ingest.handle_delete(3, channel=CHANNEL)
+    assert await rows(clean) == []
+
+
+class NeedsTheProposal:
+    """Finds the decision only with the proposal in view, as a real model does."""
+
+    async def extract(self, candidate: AskCandidate) -> Extraction:
+        shown = [m.content for m in candidate.context]
+        if candidate.message.platform_message_id == 2 and PROPOSAL in shown:
+            return Extraction(
+                decisions=(ExtractedDecision("O deploy passa a ser na sexta", "deploy", 0.9),)
+            )
+        return Extraction()
+
+
+async def test_an_edited_conclusion_keeps_its_decision_through_the_backlog_pass(
+    clean: AsyncEngine,
+) -> None:
+    """After an edit only the edited message is pending; its conversation is
+    read back from the corpus so a typo fix does not withdraw the decision."""
+    proposal = msg(1, BEA, PROPOSAL, NOW - timedelta(minutes=1))
+    source = msg(2, LEO, "fechou, vamos com isso", NOW)
+    await seed(clean, proposal, source)
+    corpus = PostgresStore(clean)
+    service = ExtractionService(
+        extractor=NeedsTheProposal(),
+        store=PostgresAskStore(clean),
+        directory=StaticDirectory({}),
+        decisions=PostgresDecisionStore(clean, FixedEmbeddings()),
+    )
+    backlog = BacklogExtractionWorker(ExtractionWorker(service), corpus, channels=[CHANNEL])
+
+    assert await backlog.run_once() == 2
+    assert [r["decision_key"] for r in await rows(clean)] == ["2:deploy"]
+
+    await corpus.upsert_messages(
+        [replace(source, content="fechou, vamos com isso!", edited_at=NOW + timedelta(minutes=1))]
+    )
+    assert await backlog.run_once() == 1, "the edit did not make the message pending"
+
+    stored = await rows(clean)
+    assert [r["decision_key"] for r in stored] == ["2:deploy"]
+    assert stored[0]["evidence_message_ids"] == [2, 1]
 
 
 async def test_retention_takes_old_decisions_and_those_resting_on_old_evidence(

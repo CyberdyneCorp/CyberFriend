@@ -183,6 +183,12 @@ class FakeDecisionStore:
             del self.decisions[key]
         return len(gone)
 
+    async def withdraw_message(self, message_id: int) -> int:
+        gone = [k for k, d in self.decisions.items() if message_id in d.evidence_message_ids]
+        for key in gone:
+            del self.decisions[key]
+        return len(gone)
+
 
 class FakeAskStore:
     """In-memory `AskStore` that keeps the rules the SQL keeps."""

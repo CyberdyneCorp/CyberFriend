@@ -75,10 +75,15 @@ class ExtractionService:
         self,
         messages: Sequence[Message],
         parents: Mapping[int, Message] | None = None,
+        preceding: Mapping[int, Sequence[Message]] | None = None,
     ) -> ExtractionReport:
-        """Extract from one window's messages and record what was found."""
+        """Extract from one window's messages and record what was found.
+
+        `preceding` is `CandidateFilter.candidates`'s: the corpus's own
+        conversation before a message, for a batch that is not contiguous.
+        """
         report = ExtractionReport()
-        candidates = self._candidates.candidates(messages, parents)
+        candidates = self._candidates.candidates(messages, parents, preceding)
         for candidate in candidates:
             report = _add(report, await self.extract_candidate(candidate))
         read = {c.message.platform_message_id for c in candidates}

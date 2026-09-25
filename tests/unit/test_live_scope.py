@@ -50,7 +50,7 @@ from chatmemory.entrypoints.ingest import (
 )
 from chatmemory.health import HealthState
 from chatmemory.ports.configuration import SettingSource, StoredSetting
-from chatmemory.ports.store import PendingExtraction
+from chatmemory.ports.store import ExtractionContext, PendingExtraction
 from tests.unit.fakes import FakeChannel, FakeGuild, FakeMember
 
 SRC = Path(chatmemory.__file__).parent
@@ -426,6 +426,11 @@ class LedgerRecorder:
 
     async def record_extraction(self, entries: Sequence[PendingExtraction]) -> int:
         return len(entries)
+
+    async def extraction_context(
+        self, messages: Sequence[Message], limit: int
+    ) -> ExtractionContext:
+        return ExtractionContext()
 
     async def pending_extraction_count(
         self, cap: int = 1000, channels: Sequence[ChannelRef] = ()

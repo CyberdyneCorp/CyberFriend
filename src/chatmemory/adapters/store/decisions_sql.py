@@ -47,3 +47,12 @@ WHERE source_message_id = :source_message_id
 WITHDRAW_DECISIONS = text("""
 DELETE FROM decision WHERE source_message_id = ANY(CAST(:source_message_ids AS bigint[]))
 """)
+
+# A deletion reaches every decision that rests on the message, not only the
+# ones it stated: the evidence is what the summary may quote. The source is
+# always in its own evidence, so one containment test covers both, and it is
+# the form the GIN index on the array can answer.
+WITHDRAW_MESSAGE_DECISIONS = text("""
+DELETE FROM decision
+WHERE evidence_message_ids @> ARRAY[CAST(:message_id AS bigint)]
+""")

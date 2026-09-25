@@ -34,3 +34,12 @@ class DecisionStore(Protocol):
         candidate, and without this the decision it used to carry would stay.
         """
         ...
+
+    async def withdraw_message(self, message_id: int) -> int:
+        """Remove every decision stated in or resting on a deleted message.
+
+        A user's deletion is a tombstone, so the source's cascade never fires,
+        and it does not bump the extraction revision, so no re-run prunes
+        either. The summary may restate the retracted words, so it goes now.
+        """
+        ...

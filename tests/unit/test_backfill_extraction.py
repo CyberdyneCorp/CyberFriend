@@ -30,9 +30,10 @@ from chatmemory.app.asks.extraction import ExtractionService
 from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.resolution import ObservedDirectory, StaticDirectory
 from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
+from chatmemory.app.decisions.model import ExtractedDecision, decision_key
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
-from chatmemory.ports.store import PendingExtraction, Store
+from chatmemory.ports.store import ExtractionContext, PendingExtraction, Store
 from tests.unit.test_asks_support import (
     ALICE,
     BOB,
@@ -40,6 +41,7 @@ from tests.unit.test_asks_support import (
     PRIVATE_CHANNEL,
     T0,
     FakeAskStore,
+    FakeDecisionStore,
     StubExtractor,
     extracted,
     message,
@@ -66,6 +68,7 @@ class FakeCorpus:
         self.counts = 0
         self.recorded: list[PendingExtraction] = []
         self.fail_records = False
+        self.fail_context = False
 
     # --- what ingestion does to it ---------------------------------------
 
@@ -108,6 +111,34 @@ class FakeCorpus:
             )
             self.recorded.append(entry)
         return len(entries)
+
+    async def extraction_context(
+        self, messages: Sequence[Message], limit: int
+    ) -> ExtractionContext:
+        if self.fail_context:
+            raise RuntimeError("store unavailable")
+        live = sorted(
+            (m for m in self.messages.values() if m.is_visible),
+            key=lambda m: (m.created_at, m.platform_message_id),
+        )
+        preceding = {
+            target.platform_message_id: tuple(
+                [
+                    m
+                    for m in live
+                    if m.channel == target.channel
+                    and (m.created_at, m.platform_message_id)
+                    < (target.created_at, target.platform_message_id)
+                ][-limit:]
+            )
+            for target in messages
+        }
+        parents = {
+            m.reply_to_id: self.messages[m.reply_to_id]
+            for m in messages
+            if m.reply_to_id in self.messages and self.messages[m.reply_to_id].is_visible
+        }
+        return ExtractionContext(preceding=preceding, parents=parents)
 
     async def pending_extraction_count(
         self, cap: int = 1000, channels: Sequence[ChannelRef] = ()
@@ -358,6 +389,97 @@ async def test_a_deleted_message_is_never_offered_for_extraction() -> None:
 
     assert await worker.run_once() == 0
     assert extractor.calls == []
+
+
+# --- an edited message is read with the conversation it was said in -------
+
+
+class NeedsTheProposal(StubExtractor):
+    """Finds the decision only when the proposal it settles is in view.
+
+    What a real model does with "fechou, vamos com isso": the conclusion names
+    nothing, so read on its own it concludes nothing.
+    """
+
+    async def extract(self, candidate: AskCandidate) -> Extraction:
+        self.calls.append(candidate)
+        shown = " ".join(m.content for m in candidate.context)
+        found = (DEPLOY,) if "deploy na sexta?" in shown else ()
+        return Extraction(asks=(), decisions=found)
+
+
+DEPLOY = ExtractedDecision(summary="O deploy passa a ser na sexta", topic="deploy", confidence=0.9)
+
+
+def backlog_with_decisions(
+    corpus: FakeCorpus, extractor: StubExtractor, decisions: FakeDecisionStore
+) -> BacklogExtractionWorker:
+    service = ExtractionService(
+        extractor=extractor,
+        store=FakeAskStore(),
+        directory=StaticDirectory({}),
+        decisions=decisions,
+    )
+    return BacklogExtractionWorker(ExtractionWorker(service), corpus)  # type: ignore[arg-type]
+
+
+async def test_an_edited_conclusion_is_read_with_the_proposal_it_settled() -> None:
+    """A typo fix must not withdraw the decision.
+
+    After an edit only the edited message is pending, so the backlog pass reads
+    it on its own. Shown alone, a conclusion that only names what was chosen in
+    the message before it reads as no decision -- and the re-run replaces the
+    message's decisions with that nothing.
+    """
+    corpus = FakeCorpus()
+    corpus.imported(
+        message(9, BOB, "bora fazer o deploy na sexta?", at=T0),
+        message(10, ALICE, "fechou, vamos com isso", at=T0 + timedelta(minutes=1)),
+    )
+    decisions = FakeDecisionStore()
+    extractor = NeedsTheProposal()
+    worker = backlog_with_decisions(corpus, extractor, decisions)
+    await worker.run_once()
+    assert decision_key(10, "deploy") in decisions.decisions
+
+    corpus.edit(10, "fechou, vamos com isso!")
+    assert await worker.run_once() == 1
+
+    assert extractor.calls[-1].message.content == "fechou, vamos com isso!"
+    kept = decisions.decisions[decision_key(10, "deploy")]
+    assert kept.evidence_message_ids == (10, 9), "the proposal was not shown again"
+
+
+async def test_the_reply_parent_of_an_edited_message_is_read_from_the_corpus() -> None:
+    corpus = FakeCorpus()
+    corpus.imported(
+        message(9, BOB, "deploy na sexta?", at=T0),
+        message(10, ALICE, "fechado", at=T0 + timedelta(minutes=1), reply_to_id=9),
+    )
+    extractor = StubExtractor()
+    worker, _ = backlog(corpus, extractor)
+    await worker.run_once()
+
+    corpus.edit(10, "fechado!")
+    await worker.run_once()
+
+    edited = extractor.calls[-1]
+    assert edited.reply_parent is not None
+    assert edited.reply_parent.platform_message_id == 9
+
+
+async def test_a_chunk_whose_conversation_cannot_be_read_is_retried() -> None:
+    """Extracting without it could withdraw a real decision, so it waits."""
+    corpus = FakeCorpus()
+    corpus.imported(asked(10, ALICE, "can you review this?"))
+    corpus.fail_context = True
+    extractor = StubExtractor(extracted())
+    worker, _ = backlog(corpus, extractor)
+
+    assert await worker.run_once() == 0
+    assert extractor.calls == []
+    assert corpus.is_pending(10)
+    assert worker.progress.batches_failed == 1
 
 
 # --- the live pass marks what it did, so this one does not repeat it ------

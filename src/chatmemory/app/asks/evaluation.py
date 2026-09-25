@@ -511,7 +511,7 @@ DECISION_EXAMPLES: tuple[DecisionExample, ...] = (
     DecisionExample(
         "en-proposal",
         "leo",
-        "what if we're going with option 2 instead?",
+        "what if we decided to go with option 2 instead?",
     ),
     DecisionExample(
         "en-still-open",

@@ -14,6 +14,10 @@ configured window. A decision also goes when any message it rests on (the
 proposal it settled, shown to the model as context) is older than the cutoff,
 because its summary may restate that message.
 
+Deleting a message in Discord works the same way: ingest withdraws every
+decision it stated or rests on as evidence at once, without waiting for
+retention, since the summary may restate the retracted words.
+
 ```python
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.documents.store import PostgresDocumentStore

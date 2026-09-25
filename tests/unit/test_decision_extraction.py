@@ -61,6 +61,9 @@ def service(
         "ok, let's go with the managed database",
         "lets go with option 2",
         "agreed, final call is monday",
+        # Alone, so removing it from the markers fails here: "agreed" above
+        # would otherwise carry the case.
+        "final call: we ship monday",
     ],
 )
 def test_a_conclusion_is_a_candidate_in_either_language(content: str) -> None:
@@ -75,6 +78,11 @@ def test_a_conclusion_is_a_candidate_in_either_language(content: str) -> None:
         "o deploy quebrou de novo",
         "decididamente não gosto disso",
         "they disagreed about the schema",
+        # Forms left out of the markers because they are mostly something
+        # else, and every match is a model call.
+        "a loja tá fechada hoje",
+        "vamos de carro ou de metrô?",
+        "I am going with my family this weekend",
     ],
 )
 def test_a_proposal_or_a_status_carries_no_decision_signal(content: str) -> None:

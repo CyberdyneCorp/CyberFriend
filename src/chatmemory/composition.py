@@ -1378,6 +1378,19 @@ class AskPipeline:
     decisions: PostgresDecisionStore
 
 
+def build_decision_store(
+    settings: Settings, engine: AsyncEngine, embeddings: EmbeddingClient | None = None
+) -> PostgresDecisionStore:
+    """The decision log, embedding through `embeddings` or the configured endpoint.
+
+    Its own builder because ingest needs it even with extraction switched off:
+    deleting a message has to withdraw the decisions recorded before it was.
+    """
+    return PostgresDecisionStore(
+        engine, embeddings if embeddings is not None else build_embeddings(settings)
+    )
+
+
 def build_ask_pipeline(
     settings: Settings,
     engine: AsyncEngine,
@@ -1401,9 +1414,7 @@ def build_ask_pipeline(
     embedding endpoint, and an end-to-end test hands its offline one.
     """
     store = PostgresAskStore(engine)
-    decisions = PostgresDecisionStore(
-        engine, embeddings if embeddings is not None else build_embeddings(settings)
-    )
+    decisions = build_decision_store(settings, engine, embeddings)
     directory = ObservedDirectory()
     usage = UsageMeter()
     extraction = ExtractionService(

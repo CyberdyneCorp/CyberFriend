@@ -78,6 +78,10 @@ def upgrade() -> None:
     op.create_index("ix_decision_channel_time", "decision", ["channel_id", "decided_at"])
     op.create_index("ix_decision_source", "decision", ["source_message_id"])
     op.create_index("ix_decision_tsv", "decision", ["search_tsv"], postgresql_using="gin")
+    # Every deletion asks which decisions rest on the deleted message.
+    op.create_index(
+        "ix_decision_evidence", "decision", ["evidence_message_ids"], postgresql_using="gin"
+    )
 
 
 def downgrade() -> None:

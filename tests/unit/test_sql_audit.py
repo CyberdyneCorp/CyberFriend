@@ -138,6 +138,12 @@ UNSCOPED: dict[str, str] = {
         ":channel_ids, which in every other statement means what one\n"
         "viewer may read"
     ),
+    "sql.EXTRACTION_CONTEXT": (
+        "ingest-only; the messages around ones the extraction pass already\n"
+        "read, in the same channel, so the model sees the conversation the\n"
+        "live pass would have shown it. Acts for nobody, and unreachable\n"
+        "from any request-scoped surface"
+    ),
     "sql.WINDOWS_MISSING_EMBEDDINGS": (
         "ingest-only; window text for the embedding worker. Unreachable from "
         "any request-scoped surface"
@@ -160,6 +166,9 @@ UNSCOPED: dict[str, str] = {
     "decisions_sql.PRUNE_DECISIONS": "write; withdraws decisions a re-run no longer finds",
     "decisions_sql.WITHDRAW_DECISIONS": (
         "write; withdraws decisions from messages a pass no longer sends to the model"
+    ),
+    "decisions_sql.WITHDRAW_MESSAGE_DECISIONS": (
+        "write; withdraws decisions resting on a message somebody deleted"
     ),
     "asks_sql.CLOSE_ANSWERED_BY_REPLY": "write; state transition from an event",
     "asks_sql.CLOSE_ANSWERED_BY_REACTION": "write; state transition from an event",

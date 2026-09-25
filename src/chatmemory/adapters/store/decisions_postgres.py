@@ -84,6 +84,13 @@ class PostgresDecisionStore:
             )
             return int(removed.rowcount or 0)
 
+    async def withdraw_message(self, message_id: int) -> int:
+        async with self._engine.begin() as conn:
+            removed = await conn.execute(
+                decisions_sql.WITHDRAW_MESSAGE_DECISIONS, {"message_id": message_id}
+            )
+            return int(removed.rowcount or 0)
+
     async def _embed(self, decisions: Sequence[Decision]) -> list[str | None]:
         if not decisions:
             return []
