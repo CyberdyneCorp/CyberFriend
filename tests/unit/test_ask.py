@@ -161,6 +161,23 @@ async def test_rate_limit_is_per_person_not_per_surface() -> None:
     assert via_dm.rate_limited
 
 
+async def test_the_allowance_is_read_without_spending_a_question() -> None:
+    """Voice checks it before transcribing; peeking must not use the allowance up."""
+    g = guild()
+    asks = AskService(
+        acl=DiscordAclResolver(g, (GENERAL,)),
+        audiences=DiscordAudienceResolver(g, (GENERAL,)),
+        answers=StubAnswerService(),
+        limiter=RateLimiter(max_questions=1, window_seconds=60),
+    )
+    for _ in range(3):
+        assert asks.allowance(person(LEAD)).allowed
+    assert (await asks.ask(AskRequest(person(LEAD), "q", None, LEAD))).answered
+
+    refused = asks.allowance(person(LEAD))
+    assert not refused.allowed and refused.retry_after_seconds > 0
+
+
 async def test_stub_service_abstains_rather_than_inventing() -> None:
     asks, _ = build(StubAnswerService())
     outcome = await asks.ask(AskRequest(person(LEAD), "q", ch(GENERAL), GENERAL))

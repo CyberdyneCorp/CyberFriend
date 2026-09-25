@@ -309,10 +309,11 @@ class Settings(BaseSettings):
     """
 
     voice_max_seconds: int = 120
-    """The longest voice question accepted, by the duration Discord declares.
+    """The longest voice question accepted.
 
-    A plain audio file declares none, so it is charged this much and bounded
-    by `voice_max_bytes` instead."""
+    Checked against any duration the client declares before download, and
+    against the length counted from the audio's own packets after it, before
+    anything is sent. A file that declares none is charged this much."""
 
     voice_max_bytes: int = 10_000_000
     """The largest download, enforced on the bytes as they arrive."""
@@ -323,8 +324,9 @@ class Settings(BaseSettings):
     media_audio_monthly_minutes: int = 1500
     """Minutes of audio transcribed in a calendar month (UTC), for everybody.
 
-    The hard ceiling on the transcription bill. Shared with any later
-    transcription of channel voice notes, so it bounds the whole feature."""
+    The hard ceiling on the transcription bill: audio longer than it was
+    charged is refused before it is sent. Shared with any later transcription
+    of channel voice notes, so it bounds the whole feature."""
 
     media_base_url: str = "https://api.openai.com/v1"
     """The OpenAI-compatible endpoint audio is sent to: `{this}/audio/transcriptions`.

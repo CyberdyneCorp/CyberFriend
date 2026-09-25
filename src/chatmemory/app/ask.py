@@ -98,7 +98,7 @@ from chatmemory.app.disclosure import ScopedAnswer, WithheldEvidenceProbe, enfor
 from chatmemory.app.facts import (
     PersonalFactsService,
 )
-from chatmemory.app.limits import RateLimiter
+from chatmemory.app.limits import LimitDecision, RateLimiter
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.app.said_by import SAID_BY, SaidByService
 from chatmemory.domain.audience import Audience
@@ -695,6 +695,10 @@ class AskService:
         # Every saved wallet, not the first of each kind: a person with two
         # must be able to ask about either.
         return frozenset(value for kind in self.OUTBOUND_KINDS for value in stored.values(kind))
+
+    def allowance(self, asker: PersonRef) -> LimitDecision:
+        """Whether `asker` could ask now, without spending a question on it."""
+        return self._limiter.peek(asker)
 
     async def reply_language(self, asker: PersonRef) -> Language:
         """The language to answer a message with no words in, such as a bare mention.

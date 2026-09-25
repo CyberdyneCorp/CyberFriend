@@ -14,9 +14,10 @@ answering it needs nothing stored.
   and nothing is downloaded. On, `MEDIA_API_KEY` is required at boot.
 - **Hearing.** A new `app/voice.py` (`VoiceQuestions`, the `Transcriber` and
   `VoiceLedger` ports) checks the attachment from its metadata (one attachment,
-  allowlisted audio type, Discord CDN host, byte and duration limits), then the
-  opt-out and the monthly caps, charging the declared duration, and only then
-  downloads through the process's HTTP transport, sniffs magic bytes and
+  Ogg audio, Discord CDN host, byte and duration limits), then the opt-out and
+  the monthly caps, charging the declared duration, and only then downloads
+  through the process's HTTP transport, counts the real length from the Opus
+  packets (refusing audio longer than the limit or the charge) and
   transcribes.
 - **Transcription.** `adapters/llm/transcription.py`: a multipart POST to
   `{MEDIA_BASE_URL}/audio/transcriptions` (default OpenAI,
@@ -56,5 +57,7 @@ Non-goals:
   documented option of a self-hosted Whisper.
 - A misheard question gets a confident answer to the wrong question. The
   quoted line is there so the person sees what was heard.
-- An uploaded audio file declares no duration, so the 120-second limit cannot
-  be checked before download; it is charged the full limit and bounded by bytes.
+- The declared duration is the uploading client's word. It is charged before
+  download, and the audio is then counted from its Opus packets and refused
+  if longer than the limit or the charge, so a lying client cannot exceed a
+  cap. The cost is that only Ogg Opus (Discord voice messages) is heard.

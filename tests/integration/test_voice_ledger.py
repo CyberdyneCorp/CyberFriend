@@ -7,6 +7,7 @@ past an opt-out -- and checks the statement refuses before anything is charged.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 
 import pytest
@@ -108,3 +109,17 @@ async def test_deleting_the_person_deletes_their_usage(clean: AsyncEngine) -> No
         await conn.execute(text("DELETE FROM person"))
 
     assert await charged(clean, SEPTEMBER) == 0
+
+
+async def test_concurrent_charges_cannot_overrun_a_cap(clean: AsyncEngine) -> None:
+    """The check and the charge are one step: twenty notes at once still fit the cap."""
+    ledger = PostgresVoiceLedger(clean)
+    assert await ledger.reserve(ANA, 1, SEPTEMBER, LIMITS) is Reservation.GRANTED
+    tight = VoiceLimits(
+        max_seconds=120, max_bytes=1, person_monthly_seconds=61, overall_monthly_seconds=1000
+    )
+
+    answers = await asyncio.gather(*(ledger.reserve(ANA, 10, SEPTEMBER, tight) for _ in range(20)))
+
+    assert answers.count(Reservation.GRANTED) == 6
+    assert await charged(clean, SEPTEMBER) == 61

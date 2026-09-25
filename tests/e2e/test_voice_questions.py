@@ -15,16 +15,19 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest_asyncio
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.discord.bot import CAPABILITIES
 from chatmemory.app.language import Language
 from chatmemory.app.localise import PORTUGUESE
 from chatmemory.app.reasoning.contract import NOTHING_FOUND
 from chatmemory.app.voice import VOICE_REPLIES, VoiceRefusal
 from chatmemory.domain.identity import PersonRef
+from tests.audio import TOC_120MS, ogg_opus
 from tests.e2e.harness.conversation import PLATFORM, E2EBot
 from tests.e2e.harness.discord_wire import attachment_payload
 from tests.e2e.harness.process import e2e_settings, start
@@ -39,7 +42,7 @@ from tests.e2e.harness.web import (
 CDN_HOST = DISCORD_CDN_HOSTS[0]
 MEDIA_HOST = MEDIA_HOSTS[0]
 CDN_URL = f"https://{CDN_HOST}/attachments/1/2/voice-message.ogg?ex=6&is=7&hm=8"
-OGG = b"OggS\x00\x02" + b"\x00" * 256
+OGG = ogg_opus(3.0)
 
 SPOKEN = "o que o Leo disse sobre o deploy semana passada?"
 IN_WEEK = "the deploy is scheduled for friday night"
@@ -152,4 +155,64 @@ async def test_a_url_off_the_discord_cdn_is_never_fetched(voice_bot: E2EBot) -> 
 
     assert turn.hosts == frozenset()
     assert turn.text == VOICE_REPLIES[VoiceRefusal.UNSUPPORTED][Language.ENGLISH]
+    assert await usage_seconds(bot) == 0
+
+
+async def test_a_cdn_redirect_is_not_followed(voice_bot: E2EBot) -> None:
+    bot = voice_bot
+    transcription = speak(bot, SPOKEN)
+    bot.web.script(
+        CDN_HOST,
+        lambda _: httpx.Response(302, headers={"location": "https://evil.example/voice.ogg"}),
+    )
+    bot.web.script("evil.example", serve_bytes(OGG))
+
+    turn = await bot.dm(bot.person("Ana")).say_voice(attachment_payload(CDN_URL, duration=4.2))
+
+    assert turn.hosts == {CDN_HOST}
+    assert transcription.requests == []
+    assert turn.text == VOICE_REPLIES[VoiceRefusal.UNHEARD][Language.ENGLISH]
+
+
+async def test_audio_longer_than_it_declared_is_never_sent(voice_bot: E2EBot) -> None:
+    bot = voice_bot
+    transcription = speak(bot, SPOKEN)
+    # A modified client declares one second for forty minutes of Opus.
+    bot.web.script(CDN_HOST, serve_bytes(ogg_opus(2400, packet=TOC_120MS)))
+
+    turn = await bot.dm(bot.person("Ana")).say_voice(attachment_payload(CDN_URL, duration=1.0))
+
+    assert turn.hosts == {CDN_HOST}
+    assert transcription.requests == []
+    assert turn.text == VOICE_REPLIES[VoiceRefusal.TOO_LONG][Language.ENGLISH].format(seconds=120)
+    assert await usage_seconds(bot) == 1
+
+
+async def test_a_voice_note_in_a_channel_is_not_heard(voice_bot: E2EBot) -> None:
+    bot = voice_bot
+    speak(bot, SPOKEN)
+
+    turn = await bot.channel("general", bot.person("Ana")).say_voice(attachment_payload(CDN_URL))
+
+    assert turn.hosts == frozenset()
+    assert turn.text.startswith(CAPABILITIES)
+    assert await usage_seconds(bot) == 0
+
+
+async def test_a_rate_limited_asker_is_refused_before_anything_is_fetched(
+    voice_bot: E2EBot,
+) -> None:
+    bot = voice_bot
+    transcription = speak(bot, SPOKEN)
+    ana = bot.person("Ana")
+    # Spend Ana's hourly allowance as twenty typed questions would.
+    limiter = bot.process.graph.asks._limiter
+    while limiter.check(PersonRef(PLATFORM, ana.id)).allowed:
+        pass
+
+    turn = await bot.dm(ana).say_voice(attachment_payload(CDN_URL))
+
+    assert turn.hosts == frozenset()
+    assert transcription.requests == []
+    assert "You've hit your question limit" in turn.text
     assert await usage_seconds(bot) == 0

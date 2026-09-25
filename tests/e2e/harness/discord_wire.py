@@ -548,9 +548,15 @@ class FakeDiscord:
         return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
 
     def channel_message(
-        self, member: discord.Member, channel: discord.TextChannel, content: str
+        self,
+        member: discord.Member,
+        channel: discord.TextChannel,
+        content: str,
+        *,
+        attachments: Sequence[Mapping[str, Any]] = (),
+        flags: int = 0,
     ) -> discord.Message:
-        """A message in a guild channel that mentions the bot."""
+        """A message in a guild channel that mentions the bot, with any attachments."""
         user = self._users[member.id]
         data = message_payload(
             channel_id=channel.id,
@@ -559,6 +565,8 @@ class FakeDiscord:
             guild_id=self.layout.guild_id,
             member=member_payload(user, [r.id for r in member.roles[1:]]),
             mentions=[{**self.bot_user, "member": member_payload(self.bot_user, [])}],
+            attachments=attachments,
+            flags=flags,
         )
         return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
 

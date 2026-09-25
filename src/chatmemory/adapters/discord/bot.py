@@ -375,6 +375,13 @@ def voice_clip(attachment: discord.Attachment) -> VoiceClip:
     )
 
 
+def question_limit_reply(retry_after_seconds: float) -> str:
+    return (
+        f"You've hit your question limit. Try again in "
+        f"{int(retry_after_seconds // 60) + 1} minute(s)."
+    )
+
+
 def carries_audio(message: discord.Message) -> bool:
     """A voice message, or any attachment that says it is audio."""
     return message.flags.voice or any(is_audio(a.content_type) for a in message.attachments)
@@ -1513,8 +1520,7 @@ class CyberFriendClient(discord.Client):
             )
             if outcome.rate_limited:
                 await interaction.followup.send(
-                    f"You've hit your question limit. Try again in "
-                    f"{int(outcome.retry_after_seconds // 60) + 1} minute(s).",
+                    question_limit_reply(outcome.retry_after_seconds),
                     ephemeral=True,
                 )
                 return
@@ -1574,6 +1580,14 @@ class CyberFriendClient(discord.Client):
         if self._voice is None:
             heard = Heard(refusal=VoiceRefusal.DISABLED)
         else:
+            allowance = self._asks.allowance(_person(message.author))
+            if not allowance.allowed:
+                # Before the download: minutes are not spent on a question the
+                # limit would refuse once it was heard.
+                await message.reply(
+                    question_limit_reply(allowance.retry_after_seconds), mention_author=False
+                )
+                return
             clips = tuple(voice_clip(a) for a in message.attachments)
             async with message.channel.typing():
                 heard = await self._voice.hear(_person(message.author), clips)
@@ -1608,11 +1622,7 @@ class CyberFriendClient(discord.Client):
             await self._reply_parts(
                 message,
                 [
-                    _with_heard(
-                        heard,
-                        f"You've hit your question limit. Try again in "
-                        f"{int(outcome.retry_after_seconds // 60) + 1} minute(s).",
-                    )
+                    _with_heard(heard, question_limit_reply(outcome.retry_after_seconds))
                 ],
             )
             return

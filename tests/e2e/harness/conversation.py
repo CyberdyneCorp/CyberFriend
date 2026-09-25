@@ -204,16 +204,20 @@ class Conversation:
         return await self._bot.turn(lambda: wire.client.on_message(message))
 
     async def say_voice(self, *attachments: Mapping[str, Any], voice_flag: bool = True) -> Turn:
-        """A DM carrying `attachments` and no text: a voice message by default.
+        """A message carrying `attachments` and no text: a voice message by default.
 
+        In a channel it mentions the bot, as a voice reply to it would.
         `voice_flag` is the IS_VOICE_MESSAGE flag the Discord client sets on a
         recorded note; an uploaded audio file has none.
         """
-        assert self.channel is None, "voice questions are heard in a DM only"
         wire = self._bot.discord
-        message = wire.dm_message(
-            self.who, "", attachments=attachments, flags=IS_VOICE_MESSAGE if voice_flag else 0
-        )
+        flags = IS_VOICE_MESSAGE if voice_flag else 0
+        if self.channel is None:
+            message = wire.dm_message(self.who, "", attachments=attachments, flags=flags)
+        else:
+            message = wire.channel_message(
+                self.who, self.channel, "", attachments=attachments, flags=flags
+            )
         return await self._bot.turn(lambda: wire.client.on_message(message))
 
     async def mention_only(self) -> Turn:
@@ -223,9 +227,7 @@ class Conversation:
         """Run a slash command here. Raises `CommandNotOffered` where Discord
         would not list it. `locale` is the person's Discord client language."""
         wire = self._bot.discord
-        interaction = wire.interaction(
-            self.who, name, options, channel=self.channel, locale=locale
-        )
+        interaction = wire.interaction(self.who, name, options, channel=self.channel, locale=locale)
 
         async def run() -> None:
             with wire.webhooks_installed():

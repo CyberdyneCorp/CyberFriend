@@ -4,22 +4,24 @@ The recording is somebody's voice, which is personal data in a way their typed
 words are not, and it leaves the process for a transcription endpoint. So the
 order below is the design, and each step can only refuse:
 
-1. The attachment is checked from its metadata alone: exactly one, an
-   allowlisted audio type, a Discord CDN URL, under the byte and duration
-   limits. Nothing is fetched to find out it was too long.
+1. The attachment is checked from its metadata alone: exactly one, declared
+   `audio/ogg` (what a Discord voice message is), a Discord CDN URL, under the
+   byte limit and any duration it declares. Nothing is fetched to find out it
+   was too long.
 2. The person and the month are checked -- opted out, over their own monthly
    minutes, or over the deployment's -- and the minutes are charged in the
-   same transaction, by the duration Discord declares. So the caps bound what
-   is *sent*, not what was spent afterwards; a download that then fails is not
-   refunded, because the cap is the ceiling on the bill, not an estimate of it.
-3. Only then is the audio downloaded, bounded, and its magic bytes checked
-   against the type it claimed. A disagreement is refused, as for documents.
+   same transaction, by the duration the clip declares, or the whole limit
+   when it declares none. A download that then fails is not refunded, because
+   the cap is the ceiling on the bill, not an estimate of it.
+3. Only then is the audio downloaded, bounded, and its real length counted
+   from its Opus packets. The declared duration is the uploading client's
+   word, so audio longer than the limit, or than what was charged, is refused
+   here, before it is sent. That is what makes the caps bound what is sent.
 4. The transcript is the question. The audio is discarded and never stored;
    the transcript goes where typed text goes, and nowhere else.
 
-Every failure from step 3 on is one reply -- "I couldn't understand the audio"
--- and never an exception: a person who sent a voice note is owed an answer
-in words, not silence.
+Every failure from step 3 on is one reply and never an exception: a person
+who sent a voice note is owed an answer in words, not silence.
 """
 
 from __future__ import annotations
@@ -37,13 +39,17 @@ import structlog
 from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.documents.ports import ContentFetcher
 from chatmemory.app.language import Language
+from chatmemory.app.ogg_opus import opus_seconds
 from chatmemory.domain.identity import PersonRef
 
 log = structlog.get_logger()
 
-AUDIO_TYPES = frozenset({"audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"})
-"""Declared types a voice question may have. A Discord voice message is Opus in
-Ogg; the rest are what phones and desktop recorders save."""
+AUDIO_TYPES = frozenset({"audio/ogg"})
+"""Declared types a voice question may have: a Discord voice message, Opus in Ogg.
+
+Only a format whose real length can be counted from its bytes is heard, since
+the caps rest on that count. MP3, M4A, WAV and WebM uploads are refused until
+each has one."""
 
 DISCORD_CDN_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
 """The only hosts audio is fetched from.
@@ -54,6 +60,10 @@ process at any host it can reach."""
 
 HEARD_CHARS = 200
 """How much of the transcript is quoted back above the answer."""
+
+MAX_TRANSCRIPT_CHARS = 4000
+"""The longest transcript asked as a question: Discord's own bound on a typed
+message, so a voice question is never a question nobody could have typed."""
 
 
 class VoiceRefusal(StrEnum):
@@ -166,31 +176,32 @@ def charged_seconds(clip: VoiceClip, limits: VoiceLimits) -> int:
     """What a clip costs against the caps: its declared duration, rounded up.
 
     A clip that declares none is charged the whole limit, so an unknown length
-    can never slip under a cap it would not fit."""
+    can never slip under a cap it would not fit. Either way the audio is held
+    to this after download, by `measured_refusal`."""
     if clip.duration_seconds is None:
         return limits.max_seconds
     return max(1, math.ceil(clip.duration_seconds))
 
 
+def measured_refusal(audio: bytes, charged: int, limits: VoiceLimits) -> VoiceRefusal | None:
+    """Refuse audio that is not Ogg Opus, or is longer than the limit or the charge.
+
+    The count, not the declaration, is what is held to both: a client that
+    declared one second for ten minutes of audio is refused here, before
+    anything is sent, having been charged the one second it claimed."""
+    seconds = opus_seconds(audio)
+    if seconds is None:
+        return VoiceRefusal.UNHEARD
+    if seconds > limits.max_seconds:
+        return VoiceRefusal.TOO_LONG
+    if seconds > charged:
+        return VoiceRefusal.UNHEARD
+    return None
+
+
 def month_of(moment_date: date) -> date:
     """The calendar month a charge belongs to, as its first day."""
     return moment_date.replace(day=1)
-
-
-def sniffed_type(data: bytes) -> str | None:
-    """The audio type the bytes are, by their magic, or None."""
-    head = data[:16]
-    if head.startswith(b"OggS"):
-        return "audio/ogg"
-    if head.startswith(b"ID3") or (len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
-        return "audio/mpeg"
-    if head[4:8] == b"ftyp":
-        return "audio/mp4"
-    if head.startswith(b"RIFF") and head[8:12] == b"WAVE":
-        return "audio/wav"
-    if head.startswith(b"\x1a\x45\xdf\xa3"):
-        return "audio/webm"
-    return None
 
 
 def heard_excerpt(transcript: str) -> str:
@@ -249,9 +260,13 @@ class VoiceQuestions:
 
     async def _transcribe(self, clip: VoiceClip, seconds: int) -> Heard:
         audio = await self._fetcher.fetch(clip.url, self._limits.max_bytes, self._fetch_timeout)
-        if audio is None or sniffed_type(audio) != clip.content_type:
-            log.info("voice.unreadable", fetched=audio is not None, claimed=clip.content_type)
+        if audio is None:
+            log.info("voice.unreadable", fetched=False)
             return Heard(refusal=VoiceRefusal.UNHEARD)
+        refusal = measured_refusal(audio, seconds, self._limits)
+        if refusal is not None:
+            log.info("voice.refused_after_download", reason=str(refusal), charged=seconds)
+            return Heard(refusal=refusal)
         try:
             text = await self._transcriber.transcribe(audio, clip.content_type, clip.filename)
         except TranscriptionFailed as exc:
@@ -262,6 +277,8 @@ class VoiceQuestions:
         log.info("voice.heard", seconds=seconds, chars=len(transcript))
         if not transcript:
             return Heard(refusal=VoiceRefusal.UNHEARD)
+        if len(transcript) > MAX_TRANSCRIPT_CHARS:
+            return Heard(refusal=VoiceRefusal.TOO_LONG)
         return Heard(transcript=transcript)
 
 

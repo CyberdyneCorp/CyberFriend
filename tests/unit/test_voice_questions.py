@@ -19,6 +19,7 @@ from chatmemory.app.self_description import describe_capabilities
 from chatmemory.app.voice import (
     AUDIO_TYPES,
     HEARD_CHARS,
+    MAX_TRANSCRIPT_CHARS,
     VOICE_REPLIES,
     Reservation,
     TranscriptionFailed,
@@ -31,15 +32,16 @@ from chatmemory.app.voice import (
     declared_type,
     from_discord_cdn,
     heard_excerpt,
+    measured_refusal,
     month_of,
-    sniffed_type,
     voice_reply,
 )
 from chatmemory.domain.identity import PersonRef
+from tests.audio import TOC_120MS, ogg_opus
 
 ANA = PersonRef("discord", 4242)
 CDN = "https://cdn.discordapp.com/attachments/1/2/voice-message.ogg?ex=1&is=2&hm=3"
-OGG = b"OggS\x00\x02" + b"\x00" * 64
+OGG = ogg_opus(7.0)
 LIMITS = VoiceLimits(
     max_seconds=120,
     max_bytes=10_000_000,
@@ -71,7 +73,19 @@ def test_every_allowlisted_type_is_accepted(media: str) -> None:
     assert check_clips([clip(content_type=media)], LIMITS) is None
 
 
-@pytest.mark.parametrize("media", ["audio/flac", "video/mp4", "image/png", "", "audio/x-wav"])
+@pytest.mark.parametrize(
+    "media",
+    [
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/wav",
+        "audio/webm",
+        "audio/flac",
+        "video/mp4",
+        "image/png",
+        "",
+    ],
+)
 def test_a_type_off_the_allowlist_is_refused(media: str) -> None:
     assert check_clips([clip(content_type=media)], LIMITS) is VoiceRefusal.UNSUPPORTED
 
@@ -125,26 +139,35 @@ def test_a_charge_belongs_to_its_calendar_month() -> None:
     assert month_of(date(2026, 10, 1)) == date(2026, 10, 1)
 
 
-# --- sniffing --------------------------------------------------------------
+# --- the measured length ------------------------------------------------------
+
+
+def test_audio_within_the_charge_and_the_limit_passes() -> None:
+    assert measured_refusal(ogg_opus(7.0), 8, LIMITS) is None
+    assert measured_refusal(ogg_opus(120.0), 120, LIMITS) is None
+
+
+def test_audio_longer_than_the_limit_is_too_long_whatever_was_declared() -> None:
+    long = ogg_opus(2400, packet=TOC_120MS)
+
+    assert measured_refusal(long, LIMITS.max_seconds, LIMITS) is VoiceRefusal.TOO_LONG
+
+
+def test_audio_longer_than_it_declared_is_not_heard() -> None:
+    assert measured_refusal(ogg_opus(60.0), 2, LIMITS) is VoiceRefusal.UNHEARD
 
 
 @pytest.mark.parametrize(
-    ("data", "expected"),
+    "data",
     [
-        (OGG, "audio/ogg"),
-        (b"ID3\x04\x00" + b"\x00" * 20, "audio/mpeg"),
-        (b"\xff\xfb\x90\x00" + b"\x00" * 20, "audio/mpeg"),
-        (b"\x00\x00\x00\x20ftypM4A " + b"\x00" * 20, "audio/mp4"),
-        (b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 20, "audio/wav"),
-        (b"\x1a\x45\xdf\xa3" + b"\x00" * 20, "audio/webm"),
-        (b"%PDF-1.7", None),
-        (b"<html>", None),
-        (b"RIFF\x24\x00\x00\x00WEBPVP8 ", None),
-        (b"", None),
+        b"%PDF-1.7 not audio",
+        b"OggS\x00\x02" + bytes(64),
+        b"ID3\x04\x00" + bytes(20),
+        b"RIFF\x24\x00\x00\x00WAVEfmt " + bytes(20),
     ],
 )
-def test_audio_is_recognised_by_its_magic_bytes(data: bytes, expected: str | None) -> None:
-    assert sniffed_type(data) == expected
+def test_anything_but_ogg_opus_is_not_heard(data: bytes) -> None:
+    assert measured_refusal(data, 120, LIMITS) is VoiceRefusal.UNHEARD
 
 
 # --- the service --------------------------------------------------------------
@@ -166,9 +189,11 @@ class Fetcher:
     def __init__(self, data: bytes | None = OGG) -> None:
         self.data = data
         self.urls: list[str] = []
+        self.max_bytes: list[int] = []
 
     async def fetch(self, url: str, max_bytes: int, timeout: float) -> bytes | None:
         self.urls.append(url)
+        self.max_bytes.append(max_bytes)
         return self.data
 
 
@@ -207,6 +232,7 @@ async def test_a_voice_note_is_charged_fetched_and_transcribed() -> None:
     assert heard.transcript == "o que decidimos sobre o deploy?"
     assert ledger.calls == [(ANA, 8, date(2026, 9, 1))]
     assert fetcher.urls == [CDN]
+    assert fetcher.max_bytes == [LIMITS.max_bytes]
     assert transcriber.sent == [(OGG, "audio/ogg")]
 
 
@@ -256,6 +282,35 @@ async def test_bytes_that_are_not_the_claimed_audio_are_never_sent() -> None:
     assert transcriber.sent == []
 
 
+async def test_audio_longer_than_it_declared_is_never_sent() -> None:
+    # A modified client declares one second for forty minutes of audio.
+    lying = ogg_opus(2400, packet=TOC_120MS)
+    voice, ledger, _, transcriber = service(fetcher=Fetcher(lying))
+
+    heard = await voice.hear(ANA, [clip(duration_seconds=1.0, size=len(lying))])
+
+    assert heard.refusal is VoiceRefusal.TOO_LONG
+    assert ledger.calls == [(ANA, 1, date(2026, 9, 1))]
+    assert transcriber.sent == []
+
+
+async def test_an_upload_with_no_duration_is_held_to_the_limit_it_was_charged() -> None:
+    voice, ledger, _, transcriber = service(fetcher=Fetcher(ogg_opus(121.0)))
+
+    heard = await voice.hear(ANA, [clip(duration_seconds=None)])
+
+    assert heard.refusal is VoiceRefusal.TOO_LONG
+    assert ledger.calls == [(ANA, LIMITS.max_seconds, date(2026, 9, 1))]
+    assert transcriber.sent == []
+
+
+async def test_a_transcript_longer_than_a_typed_message_is_not_asked() -> None:
+    said = "palavra " * (MAX_TRANSCRIPT_CHARS // 8 + 1)
+    voice, _, _, _ = service(transcriber=Transcriber(said))
+
+    assert (await voice.hear(ANA, [clip()])).refusal is VoiceRefusal.TOO_LONG
+
+
 @pytest.mark.parametrize(
     ("fetched", "said"), [(None, "x"), (OGG, "!fail"), (OGG, "   \n "), (OGG, "")]
 )
@@ -286,8 +341,9 @@ def test_every_refusal_has_a_reply_in_each_language(refusal: VoiceRefusal) -> No
 
 
 def test_an_unknown_language_is_answered_in_english() -> None:
-    assert voice_reply(VoiceRefusal.UNHEARD, Language.UNKNOWN) == (
-        VOICE_REPLIES[VoiceRefusal.UNHEARD][Language.ENGLISH]
+    assert (
+        voice_reply(VoiceRefusal.UNHEARD, Language.UNKNOWN)
+        == (VOICE_REPLIES[VoiceRefusal.UNHEARD][Language.ENGLISH])
     )
 
 

@@ -841,22 +841,31 @@ please type — and nothing is downloaded.
 ### What is checked, in order
 
 1. **The attachment, from its metadata alone.** Exactly one attachment; a
-   declared type of `audio/ogg` (Discord voice notes), `audio/mpeg`,
-   `audio/mp4`, `audio/wav` or `audio/webm`; a URL on `https://cdn.discordapp.com`
-   or `https://media.discordapp.net` and nowhere else; within the byte limit and,
-   when Discord declares one, the duration limit.
+   declared type of `audio/ogg` (a Discord voice message; MP3, M4A, WAV and WebM
+   uploads are refused, because their length cannot be counted); a URL on
+   `https://cdn.discordapp.com` or `https://media.discordapp.net` and nowhere
+   else; within the byte limit and, when the client declares one, the duration
+   limit.
 2. **The person and the month.** An opted-out person is refused. Then the
    minutes are charged against both caps in one transaction under an advisory
-   lock — by the duration Discord declares, rounded up, or the whole
+   lock — by the duration the client declares, rounded up, or the whole
    `VOICE_MAX_SECONDS` for an uploaded file that declares none. Over either cap
    the person is told which one (their own, or the server's), and nothing is
    fetched or sent. A charge is not refunded if a later step fails: the cap is
    the ceiling on the bill, not an estimate of it.
 3. **The download**, through the process's HTTP transport, redirects not
-   followed, abandoned past `VOICE_MAX_BYTES`. The magic bytes must match the
-   declared type, or the audio is not sent.
+   followed, abandoned past `VOICE_MAX_BYTES`. Its real length is then counted
+   from its Opus packets. The declared duration is written by the uploading
+   client and bounds nothing, so audio longer than `VOICE_MAX_SECONDS`, or
+   longer than it was charged, is refused here and never sent. Anything that
+   is not a single Ogg Opus stream is not sent either. This is what makes the
+   caps a ceiling on what is transcribed.
 4. **The transcription**: one multipart POST, no retries. The transcript,
-   flattened to one line, is the question.
+   flattened to one line, is the question; one longer than 4000 characters (a
+   typed message's limit) is refused as too long.
+
+A person already at their hourly question limit is told so before anything is
+downloaded, so minutes are not spent on a question that would be refused.
 
 Every failure from step 3 on is one reply — "I couldn't understand the audio,
 please try again or type" — never an exception. All fixed replies are in the
