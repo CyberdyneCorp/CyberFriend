@@ -9,7 +9,10 @@ conversations that nobody consented to and nobody can leave.
 ## Retention
 
 `RetentionService` purges messages, the windows built over them, extracted asks,
-the document fetch log, and document entries older than a configured window.
+extracted decisions, the document fetch log, and document entries older than a
+configured window. A decision also goes when any message it rests on (the
+proposal it settled, shown to the model as context) is older than the cutoff,
+because its summary may restate that message.
 
 ```python
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
@@ -66,8 +69,10 @@ await service.opt_out(PersonRef("discord", 123456789), reason="requested 2026-09
 ```
 
 This removes their messages, the windows those messages appear in, the asks
-extracted from and addressed to them, their reactions, the mention index rows
-pointing at them — **and the documents they uploaded**. An opt-out that covers
+extracted from and addressed to them, the decisions they stated or whose
+evidence they wrote (a decision somebody else stated in reply to their
+proposal may restate it), their reactions, the mention index rows pointing at
+them — **and the documents they uploaded**. An opt-out that covers
 messages and leaves the attached PDF searchable has withdrawn the index entry
 and kept the content, which is the wrong half.
 
@@ -142,9 +147,10 @@ The ingest half is there too, for asks: `bot.chatter(...)` is a channel message
 not addressed to the bot, captured by the ingest entrypoint's `live_loop`, and
 `bot.extract_asks()` flushes the extraction worker `build_ask_pipeline`
 assembles. Only the extractor is scripted -- it sends the production prompt to
-the scripted model, which answers with what `bot.chat.script_asks(...)` set for
-that message -- so a scenario runs capture, extraction, question and cited
-answer on the real ask tables.
+the scripted model, which answers with what `bot.chat.script_asks(...)` and
+`bot.chat.script_decisions(...)` set for that message -- so a scenario runs
+capture, extraction, question and cited answer on the real ask tables, and
+`bot.decision_rows()` reads what the same pass stored as decisions.
 
 Scenarios assert only what an outsider could see: what Discord received,
 whether the corpus was searched, which hosts were reached, which model stages

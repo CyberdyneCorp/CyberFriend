@@ -33,6 +33,7 @@ from sqlalchemy.sql.elements import TextClause
 SQL_MODULES = (
     "sql",
     "asks_sql",
+    "decisions_sql",
     "notify_sql",
     "documents_sql",
     "retention_sql",
@@ -153,6 +154,13 @@ UNSCOPED: dict[str, str] = {
     "asks_sql.UPSERT_ASK": "write; stores an extracted ask",
     "asks_sql.PRUNE_ASKS": "write; withdraws asks a re-run no longer finds",
     "asks_sql.RECORD_REACTION": "write; an observed reaction",
+    # --- decisions_sql: writes only until the read path exists -------------
+    "decisions_sql.RESOLVE_PERSON_ID": "identity lookup; a person id, no content",
+    "decisions_sql.UPSERT_DECISION": "write; stores an extracted decision",
+    "decisions_sql.PRUNE_DECISIONS": "write; withdraws decisions a re-run no longer finds",
+    "decisions_sql.WITHDRAW_DECISIONS": (
+        "write; withdraws decisions from messages a pass no longer sends to the model"
+    ),
     "asks_sql.CLOSE_ANSWERED_BY_REPLY": "write; state transition from an event",
     "asks_sql.CLOSE_ANSWERED_BY_REACTION": "write; state transition from an event",
     "asks_sql.CLOSE_ANSWERED_BY_REACTION_FOR_MESSAGE": (
@@ -262,6 +270,7 @@ UNSCOPED: dict[str, str] = {
     "retention_sql.PURGE_WINDOWS_BEFORE": "write; retention, returns channel ids only",
     "retention_sql.PURGE_MESSAGES_BEFORE": "write; retention",
     "retention_sql.PURGE_ASKS_BEFORE": "write; retention",
+    "retention_sql.PURGE_DECISIONS_BEFORE": "write; retention",
     "retention_sql.PURGE_FETCH_LOG_BEFORE": "write; retention",
     "retention_sql.DELETE_EMPTY_WINDOWS": "write; removes windows left with no messages",
     "retention_sql.RECORD_OPT_OUT": "write; records an exclusion",
@@ -275,6 +284,7 @@ UNSCOPED: dict[str, str] = {
     ),
     "retention_sql.PURGE_PERSON_MESSAGES": "write; opt-out",
     "retention_sql.PURGE_PERSON_ASKS": "write; opt-out",
+    "retention_sql.PURGE_PERSON_DECISIONS": "write; opt-out",
     "retention_sql.PURGE_PERSON_REACTIONS": "write; opt-out",
     "retention_sql.PURGE_PERSON_MENTIONS": "write; opt-out",
     # --- admin_sql -------------------------------------------------------

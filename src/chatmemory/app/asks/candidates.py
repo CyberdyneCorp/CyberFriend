@@ -12,6 +12,12 @@ commitment is addressed to the person making it: "i'll push the fix tonight"
 mentions nobody, replies to nobody, and is exactly the kind of obligation
 "what do I need to do today" is asked about.
 
+The decision signal is not about an addressee at all. The same model call
+reads a message for the decision it concludes, and a conclusion is usually
+addressed to nobody -- "fechou, vamos com Postgres" mentions no one and replies
+to no one. It is bilingual because the rest of this filter is English-only, and
+a Portuguese decision would otherwise never be read.
+
 This is a cost filter, not a judgement about whether an ask is present. It is
 deliberately generous within its signals and silent outside them.
 """
@@ -46,6 +52,21 @@ GROUP_ADDRESS = re.compile(
 # traffic through the extractor for almost no additional obligations.
 FIRST_PERSON_COMMITMENT = re.compile(
     r"\b(i'?ll|i will|i'?m going to|i'?m gonna|let me|on it|i got (this|it)|i'?ve got (this|it))\b",
+    re.IGNORECASE,
+)
+
+# A conclusion, in the forms people actually write it, in English and in
+# Brazilian Portuguese. Generous on purpose: "bora" is as often an invitation as
+# a conclusion, and the model is what tells them apart. What this has to avoid
+# is missing the ways a group says it has settled something.
+DECISION_MARKERS = re.compile(
+    r"\b("
+    r"we(?: have|'ve)? decided|decided to|decision is|final call|it'?s settled|"
+    r"settled on|agreed|let'?s go with|lets go with|we'?ll go with|going with|"
+    r"decidimos|decidido|decidida|fechou|fechado|fechada|bora|combinado|combinada|"
+    r"vamos com|vamos de|vamos seguir com|vamos manter|fica assim|ficou assim|"
+    r"ficou definido|está definido|tá definido|ta definido"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -107,6 +128,10 @@ class CandidateFilter:
             # A message sent to the bot is addressed to it by construction.
             return AddresseeSignal.BOT_DM
         text = message.content
+        # Before the second-person fallback: "we decided you take the deploy"
+        # is read either way, and a decision is the rarer, more specific signal.
+        if DECISION_MARKERS.search(text):
+            return AddresseeSignal.DECISION
         if SECOND_PERSON.search(text) or GROUP_ADDRESS.search(text):
             return AddresseeSignal.SECOND_PERSON
         if FIRST_PERSON_COMMITMENT.search(text):

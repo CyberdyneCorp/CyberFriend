@@ -16,7 +16,6 @@ judgement.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -27,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.extraction import ExtractionService
-from chatmemory.app.asks.model import AskCandidate, AskKind, ExtractedAsk
+from chatmemory.app.asks.model import AskCandidate, AskKind, ExtractedAsk, Extraction
 from chatmemory.app.asks.resolution import ObservedDirectory
 from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
 from chatmemory.domain.identity import ChannelRef, PersonRef
@@ -74,11 +73,15 @@ class StubExtractor:
     def __init__(self) -> None:
         self.calls: list[AskCandidate] = []
 
-    async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]:
+    async def extract(self, candidate: AskCandidate) -> Extraction:
         self.calls.append(candidate)
-        return [
-            ExtractedAsk(kind=AskKind.REQUEST, text="review the migration", confidence=0.9)
-        ]
+        return Extraction(
+            asks=(
+                ExtractedAsk(
+                    kind=AskKind.REQUEST, text="review the migration", confidence=0.9
+                ),
+            )
+        )
 
 
 @pytest.fixture

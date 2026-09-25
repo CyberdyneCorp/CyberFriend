@@ -15,7 +15,6 @@ disabled the first week it is inconvenient.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -28,7 +27,7 @@ from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.answering import ObligationAnswerService
 from chatmemory.app.asks.extraction import ExtractionService
-from chatmemory.app.asks.model import AskCandidate, AskKind, ExtractedAsk
+from chatmemory.app.asks.model import AskCandidate, AskKind, ExtractedAsk, Extraction
 from chatmemory.app.asks.obligations import NOTHING_OUTSTANDING
 from chatmemory.app.asks.resolution import ObservedDirectory
 from chatmemory.app.asks.state import ACKNOWLEDGING_REACTIONS, AskStateService
@@ -109,15 +108,17 @@ class StubExtractor:
         self.confidence = confidence
         self.calls: list[AskCandidate] = []
 
-    async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]:
+    async def extract(self, candidate: AskCandidate) -> Extraction:
         self.calls.append(candidate)
-        return [
-            ExtractedAsk(
-                kind=self.kind,
-                text="review the migration",
-                confidence=self.confidence,
+        return Extraction(
+            asks=(
+                ExtractedAsk(
+                    kind=self.kind,
+                    text="review the migration",
+                    confidence=self.confidence,
+                ),
             )
-        ]
+        )
 
 
 class NeverAnswers:

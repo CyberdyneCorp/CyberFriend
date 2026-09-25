@@ -27,7 +27,7 @@ import pytest
 import chatmemory
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.extraction import ExtractionService
-from chatmemory.app.asks.model import AskCandidate, ExtractedAsk
+from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.resolution import ObservedDirectory, StaticDirectory
 from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
 from chatmemory.domain.identity import ChannelRef, PersonRef
@@ -193,7 +193,7 @@ async def test_a_message_edited_while_it_was_extracted_is_read_again() -> None:
     corpus.imported(asked(10, ALICE, "can you review this?"))
 
     class EditsWhileExtracting(StubExtractor):
-        async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]:
+        async def extract(self, candidate: AskCandidate) -> Extraction:
             corpus.edit(10, "can you review this instead?")
             return await super().extract(candidate)
 

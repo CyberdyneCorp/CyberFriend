@@ -137,6 +137,7 @@ def _removed(report: OptOutReport) -> dict[str, Any]:
         "asks": report.corpus.asks,
         "reactions": report.corpus.reactions,
         "mentions": report.corpus.mentions,
+        "decisions": report.corpus.decisions,
         "documents": report.documents,
         "total": report.total,
     }

@@ -16,7 +16,6 @@ through the real `/resolve` command object.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -41,6 +40,7 @@ from chatmemory.app.asks.model import (
     AskKind,
     AskStatus,
     ExtractedAsk,
+    Extraction,
     ObligationRequest,
 )
 from chatmemory.app.asks.resolution import ObservedDirectory
@@ -116,12 +116,14 @@ def viewer(person: PersonRef, *channels: ChannelRef) -> Viewer:
 class StubExtractor:
     """One request per candidate, so the pipeline varies and the model does not."""
 
-    async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]:
-        return [
-            ExtractedAsk(
-                kind=AskKind.REQUEST, text="review the migration", confidence=0.9
+    async def extract(self, candidate: AskCandidate) -> Extraction:
+        return Extraction(
+            asks=(
+                ExtractedAsk(
+                    kind=AskKind.REQUEST, text="review the migration", confidence=0.9
+                ),
             )
-        ]
+        )
 
 
 # --- the event objects the gateway is handed ----------------------------

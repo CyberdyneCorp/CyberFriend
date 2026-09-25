@@ -85,13 +85,15 @@ class ScriptedChat:
     request, in order, so a turn can say which stages ran.
 
     Ask extraction is the one stage a scenario scripts by hand, through
-    `script_asks`: whether a message creates an obligation is a judgement,
-    not something to derive from its words.
+    `script_asks` and `script_decisions`: whether a message creates an
+    obligation or concludes a choice is a judgement, not something to derive
+    from its words.
     """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self._asks: dict[str, list[dict[str, object]]] = {}
+        self._decisions: dict[str, list[dict[str, object]]] = {}
 
     def script_asks(self, message: str, *asks: Mapping[str, object]) -> None:
         """What extraction reports for the message whose text holds `message`.
@@ -101,6 +103,14 @@ class ScriptedChat:
         unscripted message extracts nothing.
         """
         self._asks[message] = [dict(a) for a in asks]
+
+    def script_decisions(self, message: str, *decisions: Mapping[str, object]) -> None:
+        """What extraction reports as decided by the message holding `message`.
+
+        Each entry is the model's JSON (`summary`, `topic`, `confidence`). An
+        unscripted message decides nothing.
+        """
+        self._decisions[message] = [dict(d) for d in decisions]
 
     async def complete_json(
         self, system: str, user: str, schema: Mapping[str, object], schema_name: str
@@ -114,7 +124,12 @@ class ScriptedChat:
         if schema_name == "grounded_answer":
             return JsonCompletion(self._grounded(user))
         if schema_name == ASK_EXTRACTION:
-            return JsonCompletion({"asks": self._extracted(user)})
+            return JsonCompletion(
+                {
+                    "asks": self._extracted(user, self._asks),
+                    "decisions": self._extracted(user, self._decisions),
+                }
+            )
         raise UnscriptedCall(f"no script for schema {schema_name!r}")
 
     @staticmethod
@@ -129,17 +144,20 @@ class ScriptedChat:
             "cited_window_ids": [window for window, _ in relevant],
         }
 
-    def _extracted(self, prompt: str) -> list[dict[str, object]]:
-        """The asks scripted for the message under analysis, and only it.
+    @staticmethod
+    def _extracted(
+        prompt: str, scripted: Mapping[str, list[dict[str, object]]]
+    ) -> list[dict[str, object]]:
+        """What was scripted for the message under analysis, and only it.
 
         Matched against that one line, not the whole prompt: a scripted
         message quoted as context or as a reply parent must not be extracted
         a second time from the message after it.
         """
         analysed = prompt.split(ANALYSED, 1)[-1].split("\n", 1)[0]
-        for message, asks in self._asks.items():
+        for message, entries in scripted.items():
             if message in analysed:
-                return asks
+                return entries
         return []
 
     async def complete_text(self, system: str, user: str) -> TextCompletion:

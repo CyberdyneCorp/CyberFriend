@@ -88,6 +88,20 @@ PURGE_ASKS_BEFORE = text("""
 DELETE FROM ask WHERE asked_at < CAST(:cutoff AS timestamptz)
 """)
 
+# Before the messages, because it reads them: a decision goes when it is older
+# than the cutoff, or when any message it rests on is. Its summary may carry
+# the words of the proposal it settled, which is older than the decision and
+# is purged first.
+PURGE_DECISIONS_BEFORE = text("""
+DELETE FROM decision d
+WHERE d.decided_at < CAST(:cutoff AS timestamptz)
+   OR EXISTS (
+       SELECT 1 FROM message m
+       WHERE m.id = ANY(d.evidence_message_ids)
+         AND m.created_at < CAST(:cutoff AS timestamptz)
+   )
+""")
+
 # The fetch log records which message linked which URL. That is a record of
 # what people shared, so it ages out with everything else.
 PURGE_FETCH_LOG_BEFORE = text("""
@@ -156,6 +170,18 @@ DELETE FROM ask
 WHERE requester_person_id = :person_id OR addressee_person_id = :person_id
 """)
 
+# Before their messages, because it reads them. Decisions they stated would go
+# by cascade; decisions somebody else stated in reply to their proposal would
+# not, and those may restate the proposal in other words.
+PURGE_PERSON_DECISIONS = text("""
+DELETE FROM decision d
+WHERE d.author_person_id = :person_id
+   OR EXISTS (
+       SELECT 1 FROM message m
+       WHERE m.id = ANY(d.evidence_message_ids) AND m.author_person_id = :person_id
+   )
+""")
+
 PURGE_PERSON_REACTIONS = text("""
 DELETE FROM ask_reaction WHERE person_id = :person_id
 """)
@@ -217,6 +243,7 @@ class PostgresRetentionStore:
             removed = await conn.execute(PURGE_WINDOWS_BEFORE, {"cutoff": cutoff})
             channels = [int(row[0]) for row in removed]
 
+            decisions = await conn.execute(PURGE_DECISIONS_BEFORE, {"cutoff": cutoff})
             messages = await conn.execute(PURGE_MESSAGES_BEFORE, {"cutoff": cutoff})
             asks = await conn.execute(PURGE_ASKS_BEFORE, {"cutoff": cutoff})
             fetches = await conn.execute(PURGE_FETCH_LOG_BEFORE, {"cutoff": cutoff})
@@ -231,6 +258,7 @@ class PostgresRetentionStore:
                 messages=messages.rowcount or 0,
                 asks=asks.rowcount or 0,
                 fetch_records=fetches.rowcount or 0,
+                decisions=decisions.rowcount or 0,
             )
 
     # --- opt-out -------------------------------------------------------
@@ -278,6 +306,9 @@ class PostgresRetentionStore:
                 if current is None or at < current:
                     dirty[int(channel_id)] = at
 
+            decisions = await conn.execute(
+                PURGE_PERSON_DECISIONS, {"person_id": person_id}
+            )
             messages = await conn.execute(PURGE_PERSON_MESSAGES, {"person_id": person_id})
             asks = await conn.execute(PURGE_PERSON_ASKS, {"person_id": person_id})
             reactions = await conn.execute(
@@ -294,6 +325,7 @@ class PostgresRetentionStore:
                 asks=asks.rowcount or 0,
                 reactions=reactions.rowcount or 0,
                 mentions=mentions.rowcount or 0,
+                decisions=decisions.rowcount or 0,
             )
 
     async def _mark_dirty(

@@ -46,10 +46,13 @@ class CorpusPurge:
     messages: int = 0
     asks: int = 0
     fetch_records: int = 0
+    decisions: int = 0
 
     @property
     def total(self) -> int:
-        return self.windows + self.messages + self.asks + self.fetch_records
+        return (
+            self.windows + self.messages + self.asks + self.fetch_records + self.decisions
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +175,7 @@ class RetentionService:
             messages=purged.messages,
             asks=purged.asks,
             fetch_records=purged.fetch_records,
+            decisions=purged.decisions,
             document_entries=documents,
         )
         return report

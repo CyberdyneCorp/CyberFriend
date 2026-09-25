@@ -122,6 +122,8 @@ class ExtractionProgress:
     extracted: int = 0
     recorded: int = 0
     failed: int = 0
+    decisions: int = 0
+    decisions_failed: int = 0
     batches_failed: int = 0
     last_flush_at: float | None = None
 
@@ -135,6 +137,8 @@ class ExtractionProgress:
             "extracted": self.extracted,
             "recorded": self.recorded,
             "failed": self.failed,
+            "decisions": self.decisions,
+            "decisions_failed": self.decisions_failed,
             "batches_failed": self.batches_failed,
             "last_flush_at": self.last_flush_at,
         }
@@ -353,6 +357,8 @@ class ExtractionWorker:
             extracted=current.extracted + report.extracted,
             recorded=current.recorded + report.recorded,
             failed=current.failed + report.failed,
+            decisions=current.decisions + report.decisions,
+            decisions_failed=current.decisions_failed + report.decisions_failed,
             last_flush_at=time.time(),
         )
 

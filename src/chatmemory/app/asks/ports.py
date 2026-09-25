@@ -21,7 +21,7 @@ from chatmemory.app.asks.model import (
     AskCandidate,
     Correction,
     CorrectionOutcome,
-    ExtractedAsk,
+    Extraction,
     ObligationRequest,
     ReportedAsk,
     StateRefresh,
@@ -30,9 +30,9 @@ from chatmemory.domain.identity import PersonRef, Viewer
 
 
 class AskExtractor(Protocol):
-    """A model that reads one candidate message and reports what it asks."""
+    """A model that reads one candidate message and reports what it asks and decides."""
 
-    async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]: ...
+    async def extract(self, candidate: AskCandidate) -> Extraction: ...
 
 
 class AskStore(Protocol):

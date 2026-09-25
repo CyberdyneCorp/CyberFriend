@@ -793,6 +793,7 @@ async def test_an_opt_out_purges_and_reports_counts_only() -> None:
         "asks": 1,
         "reactions": 0,
         "mentions": 3,
+        "decisions": 0,
         "documents": 1,
         "total": 16,
     }
