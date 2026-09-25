@@ -74,7 +74,6 @@ from chatmemory.adapters.discord.source import (
 )
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
-from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.state import AskStateService
 from chatmemory.app.asks.worker import (
     BacklogExtractionWorker,
@@ -89,6 +88,7 @@ from chatmemory.app.scope import LiveScope, ScopeChange, ScopeProvider
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import (
     build_ask_pipeline,
+    build_corpus_store,
     build_decision_store,
     build_memory_retention,
     build_obligation_notifier,
@@ -588,6 +588,8 @@ async def main() -> None:
         guild_id=settings.discord_guild_id,
         indexed_channels=len(scope.current()),
         health_port=settings.health_port,
+        # None: no voice note or image is recorded, whatever is posted.
+        media_since=settings.media_capture_since,
     )
     if not scope.current():
         # Indexing is opt-in: an empty scope means the corpus stays empty.
@@ -602,7 +604,7 @@ async def main() -> None:
     # call. A cast here once hid a store missing window persistence, and the
     # process started anyway -- capturing messages that nothing ever windowed,
     # embedded or retrieved, with every health check green.
-    postgres = PostgresStore(engine)
+    postgres = build_corpus_store(settings, engine)
     store: Store = postgres
 
     client: IngestClient | None = None

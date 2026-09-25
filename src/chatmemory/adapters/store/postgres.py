@@ -57,8 +57,11 @@ def _channel_ids(viewer: Viewer) -> list[int]:
 
 
 class PostgresStore:
-    def __init__(self, engine: AsyncEngine) -> None:
+    def __init__(self, engine: AsyncEngine, media_since: datetime | None = None) -> None:
+        """`media_since` is the oldest message whose attachments are recorded as
+        pending media; None, the default, records none."""
         self._engine = engine
+        self._media_since = media_since
 
     async def _connect(self) -> AsyncConnection:
         conn = await self._engine.connect()
@@ -112,6 +115,7 @@ class PostgresStore:
                 )
                 written += result.rowcount or 0
                 await self._replace_mentions(conn, m, person_id)
+                await self._replace_media(conn, m)
             return written
 
     async def _person_id(
@@ -173,6 +177,37 @@ class PostgresStore:
                 {"m": message.platform_message_id, "p": person_id},
             )
 
+    async def _replace_media(self, conn: AsyncConnection, message: Message) -> None:
+        """Match the message's media rows to the attachments it carries now.
+
+        Attachments an edit removed lose their row whatever `media_since` says.
+        New rows are written only from `media_since` on, so switching media on
+        never sweeps in what people posted before it.
+        """
+        await conn.execute(
+            sql.DROP_UNATTACHED_MEDIA,
+            {
+                "message_id": message.platform_message_id,
+                "attachment_ids": [ref.attachment_id for ref in message.media],
+            },
+        )
+        if self._media_since is None or message.created_at < self._media_since:
+            return
+        for ref in message.media:
+            await conn.execute(
+                sql.UPSERT_MEDIA,
+                {
+                    "message_id": message.platform_message_id,
+                    "attachment_id": ref.attachment_id,
+                    "kind": ref.kind.value,
+                    "declared_type": ref.content_type,
+                    "filename": ref.filename,
+                    "byte_size": ref.byte_size,
+                    "source_url": ref.url,
+                    "duration_secs": ref.duration_seconds,
+                },
+            )
+
     async def tombstone_message(self, platform_message_id: int, at: datetime) -> None:
         """Withdraw a message, whether or not the corpus has ever seen it.
 
@@ -199,6 +234,8 @@ class PostgresStore:
                 sql.TOMBSTONE_WINDOWS_FOR_MESSAGE,
                 {"id": platform_message_id, "at": at},
             )
+            # Anything transcribed or described from its attachments goes too.
+            await conn.execute(sql.WITHDRAW_MEDIA_FOR_MESSAGE, {"id": platform_message_id})
             # And the neighbours it was windowed with must come back. Derived
             # from the row here so that every deletion path gets it, including
             # reconciliation, which knows only an id.

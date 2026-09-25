@@ -110,7 +110,7 @@ from chatmemory.adapters.store.facts_postgres import PostgresFactStore
 from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
-from chatmemory.adapters.store.postgres import HybridSearch
+from chatmemory.adapters.store.postgres import HybridSearch, PostgresStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
@@ -1161,6 +1161,15 @@ def build_tracer(
         ),
         PostgresRetentionStore(engine),
     )
+
+
+def build_corpus_store(settings: Settings, engine: AsyncEngine) -> PostgresStore:
+    """The store capture writes through, recording channel media once enabled.
+
+    One builder for the ingest process and anything standing in for it, so the
+    moment media recording starts is decided in one place.
+    """
+    return PostgresStore(engine, media_since=settings.media_capture_since)
 
 
 def build_trace_withdrawal(

@@ -102,6 +102,47 @@ WHERE id IN (SELECT window_id FROM conversation_window_message WHERE message_id 
   AND deleted_at IS NULL
 """)
 
+# --- channel media --------------------------------------------------------
+#
+# One pending row per allowlisted attachment of a stored message. Written in
+# the capture transaction, keyed on the message row rather than its id alone:
+# a message the opt-out trigger refused, or one already withdrawn, gets none.
+
+UPSERT_MEDIA = text("""
+INSERT INTO message_media (
+    message_id, attachment_id, kind, declared_type, filename, byte_size,
+    source_url, duration_secs
+)
+SELECT m.id, :attachment_id, :kind, :declared_type, :filename, :byte_size,
+       :source_url, :duration_secs
+FROM message m
+WHERE m.id = :message_id AND m.deleted_at IS NULL
+ON CONFLICT (message_id, attachment_id) DO UPDATE SET
+    -- A CDN URL expires in about a day and a newer read carries a fresher one,
+    -- so keep it -- but an unedited message is rarely written again, so the
+    -- worker must re-fetch the message before downloading rather than trust
+    -- this. Nothing else changes, and the status never does: a re-read is not
+    -- a reason to process an attachment again.
+    source_url = EXCLUDED.source_url
+WHERE message_media.status = 'pending'
+""")
+
+# An edit that removed an attachment removes its row. Correct only because the
+# message being written is a full re-read of the platform's -- which is what
+# capture, edits, backfill and reconciliation all write.
+DROP_UNATTACHED_MEDIA = text("""
+DELETE FROM message_media
+WHERE message_id = :message_id
+  AND attachment_id <> ALL(CAST(:attachment_ids AS bigint[]))
+""")
+
+# Part of the tombstone's transaction: whatever was derived from a deleted
+# voice note or image is gone when the deletion is, not at retention.
+WITHDRAW_MEDIA_FOR_MESSAGE = text("""
+UPDATE message_media SET status = 'withdrawn', text = NULL, source_url = ''
+WHERE message_id = :id AND status <> 'withdrawn'
+""")
+
 PURGE_CHANNEL = text("""
 WITH w AS (DELETE FROM conversation_window WHERE channel_id = :channel_id RETURNING id),
      -- The ledger goes with the content it describes. Nothing can be

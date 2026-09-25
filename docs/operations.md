@@ -999,3 +999,52 @@ self-hosted OpenAI-compatible Whisper to keep voice inside the network.
 the default ceiling of 1,500 minutes a month that is at most about $4.50; a
 person at their 60-minute cap costs about $0.18.
 
+
+## Channel media
+
+Voice notes and images posted in indexed channels are recorded as pending
+`message_media` rows (migration 0026), for a later worker to transcribe or
+describe. Today only the recording exists: nothing is downloaded, no model is
+called, and nothing about a voice note or image is searchable yet.
+
+| | |
+|---|---|
+| `MEDIA_ENABLED_AT` | Unset by default: nothing is recorded. An ISO timestamp (UTC when it has no zone); messages created at or after it are recorded. Ingest only |
+| `MEDIA_BACKFILL_DAYS` | Default 0. Days before `MEDIA_ENABLED_AT` also recorded, for messages ingest writes from now on (see below). History already imported is not re-read |
+
+A moment rather than a switch, on purpose: members posted their earlier voice
+notes without expecting them to be transcribed, so set it to when they were
+told, and leave the backfill at 0 unless they were told that too.
+
+Both are checked only when ingest writes a message: live, on an edit, in a
+channel's first backfill (one newly indexed, or returned to scope), or when
+reconciliation finds a message posted while ingest was down. A message already
+imported and never edited is not written again, so on an existing deployment
+`MEDIA_BACKFILL_DAYS` records nothing of the channels already indexed: backfill
+has finished with their history, and reconciliation rewrites only what
+changed. There is no command yet to re-read a window of history for media.
+
+### What is recorded
+
+One row per attachment whose declared type is `audio/ogg`, `audio/mpeg`,
+`audio/mp4`, `audio/wav`, `audio/webm`, `image/png`, `image/jpeg` or
+`image/webp`, and whose URL is on `https://cdn.discordapp.com` or
+`https://media.discordapp.net`. A voice note (the message carries Discord's
+`IS_VOICE_MESSAGE` flag) is `voice`; any other audio is `audio`. Each row holds
+the declared type, size, filename, the duration Discord declares on a voice
+note, and the signed CDN URL — never the bytes.
+
+- **Only stored messages.** A row references its message, so DMs, private
+  threads, channels out of scope, bot messages and opted-out authors — none of
+  which become a stored message — can have none.
+- **Re-writing refreshes, never resets.** When a message is written again (an
+  edit, a gateway re-delivery) a pending row takes its new URL and keeps its
+  status and attempts. That is rare, so the stored URL — which expires in about
+  a day — is usually stale by the time anything reads it; the transcription
+  worker (not yet built) re-fetches the message for a fresh one right before
+  downloading.
+- **Edits.** An edit that removes an attachment removes its row.
+- **Deletion.** Deleting a message withdraws its rows in the same transaction:
+  status `withdrawn`, any derived text and the URL cleared.
+- **Retention, opt-out, channel purge.** All three delete messages, and the
+  rows go with them by cascade.

@@ -88,6 +88,15 @@ UNSCOPED: dict[str, str] = {
     "sql.TOMBSTONE_MESSAGE": "write; withdraws content",
     "sql.TOMBSTONE_WINDOWS_FOR_MESSAGE": "write; withdraws content",
     "sql.PURGE_CHANNEL": "write; removes a channel that left indexing scope",
+    "sql.UPSERT_MEDIA": (
+        "write; one pending media row for an attachment of the message being "
+        "captured. Returns no row"
+    ),
+    "sql.DROP_UNATTACHED_MEDIA": (
+        "write; removes the rows of attachments an edit took off the message "
+        "being captured"
+    ),
+    "sql.WITHDRAW_MEDIA_FOR_MESSAGE": "write; withdraws content",
     "sql.DELETE_WINDOWS_FOR_MESSAGES": "write; supersedes windows during a rebuild",
     "sql.INSERT_WINDOW": "write; returns the new window's id only",
     "sql.INSERT_WINDOW_MESSAGES": "write; membership rows",
