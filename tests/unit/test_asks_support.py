@@ -25,6 +25,7 @@ from chatmemory.app.asks.model import (
     Correction,
     CorrectionOutcome,
     ExtractedAsk,
+    Extraction,
     ObligationRequest,
     ReportedAsk,
     StateRefresh,
@@ -32,6 +33,7 @@ from chatmemory.app.asks.model import (
     to_person,
 )
 from chatmemory.app.asks.state import Reaction, next_state
+from chatmemory.app.decisions.model import Decision, ExtractedDecision
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.domain.messages import Message
 
@@ -132,16 +134,60 @@ def ask(
 class StubExtractor:
     """Returns a fixed set of extractions, and counts how often it was asked."""
 
-    def __init__(self, *results: ExtractedAsk, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *results: ExtractedAsk,
+        decisions: Sequence[ExtractedDecision] = (),
+        fail: bool = False,
+    ) -> None:
         self.results = list(results)
+        self.decisions = list(decisions)
         self.calls: list[AskCandidate] = []
         self.fail = fail
 
-    async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]:
+    async def extract(self, candidate: AskCandidate) -> Extraction:
         self.calls.append(candidate)
         if self.fail:
             raise RuntimeError("endpoint unavailable")
-        return list(self.results)
+        return Extraction(asks=tuple(self.results), decisions=tuple(self.decisions))
+
+
+class FakeDecisionStore:
+    """In-memory `DecisionStore`: upsert then prune, per source message."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.decisions: dict[str, Decision] = {}
+        self.withdrawn: list[int] = []
+        self.fail = fail
+
+    async def record_decisions(
+        self, source_message_id: int, decisions: Sequence[Decision]
+    ) -> int:
+        if self.fail:
+            raise RuntimeError("database unavailable")
+        keep = {d.key for d in decisions}
+        for key in [
+            k
+            for k, d in self.decisions.items()
+            if d.source_message_id == source_message_id and k not in keep
+        ]:
+            del self.decisions[key]
+        self.decisions.update({d.key: d for d in decisions})
+        return len(decisions)
+
+    async def withdraw(self, source_message_ids: Sequence[int]) -> int:
+        ids = set(source_message_ids)
+        self.withdrawn.extend(source_message_ids)
+        gone = [k for k, d in self.decisions.items() if d.source_message_id in ids]
+        for key in gone:
+            del self.decisions[key]
+        return len(gone)
+
+    async def withdraw_message(self, message_id: int) -> int:
+        gone = [k for k, d in self.decisions.items() if message_id in d.evidence_message_ids]
+        for key in gone:
+            del self.decisions[key]
+        return len(gone)
 
 
 class FakeAskStore:

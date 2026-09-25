@@ -10,14 +10,15 @@ scenario exercises is the entrypoint's, not a copy of it.
 
 Only the extractor is swapped, and it still speaks the real prompt: the
 candidate is rendered by `render_candidate`, sent to `ScriptedChat` as the
-`ask_extraction` schema, and the reply is read by `parse_extractions`. So what
+`ask_extraction` schema, and the reply is read by `parse_extraction`. So what
 a scenario scripts is the model's JSON, and everything after it -- candidate
-filtering, addressee resolution, the ask store's SQL -- is production's.
+filtering, addressee resolution, the ask and decision stores' SQL -- is
+production's. Decisions are embedded by the offline `HashEmbeddings`.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import cast
 
@@ -26,11 +27,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.discord.source import DiscordChatSource, RawMessage, to_message
 from chatmemory.adapters.store.postgres import PostgresStore
-from chatmemory.app.asks.model import AskCandidate, ExtractedAsk
+from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.prompt import (
     OUTPUT_SCHEMA,
     SYSTEM_PROMPT,
-    parse_extractions,
+    parse_extraction,
     render_candidate,
 )
 from chatmemory.app.ingest import IngestService
@@ -41,7 +42,7 @@ from chatmemory.domain.messages import Message
 from chatmemory.entrypoints.ingest import live_loop
 from chatmemory.health import HealthState
 from chatmemory.ports.sources import ChatSource
-from tests.e2e.harness.model import ASK_EXTRACTION, ScriptedChat
+from tests.e2e.harness.model import ASK_EXTRACTION, HashEmbeddings, ScriptedChat
 
 
 class ChatAskExtractor:
@@ -50,11 +51,11 @@ class ChatAskExtractor:
     def __init__(self, chat: ScriptedChat) -> None:
         self._chat = chat
 
-    async def extract(self, candidate: AskCandidate) -> Sequence[ExtractedAsk]:
+    async def extract(self, candidate: AskCandidate) -> Extraction:
         reply = await self._chat.complete_json(
             SYSTEM_PROMPT, render_candidate(candidate), OUTPUT_SCHEMA, ASK_EXTRACTION
         )
-        return parse_extractions(reply.data)
+        return parse_extraction(reply.data)
 
 
 class OneMessageSource:
@@ -72,7 +73,13 @@ class OneMessageSource:
 class Ingest:
     """Capture, then extraction, over the database the bot answers from."""
 
-    def __init__(self, settings: Settings, engine: AsyncEngine, chat: ScriptedChat) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        engine: AsyncEngine,
+        chat: ScriptedChat,
+        embeddings: HashEmbeddings,
+    ) -> None:
         store = PostgresStore(engine)
         self.service = IngestService(
             # Only backfill reads the source, and no scenario backfills.
@@ -85,7 +92,9 @@ class Ingest:
             ),
             indexed_channels=settings.indexed_channel_ids,
         )
-        self.asks = build_ask_pipeline(settings, engine, extractor=ChatAskExtractor(chat))
+        self.asks = build_ask_pipeline(
+            settings, engine, extractor=ChatAskExtractor(chat), embeddings=embeddings
+        )
         self.asks.worker.records_through(store)
 
     async def capture(self, raw: discord.Message) -> Message:

@@ -595,6 +595,48 @@ ORDER BY m.created_at DESC
 LIMIT :limit
 """)
 
+# The conversation the live pass would have shown the model beside each
+# message: the `:limit` live messages before it in its channel, and its reply
+# parent. The backlog pass needs it because it reads only what is pending, and
+# after an edit that is the edited message alone. Same channel only, for both,
+# which also keeps the read inside the scope the pending messages came from.
+EXTRACTION_CONTEXT = text("""
+WITH target AS (
+    SELECT m.id, m.channel_id, m.created_at, m.reply_to_id
+    FROM message m
+    WHERE m.id = ANY(CAST(:ids AS bigint[]))
+),
+shown AS (
+    SELECT t.id AS context_for, 'preceding' AS role, p.id AS message_id
+    FROM target t
+    CROSS JOIN LATERAL (
+        SELECT b.id FROM message b
+        WHERE b.channel_id = t.channel_id
+          AND b.deleted_at IS NULL
+          AND (b.created_at, b.id) < (t.created_at, t.id)
+        ORDER BY b.created_at DESC, b.id DESC
+        LIMIT :limit
+    ) p
+    UNION ALL
+    SELECT t.id, 'parent', p.id
+    FROM target t
+    JOIN message p ON p.id = t.reply_to_id AND p.channel_id = t.channel_id
+    WHERE p.deleted_at IS NULL
+)
+SELECT s.context_for, s.role,
+       m.id, m.channel_id, m.content, m.created_at, m.edited_at,
+       m.reply_to_id, m.thread_id,
+       COALESCE((
+           SELECT pp.platform_user_id FROM person_platform_id pp
+           WHERE pp.person_id = m.author_person_id AND pp.platform = :platform
+           ORDER BY pp.platform_user_id LIMIT 1
+       ), m.author_person_id) AS platform_user_id,
+       (SELECT pe.display_name FROM person pe WHERE pe.id = m.author_person_id)
+           AS author_display
+FROM shown s
+JOIN message m ON m.id = s.message_id
+""")
+
 RECORD_EXTRACTION = text("""
 UPDATE message m
 -- COALESCE because the live path has no generation to give: capture hands it

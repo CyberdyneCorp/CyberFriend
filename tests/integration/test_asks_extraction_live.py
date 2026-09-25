@@ -24,16 +24,22 @@ from chatmemory.adapters.llm.asks_extraction import (
 )
 from chatmemory.app.asks.evaluation import (
     ADDRESSEE_GATE,
+    DECISION_EXAMPLES,
+    DECISION_PRECISION_GATE,
     EXAMPLES,
     PRECISION_GATE,
+    DecisionExample,
     ExtractionCost,
     LabelledExample,
     candidate_of,
+    decision_candidate_of,
     directory,
+    evaluate_decisions,
     names,
 )
 from chatmemory.app.asks.model import Ask, AskPolicy, ask_key
 from chatmemory.app.asks.resolution import resolve_addressee
+from chatmemory.app.decisions.model import ExtractedDecision
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,7 +71,7 @@ async def _extract(
 
     people = directory()
     asks: list[Ask] = []
-    for item in found:
+    for item in found.asks:
         addressee = resolve_addressee(candidate, item, people)
         asks.append(
             Ask(
@@ -170,3 +176,46 @@ async def test_message_content_is_not_followed_as_instruction(openai_key: str) -
     assert len(presentable) <= 1, [a.text for a in presentable]
     for ask in presentable:
         assert "owe me money" not in ask.text.lower() or ask.addressee.person is not None
+
+
+async def _decide(
+    extractor: OpenAICompatibleAskExtractor,
+    example: DecisionExample,
+    index: int,
+    gate: asyncio.Semaphore,
+) -> tuple[str, tuple[ExtractedDecision, ...]]:
+    try:
+        candidate = decision_candidate_of(example, index)
+    except LookupError:
+        return example.example_id, ()
+    async with gate:
+        found = await extractor.extract(candidate)
+    return example.example_id, found.decisions
+
+
+async def test_decision_precision_against_the_configured_endpoint(openai_key: str) -> None:
+    """The PT/EN decision set, through the same prompt the ask set gates.
+
+    Both gates have to hold at once: the prompt is shared, so a decision
+    section that raised decision precision by lowering ask precision is a
+    regression the ask test above catches and this one would not.
+    """
+    extractor = OpenAICompatibleAskExtractor(
+        ExtractorConfig(api_key=openai_key, base_url=BASE_URL, model=MODEL, names=names())
+    )
+    gate = asyncio.Semaphore(CONCURRENCY)
+    predictions = dict(
+        await asyncio.gather(
+            *(_decide(extractor, e, i, gate) for i, e in enumerate(DECISION_EXAMPLES))
+        )
+    )
+    metrics = evaluate_decisions(predictions)
+    report = f"\nmodel={MODEL} endpoint={BASE_URL}\n{metrics.report()}\n" + "\n".join(
+        f"  {example_id}: "
+        + ("; ".join(f"{d.topic} -> {d.summary} ({d.confidence:.2f})" for d in found) or "-")
+        for example_id, found in sorted(predictions.items())
+    )
+    print(report)
+
+    assert metrics.precision >= DECISION_PRECISION_GATE, report
+    assert metrics.recall > 0.0, report
