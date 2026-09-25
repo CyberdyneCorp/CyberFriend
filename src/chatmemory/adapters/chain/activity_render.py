@@ -33,6 +33,7 @@ from chatmemory.adapters.chain.activity import (
 )
 from chatmemory.adapters.chain.activity_explorer import MAX_ROWS
 from chatmemory.adapters.chain.positions_render import amount
+from chatmemory.app.currency import Conversion, beside, rate_lines
 from chatmemory.app.language import Language, detect
 from chatmemory.app.wallet_activity import DEFAULT_DAYS, MAX_DAYS, ActivityWindow
 
@@ -197,6 +198,8 @@ class _Words:
 
     pt: bool
     private: bool
+    #: The asker's preferred currency, added beside every dollar figure.
+    conversion: Conversion | None = None
 
     @property
     def text(self) -> Mapping[str, object]:
@@ -217,7 +220,10 @@ class _Words:
         if value is None:
             return ""
         figure = f"{value:,.2f}"
-        return f" (≈ US$ {figure.translate(_PORTUGUESE_DIGITS)})" if self.pt else f" (≈ ${figure})"
+        second = beside(self.conversion, value, wrap=" · {}")
+        if self.pt:
+            return f" (≈ US$ {figure.translate(_PORTUGUESE_DIGITS)}{second})"
+        return f" (≈ ${figure}{second})"
 
     def moment(self, when: datetime, key: str = "time") -> str:
         return when.strftime(str(self.text[key]))
@@ -243,9 +249,10 @@ def render_activity(
     language: Language,
     *,
     private: bool,
+    conversion: Conversion | None = None,
 ) -> str:
     """The whole answer. `known` is each chain's recognised tokens, by chain key."""
-    words = _Words(language is Language.PORTUGUESE, private)
+    words = _Words(language is Language.PORTUGUESE, private, conversion)
     span = f"{words.moment(window.start, 'span')} – {words.moment(window.end, 'span')} UTC"
     # The header is dropped from the body but quoted by the citation footer,
     # which is posted too: in a channel it names the wallet as the body does.
@@ -271,6 +278,7 @@ def render_activity(
     if quiet:
         lines.extend(("", words("empty", chains=", ".join(f"**{n}**" for n in quiet))))
     lines.extend(("", words("footer")))
+    lines.extend(rate_lines(conversion))
     return "\n".join(lines)
 
 

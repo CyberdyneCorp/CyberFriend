@@ -46,6 +46,7 @@ class FactKind(StrEnum):
     FULL_NAME = "full_name"
     HOME_ADDRESS = "home_address"
     BIRTH_DATE = "birth_date"
+    PREFERRED_CURRENCY = "preferred_currency"
 
 
 MULTI_VALUED_KINDS = frozenset({FactKind.ETH_WALLET, FactKind.BTC_WALLET})
@@ -296,6 +297,31 @@ def _calendar_date(year: int, month: int, day: int) -> date | None:
         return None
 
 
+# "o real brasileiro" and "reais" are words for a currency, not a sentence.
+MAX_CURRENCY_CHARS = 32
+
+
+def _normalise_currency(value: str) -> str:
+    """The ISO 4217 code of a currency the rate source publishes.
+
+    Stored as the code, so what later leaves for the rate lookup is a member
+    of `domain.currency.SUPPORTED_CODES` and never the words somebody typed.
+    A currency outside that set -- or anything that is not one -- is refused
+    as malformed, and the reply lists the supported codes.
+    """
+    from chatmemory.domain.currency import currency_code
+
+    text = _collapse(value)
+    if not text:
+        raise InvalidFact(FactKind.PREFERRED_CURRENCY, FactRejection.EMPTY)
+    if len(text) > MAX_CURRENCY_CHARS:
+        raise InvalidFact(FactKind.PREFERRED_CURRENCY, FactRejection.TOO_LONG)
+    code = currency_code(text)
+    if code is None:
+        raise InvalidFact(FactKind.PREFERRED_CURRENCY, FactRejection.MALFORMED)
+    return code
+
+
 def _normalise_eth_wallet(value: str) -> str:
     """A 20-byte hex address, stored lowercase.
 
@@ -335,6 +361,7 @@ _NORMALISERS = {
     FactKind.FULL_NAME: _normalise_full_name,
     FactKind.HOME_ADDRESS: _normalise_home_address,
     FactKind.BIRTH_DATE: _normalise_birth_date,
+    FactKind.PREFERRED_CURRENCY: _normalise_currency,
 }
 
 

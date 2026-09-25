@@ -85,7 +85,12 @@ from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.llm.transcription import OpenAICompatibleTranscriber
 from chatmemory.adapters.market.alert_prices import AlertPrices
 from chatmemory.adapters.market.coingecko import CoinGeckoProvider
-from chatmemory.adapters.market.registration import MarketToolsConfig, build_market_tools
+from chatmemory.adapters.market.registration import (
+    MarketToolsConfig,
+    build_market_tools,
+    build_usd_rates,
+)
+from chatmemory.adapters.market.usd_rates import UsdReferenceRates
 from chatmemory.adapters.mcp_client import (
     AllowedTool,
     Federation,
@@ -150,6 +155,7 @@ from chatmemory.app.conversation import (
     MemoryPolicy,
     MemoryRetention,
 )
+from chatmemory.app.currency import PreferredCurrencies
 from chatmemory.app.decisions.answering import DecisionAnswerService
 from chatmemory.app.decisions.model import DecisionPolicy
 from chatmemory.app.facts import PersonalFactsService
@@ -856,6 +862,11 @@ async def build_federation(
     elif settings.web_tools_enabled:
         log.warning("composition.web_tools.none_available")
 
+    # The USD rates behind a second figure in the asker's preferred currency:
+    # the market tools' own FX provider when they are on, else one of the same
+    # class over the same host, registered as no tool.
+    rates: UsdReferenceRates | None = None
+
     # Market data, through the same door and after the web tools, so its
     # factory is outermost and anything it does not own falls through to the
     # web factory and then to remote MCP. Read-only is declared by
@@ -864,6 +875,7 @@ async def build_federation(
     # guard, not by anything this function chooses.
     if settings.market_tools_enabled:
         market = build_market_tools(market_tools_config(settings, transport))
+        rates = market.rates
         config = market.merge_into(config or FederationConfig())
         factory = market.factory(factory)
         log.info(
@@ -877,7 +889,10 @@ async def build_federation(
     # set to be a member of, and rooting is what makes the lookup only ever
     # reach an address the asker typed themselves.
     if settings.wallet_tools_enabled:
-        chain = build_chain_tools(chain_tools_config(settings, transport))
+        chain = build_chain_tools(
+            chain_tools_config(settings, transport),
+            rates=rates or build_usd_rates(market_tools_config(settings, transport)),
+        )
         if chain.servers:
             config = chain.merge_into(config or FederationConfig())
             factory = chain.factory(factory)
@@ -1081,6 +1096,11 @@ def build_alert_runner(
         messenger,
         prices=build_alert_prices(settings, transport),
         sweep_seconds=settings.alert_sweep_seconds,
+        # The owner's preferred currency beside the dollar figures, priced by
+        # the same FX provider and host the market tools use.
+        currencies=PreferredCurrencies(
+            PostgresFactStore(engine), build_usd_rates(market_tools_config(settings, transport))
+        ),
     )
 
 

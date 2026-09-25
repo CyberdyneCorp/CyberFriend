@@ -3,6 +3,10 @@
 Shown verbatim (see `verbatim_answer`), so the first line is a header the
 citation already carries and is dropped, and everything after it is exactly
 what the person reads.
+
+With a `Conversion`, every dollar value is followed by the same value in the
+asker's preferred currency; the provider adds the footnote naming the rate,
+once for the whole answer.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from chatmemory.adapters.chain.positions import (
     LiquidityPosition,
     TokenInfo,
 )
+from chatmemory.app.currency import Conversion, beside
 
 FULL_RANGE_TICK = 887_000
 """Beyond this either side, a range is the whole curve (the limit is 887272)."""
@@ -45,8 +50,14 @@ def amount(value: Decimal) -> str:
     return f"{value:.3e}"
 
 
-def usd(value: Decimal | None) -> str:
-    return "" if value is None else f" ≈ ${value:,.2f}"
+def usd(value: Decimal | None, conversion: Conversion | None = None) -> str:
+    return "" if value is None else f" ≈ ${value:,.2f}{beside(conversion, value)}"
+
+
+def dollars(value: Decimal, conversion: Conversion | None = None) -> str:
+    """A dollar figure that is always shown: "$1,234.56 (R$ 6.740,00)"."""
+    return f"${value:,.2f}{beside(conversion, value)}"
+
 
 
 def fee_tier(fee: int) -> str:
@@ -93,20 +104,24 @@ def _pair(a0: Decimal, a1: Decimal, p: LiquidityPosition) -> str:
     return " + ".join(parts) or "nothing"
 
 
-def position_lines(p: LiquidityPosition) -> list[str]:
+def position_lines(p: LiquidityPosition, conversion: Conversion | None = None) -> list[str]:
     head = (
         f"• {p.protocol} #{p.token_id} · {p.token0.symbol}/{p.token1.symbol} "
         f"{fee_tier(p.fee)} · {_status(p)}"
     )
     lines = [head, _range_line(p)]
-    lines.append(f"  Holds: {_pair(p.amount0, p.amount1, p)}{usd(p.value_usd())}")
-    lines.append(f"  Uncollected: {_pair(p.fees0, p.fees1, p)}{usd(p.fees_usd())}")
+    lines.append(f"  Holds: {_pair(p.amount0, p.amount1, p)}{usd(p.value_usd(), conversion)}")
+    lines.append(
+        f"  Uncollected: {_pair(p.fees0, p.fees1, p)}{usd(p.fees_usd(), conversion)}"
+    )
     if p.pool_priced:
         lines.append("  (one token has no oracle price; valued at this pool's own price)")
     return lines
 
 
-def render_liquidity(address: str, chains: Sequence[ChainLiquidity]) -> str:
+def render_liquidity(
+    address: str, chains: Sequence[ChainLiquidity], conversion: Conversion | None = None
+) -> str:
     lines = [f"Liquidity positions for `{address}`"]
     for chain in chains:
         lines.append("")
@@ -118,15 +133,22 @@ def render_liquidity(address: str, chains: Sequence[ChainLiquidity]) -> str:
         else:
             lines.append(f"**{chain.chain.name}**")
             for position in chain.positions:
-                lines.extend(position_lines(position))
+                lines.extend(position_lines(position, conversion))
         lines.extend(f"_{note}._" for note in chain.notes)
     lines.append("")
     lines.append("_Open Uniswap v3 and v4 positions only; other exchanges are not read._")
     return "\n".join(lines)
 
 
-def _asset_line(asset: LendingAsset, held: Decimal, rate: Decimal, *, supply: bool) -> str:
-    value = usd(held * asset.usd_price) if asset.usd_price is not None else ""
+def _asset_line(
+    asset: LendingAsset,
+    held: Decimal,
+    rate: Decimal,
+    *,
+    supply: bool,
+    conversion: Conversion | None = None,
+) -> str:
+    value = usd(held * asset.usd_price, conversion) if asset.usd_price is not None else ""
     tail = " · collateral" if supply and asset.collateral else ""
     return f"  • {amount(held)} {asset.token.symbol}{value} · {rate:.2%} APY{tail}"
 
@@ -145,7 +167,9 @@ def _health(chain: ChainLending) -> str:
     return text
 
 
-def render_lending(address: str, chains: Sequence[ChainLending]) -> str:
+def render_lending(
+    address: str, chains: Sequence[ChainLending], conversion: Conversion | None = None
+) -> str:
     lines = [f"Aave positions for `{address}`"]
     for chain in chains:
         lines.append("")
@@ -157,18 +181,24 @@ def render_lending(address: str, chains: Sequence[ChainLending]) -> str:
             continue
         lines.append(f"**{chain.chain.name}** · Aave v3")
         lines.append(
-            f"Collateral ${chain.collateral_usd:,.2f} · Debt ${chain.debt_usd:,.2f} · "
-            f"{_health(chain)}"
+            f"Collateral {dollars(chain.collateral_usd, conversion)} · "
+            f"Debt {dollars(chain.debt_usd, conversion)} · {_health(chain)}"
         )
         supplied = [a for a in chain.assets if a.supplied and not _dust(a, a.supplied)]
         borrowed = [a for a in chain.assets if a.borrowed and not _dust(a, a.borrowed)]
         dust = sum(1 for a in chain.assets if _dust(a, a.supplied) or _dust(a, a.borrowed))
         if supplied:
             lines.append("Supplied:")
-            lines.extend(_asset_line(a, a.supplied, a.supply_apy, supply=True) for a in supplied)
+            lines.extend(
+                _asset_line(a, a.supplied, a.supply_apy, supply=True, conversion=conversion)
+                for a in supplied
+            )
         if borrowed:
             lines.append("Borrowed:")
-            lines.extend(_asset_line(a, a.borrowed, a.borrow_apy, supply=False) for a in borrowed)
+            lines.extend(
+                _asset_line(a, a.borrowed, a.borrow_apy, supply=False, conversion=conversion)
+                for a in borrowed
+            )
         if dust:
             lines.append(f"_{dust} balance(s) under $0.01 not shown._")
     lines.append("")

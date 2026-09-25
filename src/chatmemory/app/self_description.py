@@ -220,13 +220,16 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "somebody mentioned in a channel: "
         ),
         "market_note": (
-            "Each figure says how current it is. I report figures; I don't "
-            "recommend buying, selling or holding anything."
+            "Each figure says how current it is, and is also shown in your "
+            "preferred currency when you have told me one. I report figures; "
+            "I don't recommend buying, selling or holding anything."
         ),
         "commands_heading": "Commands:",
         "facts": (
-            "Tell me what to call you (`call me Leo`), your email address, or "
-            "the language you'd like answers in, and I'll remember it. Ask "
+            "Tell me what to call you (`call me Leo`), your email address, "
+            "the language you'd like answers in, or a currency to see amounts "
+            "in besides US dollars (`my currency is euro`), and I'll remember "
+            "it. Ask "
             "`what do you know about me?` to see it; I only show your email to "
             "you, in a direct message."
         ),
@@ -264,13 +267,16 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "alguém mencionou num canal: "
         ),
         "market_note": (
-            "Cada número diz o quão atual ele é. Eu informo números; não "
+            "Cada número diz o quão atual ele é, e aparece também na sua moeda "
+            "preferida se você me disser uma. Eu informo números; não "
             "recomendo comprar, vender nem manter nada."
         ),
         "commands_heading": "Comandos:",
         "facts": (
-            "Me diga como quer ser chamado (`me chame de Leo`), seu e-mail, ou "
-            "o idioma em que prefere as respostas, e eu vou lembrar. Pergunte "
+            "Me diga como quer ser chamado (`me chame de Leo`), seu e-mail, "
+            "o idioma em que prefere as respostas, ou uma moeda para ver os "
+            "valores além do dólar (`prefiro ver em reais`), e eu vou lembrar. "
+            "Pergunte "
             "`o que você sabe sobre mim?` para ver; eu só mostro seu e-mail "
             "para você, numa mensagem direta."
         ),

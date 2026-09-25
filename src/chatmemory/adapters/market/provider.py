@@ -169,6 +169,15 @@ class MarketProvider(ABC):
         """The figure line. Conversion overrides it to apply the amount."""
         return f"{quote.instrument}: {figure(quote.value)} {quote.unit}"
 
+    async def annotate(self, line: str, quote: Quote, question: str) -> str:
+        """The figure line with what this source adds for the asker.
+
+        Nothing by default. The crypto source adds the price in the asker's
+        preferred currency, so the answer -- shown verbatim -- carries both
+        figures and no model converts anything.
+        """
+        return line
+
     # --- lifecycle -------------------------------------------------------
 
     @asynccontextmanager
@@ -210,7 +219,7 @@ class MarketProvider(ABC):
         cached = self._cache.get(lookup.terms)
         if cached is not None:
             # A fresh entry only: the cache cannot return anything older.
-            return ToolResult(text=render(cached, self.describe(cached, lookup)))
+            return await self._result(cached, lookup, question)
         # Keyed by the question the guard cleared, not by anything the model
         # wrote, so the per-run cap cannot be dodged by varying an argument.
         if not self._budget.spend(question):
@@ -219,9 +228,9 @@ class MarketProvider(ABC):
         if not await self._limiter.acquire():
             log.warning("market.rate_limited", provider=self.server)
             return self._refuse("rate_limited")
-        return await self._perform(lookup)
+        return await self._perform(lookup, question)
 
-    async def _perform(self, lookup: Lookup) -> ToolResult:
+    async def _perform(self, lookup: Lookup, question: str) -> ToolResult:
         try:
             async with asyncio.timeout(self._timeout):
                 quote = await self._fetch_with_client(lookup)
@@ -236,7 +245,11 @@ class MarketProvider(ABC):
             return self._unavailable(lookup, "is unavailable")
         self._cache.put(lookup.terms, quote)
         log.info("market.quote", provider=self.server, terms=list(lookup.terms))
-        return ToolResult(text=render(quote, self.describe(quote, lookup)))
+        return await self._result(quote, lookup, question)
+
+    async def _result(self, quote: Quote, lookup: Lookup, question: str) -> ToolResult:
+        line = await self.annotate(self.describe(quote, lookup), quote, question)
+        return ToolResult(text=render(quote, line))
 
     async def _fetch_with_client(self, lookup: Lookup) -> Quote:
         if self._client is not None:

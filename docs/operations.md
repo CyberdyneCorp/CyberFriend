@@ -899,6 +899,43 @@ because they typed it when they set it. Three things keep that narrow:
 What it does mean: a person's saved address leaves the server when they ask
 about their own balance. That is what they asked for by saving it.
 
+## A preferred currency
+
+A person can say which currency they want money shown in besides US dollars
+(*minha moeda é o real*, *my currency is euro*, *moeda preferida: BRL*, or
+*uso reais* inside an introduction). It is stored as an ISO 4217 code, in the
+`preferred_currency` kind migration 0027 adds; it is not private, and is shown
+in a channel like the preferred language.
+
+Every figure the assistant reads is in dollars. With a preference saved, each
+dollar figure it renders — a BTC/ETH price, a balance, a pool, an Aave
+position, a portfolio total, wallet activity, a price or health alert — is
+followed by the same figure in that currency, multiplied in code, with a
+footnote naming the rate. A market answer carries the converted figure in the
+tool result itself, so no model converts anything.
+
+### What leaves, and where
+
+One request, to the host the conversion tool already uses:
+`api.frankfurter.dev/v1/latest?from=USD&to=BRL`. The two codes are members of
+a closed set — the currencies Frankfurter publishes an ECB rate for, which is
+also the set a preference may name — and no amount and nothing else about the
+person goes with them. It is made through the market FX provider class and
+`Edges.http_transport`, whether or not `MARKET_TOOLS_ENABLED` is on (with the
+market tools off it is a provider of the same class that is never registered as
+a tool). It is not routed through the egress guard: nobody asked a question the
+code could be rooted in; the person's saved preference is the authorisation.
+
+The rate is cached in the process for ten minutes, so an answer reads it once
+and the next answers usually not at all. A rate that cannot be read — the host
+down, a timeout, an unexpected reply — leaves the answer in dollars alone; it
+is never guessed and never fails the answer. Frankfurter's rate is a daily
+reference rate, not a live one, and the footnote says so.
+
+A price alert's message reads the owner's preference from the fact store when
+it fires; the level they set stays in dollars, as they set it. An alert
+proposal (the Confirm step) is in dollars only.
+
 ## Knowing the time
 
 Every answering prompt carries the current date and time in **UTC**, labelled.

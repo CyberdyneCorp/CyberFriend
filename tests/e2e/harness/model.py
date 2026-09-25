@@ -27,6 +27,8 @@ from chatmemory.app.reasoning.ports import (
 )
 
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+ASSETS = {"bitcoin": "BTC", "btc": "BTC", "ether": "ETH", "ethereum": "ETH", "eth": "ETH"}
+"""What the crypto price tool's `asset` is, from the word the question used."""
 EVIDENCE = re.compile(
     r"<<<EVIDENCE window_id=(?P<id>\d+) [^>]*>>>\n(?P<text>.*?)\n<<<END EVIDENCE", re.S
 )
@@ -177,6 +179,10 @@ class ScriptedChat:
         found = list(dict.fromkeys(ADDRESS.findall(user)))
         for tool in tools:
             properties = tool.input_schema.get("properties")
+            if isinstance(properties, Mapping) and "asset" in properties:
+                asset = _asset(user)
+                if asset is not None:
+                    return ToolCompletion(call=ToolCall(tool.name, {"asset": asset}, "scripted"))
             if not found or not isinstance(properties, Mapping):
                 continue
             # The portfolio takes every address the question holds; the other
@@ -192,6 +198,14 @@ class ScriptedChat:
 
     def tool_caller(self) -> ScriptedChat:
         return self
+
+
+def _asset(prompt: str) -> str | None:
+    """The ticker the question names, as a model copying it would write it."""
+    for word in re.findall(r"[a-z]+", _question(prompt).lower()):
+        if word in ASSETS:
+            return ASSETS[word]
+    return None
 
 
 class HashEmbeddings:

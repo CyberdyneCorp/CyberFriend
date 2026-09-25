@@ -13,10 +13,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from chatmemory.app.currency import currency_name, supported_list
 from chatmemory.app.facts import DIRECT_ONLY_KINDS, FactOutcome, FactResult
 from chatmemory.app.language import Language
 from chatmemory.app.routing import AGE, WHERE_YOURE_FROM
 from chatmemory.domain.chain import suffix_list
+from chatmemory.domain.currency import USD
 from chatmemory.ports.facts import (
     MAX_FULL_NAME_CHARS,
     MAX_HOME_ADDRESS_CHARS,
@@ -46,6 +48,7 @@ LABELS: dict[Language, dict[FactKind, str]] = {
         FactKind.FULL_NAME: "full name",
         FactKind.HOME_ADDRESS: "home address",
         FactKind.BIRTH_DATE: "birth date",
+        FactKind.PREFERRED_CURRENCY: "preferred currency",
     },
     PT: {
         FactKind.PREFERRED_NAME: "nome preferido",
@@ -57,6 +60,7 @@ LABELS: dict[Language, dict[FactKind, str]] = {
         FactKind.FULL_NAME: "nome completo",
         FactKind.HOME_ADDRESS: "endereço",
         FactKind.BIRTH_DATE: "data de nascimento",
+        FactKind.PREFERRED_CURRENCY: "moeda preferida",
     },
 }
 FACT_LABELS = LABELS[EN]
@@ -67,7 +71,9 @@ PLURAL_LABELS: dict[Language, dict[FactKind, str]] = {
 }
 """The kinds a person may hold several of, named in the plural."""
 
-_FEMININE_PT = frozenset({FactKind.ETH_WALLET, FactKind.BTC_WALLET, FactKind.BIRTH_DATE})
+_FEMININE_PT = frozenset({
+    FactKind.ETH_WALLET, FactKind.BTC_WALLET, FactKind.BIRTH_DATE, FactKind.PREFERRED_CURRENCY,
+})
 
 
 def possessive(kind: FactKind, language: Language, *, plural: bool = False) -> str:
@@ -91,6 +97,7 @@ REMEMBERABLE_TEXT = {
         "- your home address (`I live in ...`)\n"
         "- your birth date (`I was born on 21/06/1981`)\n"
         "- the language you'd like answers in (`reply to me in Portuguese`)\n"
+        "- a currency to see money in besides US dollars (`my currency is euro`)\n"
         "- your Ethereum wallets, up to 5 (`my wallet is 0x...`), and your Bitcoin "
         "wallets (`my btc wallet is ...`)\n"
         "You can tell me several at once. "
@@ -109,6 +116,7 @@ REMEMBERABLE_TEXT = {
         "- seu endereço (`moro em ...`)\n"
         "- sua data de nascimento (`nasci em 21/06/1981`)\n"
         "- o idioma das respostas (`responda em português`)\n"
+        "- uma moeda para ver valores além do dólar (`prefiro ver em reais`)\n"
         "- suas carteiras Ethereum, até 5 (`minha carteira é 0x...`), e suas "
         "carteiras Bitcoin (`minha carteira btc é ...`)\n"
         "Pode me dizer várias de uma vez. "
@@ -164,6 +172,14 @@ _TEXT: dict[str, dict[Language, str]] = {
         EN: "Got it, I'll answer you in **{v}**.",
         PT: "Certo, vou te responder em **{v}**.",
     },
+    "currency": {
+        EN: "Got it, I'll show amounts in US dollars and also in **{v}**.",
+        PT: "Certo, vou mostrar os valores em dólar e também em **{v}**.",
+    },
+    "currency_usd": {
+        EN: "Got it, I'll show amounts in US dollars only.",
+        PT: "Certo, vou mostrar os valores só em dólar.",
+    },
     "saved_direct": {
         EN: "Got it, I've saved {p} as `{v}`. I only show it to you, in a direct message.",
         PT: "Certo, salvei {p} como `{v}`. Só mostro para você, em mensagem direta.",
@@ -207,8 +223,8 @@ _TEXT: dict[str, dict[Language, str]] = {
         PT: "Aqui está o que posso mostrar aqui:",
     },
     "nothing_here": {
-        EN: "I have no preferred name or language saved for you.",
-        PT: "Não tenho nome preferido nem idioma salvos para você.",
+        EN: "I have no preferred name, language or currency saved for you.",
+        PT: "Não tenho nome preferido, idioma nem moeda salvos para você.",
     },
     "one_missing": {
         EN: "You haven't told me {p}.",
@@ -295,6 +311,9 @@ MALFORMED: dict[Language, dict[FactKind, str]] = {
         FactKind.BIRTH_DATE: (
             "it isn't a past date I can read - try `21/06/1981` or `1981-06-21`"
         ),
+        FactKind.PREFERRED_CURRENCY: (
+            f"it isn't a currency I can convert to - I support {supported_list()}"
+        ),
     },
     PT: {
         FactKind.EMAIL: "não é um e-mail válido",
@@ -308,6 +327,9 @@ MALFORMED: dict[Language, dict[FactKind, str]] = {
         ),
         FactKind.BIRTH_DATE: (
             "não é uma data passada que eu consiga ler - tente `21/06/1981` ou `1981-06-21`"
+        ),
+        FactKind.PREFERRED_CURRENCY: (
+            f"não é uma moeda para a qual eu consiga converter - aceito {supported_list()}"
         ),
     },
 }
@@ -351,6 +373,10 @@ def _stored_reply(result: FactResult, direct: bool, language: Language) -> str:
         return text("full_name", language, v=fact.value)
     if fact.kind is FactKind.PREFERRED_LANGUAGE:
         return text("answer_in", language, v=fact.value)
+    if fact.kind is FactKind.PREFERRED_CURRENCY:
+        if fact.value == USD:
+            return text("currency_usd", language)
+        return text("currency", language, v=currency_name(fact.value, language))
     # Named by its own label: a phone or wallet was once confirmed as "your
     # email address". Confirmed without the value in a channel.
     key = "saved_direct" if direct else "saved_channel"
@@ -405,7 +431,10 @@ _MONTH_NAMES = {
 
 def shown_value(kind: FactKind, value: str, language: Language = EN) -> str:
     """A stored value as it reads to its owner: a birth date spelled out, since
-    "1981-06-21" and "06/21" both read wrongly to somebody."""
+    "1981-06-21" and "06/21" both read wrongly to somebody, and a currency
+    named as well as coded."""
+    if kind is FactKind.PREFERRED_CURRENCY:
+        return currency_name(value, language)
     if kind is not FactKind.BIRTH_DATE:
         return value
     year, month, day = (int(part) for part in value.split("-"))

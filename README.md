@@ -20,7 +20,8 @@ internet said.
 | **Decisions** | *o que decidimos sobre o deploy?*, *o que ficou decidido semana passada?*, *what did we decide about pricing?* — read from conversation as it arrives, answered from the decision log with no model call, dated and newest first, each line citing the message that settled it. Only decisions from channels you and the room can read; deleting the conclusion or the proposal it settled removes it. No match is answered as an ordinary question, never as "nothing was decided" |
 | **Obligations** | Extracts what people asked of each other. `what do I need to do?`, closed with a ✅ reaction or `/resolve` |
 | **Conversation memory** | Follow-ups keep context, per person and per place, and stop being recalled if you lose access to a channel behind them |
-| **Personal facts** | *my name is …*, *call me Leo*, *my email is …*, *my phone is …*, *my wallet is 0x…*, *reply in Portuguese*. Contact details and wallets are only ever shown in a DM to you |
+| **Personal facts** | *my name is …*, *call me Leo*, *my email is …*, *my phone is …*, *my wallet is 0x…*, *reply in Portuguese*, *prefiro ver em reais*. Contact details and wallets are only ever shown in a DM to you |
+| **Your currency beside USD** | Say *minha moeda é o real*, *my currency is euro* or *moeda preferida: BRL* — or *uso reais* in an introduction — and every dollar figure (BTC/ETH prices, balances, pools, Aave, portfolio totals, wallet activity, price and health alerts) also shows in that currency: *US$ 63.210,00 (R$ 345.126,60)*. Converted in code at the daily ECB reference rate; no rate, dollars only |
 | **Knows the time** | Every answering prompt carries the current date and time in UTC, so *today* and *recent* mean something |
 | **Answers in your language** | An answer is written in the language you asked in; a saved preferred language still wins |
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
@@ -69,6 +70,7 @@ mindmap
       ETH and BTC wallets
       Several facts in one message
       Replies in your language
+      Figures in your currency beside USD
       Knows the date and time
       Voice questions in a DM, off by default
     Outside the server
@@ -134,6 +136,7 @@ graph LR
     YOU --> Y1["call me Leo &middot; my email is ... &middot; my phone is ..."]
     YOU --> Y2["my wallet is 0x... then: my wallet balance?"]
     YOU --> Y3["answers in the language you asked in"]
+    YOU --> Y5["prefiro ver em reais &middot; prices and totals in USD and BRL"]
     YOU --> Y4["/forget &middot; /notifications"]
 
     P --> WHEN["On a schedule"]
@@ -187,6 +190,7 @@ Tell it yourself, in your own message. It never learns these from a channel.
 | Home address | `I live in …` / `moro em …` |
 | Birth date | `I was born on 21/06/1981` / `nasci em 21 de junho de 1981` |
 | Preferred language | `reply to me in Portuguese` |
+| Preferred currency | `my currency is euro` / `prefiro ver em reais` / `moeda preferida: BRL` |
 | Ethereum wallets (up to 5) | `my wallet is 0x…` |
 | Bitcoin wallets (up to 5) | `my btc wallet is bc1…` |
 
@@ -209,6 +213,17 @@ with several saved, `forget my wallet` alone asks which. `forget my wallets` /
 sums every saved wallet; a balance, DeFi, activity or alert question reads one, so with
 several saved it asks which (by their last four characters) unless you name it —
 `what's my wallet balance …45e0?`.
+
+With a preferred currency saved, every dollar figure the assistant reads for
+you is followed by the same figure in that currency, converted in code at the
+day's ECB reference rate (a footnote names the rate): prices, balances, pools,
+Aave, portfolio totals, wallet activity and alert messages. The currencies are
+the ones that rate is published for (AUD, BRL, CAD, CHF, CNY, EUR, GBP, JPY,
+MXN, … — an unsupported one such as the Argentine peso is refused with the
+list); US dollars as the preference means no second figure. If the rate
+cannot be read, the answer is in dollars alone. It is not private: like the
+language, it is shown in a channel too. `forget my currency` / `esqueça minha
+moeda` removes it, and saying another replaces it.
 
 In a direct message the assistant can also use your email, phone, address,
 birth date and wallets when answering you; in a channel it never sees them.

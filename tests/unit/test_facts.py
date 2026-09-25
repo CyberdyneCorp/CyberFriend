@@ -115,7 +115,7 @@ def _conforms(store: FakeFactStore) -> FactStore:
     return store
 
 
-def _migration(name: str = "0022_richer_facts.py") -> ModuleType:
+def _migration(name: str = "0027_preferred_currency.py") -> ModuleType:
     """The migration that currently defines which kinds the table accepts.
 
     Points at the latest one to widen the constraint, not at the first: 0014
@@ -144,6 +144,7 @@ def test_the_set_of_facts_is_closed() -> None:
         "full_name",
         "home_address",
         "birth_date",
+        "preferred_currency",
     }
 
 

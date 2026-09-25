@@ -54,6 +54,7 @@ from chatmemory.adapters.web.limits import (
     RateLimiter,
 )
 from chatmemory.app.authorization import CredentialScope, ToolEffect
+from chatmemory.app.currency import UsdRates
 
 log = structlog.get_logger()
 
@@ -126,6 +127,7 @@ def build_chain_tools(
     *,
     client: httpx.AsyncClient | None = None,
     prices: PriceLookup | None = None,
+    rates: UsdRates | None = None,
 ) -> ChainTools:
     """Assemble the wallet provider, or nothing when no endpoint is configured."""
     settings = config or ChainToolsConfig()
@@ -156,6 +158,7 @@ def build_chain_tools(
         CallBudget(settings.max_calls_per_run),
         RateLimiter(settings.min_interval_seconds),
         prices=price_lookup,
+        rates=rates,
     )
     positions = PositionsProvider(
         DEPLOYMENTS,
@@ -167,6 +170,8 @@ def build_chain_tools(
         transport=settings.transport,
         # Only for ether in a portfolio, when a chain's Aave oracle is down.
         prices=price_lookup,
+        # The second figure in the asker's preferred currency, if they have one.
+        rates=rates,
     )
     return ChainTools(
         servers=(

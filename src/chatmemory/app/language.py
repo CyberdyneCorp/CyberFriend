@@ -44,6 +44,9 @@ _PORTUGUESE = frozenset({
     "ola", "olá", "bom", "boa", "dia", "tarde", "noite", "favor",
     "funcionalidades", "comandos", "ferramentas", "carteira", "saldo",
     "quanto", "tenho",
+    # A currency preference ("prefiro ver em reais", "moeda preferida: BRL")
+    # has no other marker, and its confirmation must not come back in English.
+    "prefiro", "moeda", "preferida", "reais", "uso",
 })
 
 _ENGLISH = frozenset({
