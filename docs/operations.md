@@ -124,6 +124,10 @@ Asks *addressed to* the person are deleted, unlike mentions. An obligation
 report that still lists "Alice, can you review this" has not withdrawn Alice
 from anything.
 
+Feature requests (`/suggest`) are deleted too, by a trigger on
+`person_opt_out` (migration 0030), and a suggestion from an opted-out person is
+dropped before it is stored; the command tells them so.
+
 Voice questions are refused for an opted-out person: nothing is downloaded and
 nothing is sent to the transcription endpoint. Their `media_usage` rows (seconds
 per month, no content) are kept, because dropping them would hand the month's
@@ -805,6 +809,37 @@ A person whose direct messages are closed has **all** their tasks stopped, with
 the reason shown in `/schedule list`. The obstacle is their settings rather than
 any one question, and retrying the rest would be knocking on a door already
 shut. Removing a person's data deletes their tasks with it.
+
+## Feature requests
+
+`/suggest text:<...>` records a suggestion in the person's own words;
+`/suggestions` lists theirs, newest first, with each one's status. Both are
+registered on every deployment and answer privately. Rows live in
+`feature_request` (migration 0030): the text, its language, how it arrived
+(`command` today), the guild and channel ids (none for a DM), a status and the
+triage fields the admin console will set. No message text, channel name or
+surrounding conversation is stored.
+
+- **Refused before storing**: text over 1000 characters, and text containing
+  an email address (also spelled out, "leo at gmail dot com" or "leo[at]..."),
+  a phone number (from eight digits when a word like "tel" or "whatsapp" is
+  there, otherwise ten; dates and times do not count), an ETH or BTC address,
+  a "@handle" or "name#1234" given with where to find it, or a statement of
+  the person's own contact details. Text is NFKC-normalised first, so
+  fullwidth forms count. The reply names what was found.
+- **Idempotent**: the same text (case, whitespace and punctuation ignored) from
+  the same person is one row, and resubmitting answers with its number.
+- **Five a day**: at most five accepted per person in any rolling 24 hours,
+  enforced inside the insert while holding a lock on the person's row, so
+  parallel submissions are counted one after another.
+- **Status news is opt-in**: the acknowledgement asks whether to DM them when
+  the status changes; nothing is stored unless they press Yes. The sweep that
+  sends those DMs arrives with the admin triage screen.
+- **Privacy**: nothing is written for an opted-out person, not even their
+  name; an opt-out deletes a person's suggestions in the same
+  transaction, and deleting the person cascades. The delete is in
+  `purge_person_derived` (added by 0030), so self-service erasure reaches
+  suggestions as well.
 
 ## Position alerts
 

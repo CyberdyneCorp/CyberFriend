@@ -1,11 +1,13 @@
 ## 1. Store and commands
 
-- [ ] 1.1 Migration 0028 `feature_request`; add its delete to `purge_person_derived`; insert guard for opted-out people
-- [ ] 1.2 Port + Postgres adapter; `FeatureRequestService` (submit, list_own, rate limit, dedupe, contact refusal)
-- [ ] 1.3 `/suggest` and `/suggestions` in the command table; update `commands.json` snapshot
-- [ ] 1.4 Acknowledgement with notify [Yes]/[No]
-- [ ] 1.5 Tests: duplicate is idempotent; email/phone/wallet refused; 6th in 24h refused; opted-out refused; opt-out and erasure purge
-- [ ] 1.6 e2e: FakeDiscord `/suggest` then `/suggestions` against real Postgres
+- [x] 1.1 Migration 0028 `feature_request`; add its delete to `purge_person_derived`; insert guard for opted-out people
+  (shipped as 0030, chained after 0029; it adds `DELETE FROM feature_request` to `purge_person_derived` from 0028, with no trigger of its own; downgrade restores the 0028 body)
+- [x] 1.2 Port + Postgres adapter; `FeatureRequestService` (submit, list_own, rate limit, dedupe, contact refusal)
+- [x] 1.3 `/suggest` and `/suggestions` in the command table; update `commands.json` snapshot
+- [x] 1.4 Acknowledgement with notify [Yes]/[No]
+- [x] 1.5 Tests: duplicate is idempotent; email/phone/wallet refused; 6th in 24h refused (also under parallel submits); opted-out refused; opt-out purge and person-row cascade
+  (erasure through `purge_person_derived` is covered too)
+- [x] 1.6 e2e: FakeDiscord `/suggest` then `/suggestions` against real Postgres
 
 ## 2. Natural language
 

@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.discord import alerts as discord_alerts
 from chatmemory.adapters.discord import bot as discord_bot
+from chatmemory.adapters.discord import suggestions as discord_suggestions
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app import alert_requests, ask, catchup, localise, voice
 from chatmemory.app.asks import obligations
@@ -75,6 +76,7 @@ _COMMAND_MENTION = re.compile(r"(?:^|[\s`(*])/([a-z][a-z0-9_-]{1,31})\b")
 _FIXED_REPLY_MODULES: tuple[ModuleType, ...] = (
     discord_bot,
     discord_alerts,
+    discord_suggestions,
     alert_requests,
     ask,
     catchup,

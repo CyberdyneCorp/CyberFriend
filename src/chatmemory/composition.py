@@ -112,6 +112,7 @@ from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestStore
 from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
@@ -163,6 +164,7 @@ from chatmemory.app.currency import PreferredCurrencies
 from chatmemory.app.decisions.answering import DecisionAnswerService
 from chatmemory.app.decisions.model import DecisionPolicy
 from chatmemory.app.facts import PersonalFactsService
+from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.notifications import (
     NotificationDelivery,
@@ -1068,6 +1070,15 @@ def build_alert_requests(
         sweep_seconds=settings.alert_sweep_seconds,
         clock=clock,
     )
+
+
+def build_feature_requests(engine: AsyncEngine, clock: Clock = utc_now) -> FeatureRequestService:
+    """`/suggest` and `/suggestions`, over the answer stack's engine.
+
+    Not behind a setting: a suggestion is the person's own words given on
+    purpose, and the command that takes them costs nothing to have.
+    """
+    return FeatureRequestService(PostgresFeatureRequestStore(engine), clock=clock)
 
 
 def build_schedules(settings: Settings, engine: AsyncEngine) -> ScheduleService | None:
