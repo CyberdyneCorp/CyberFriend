@@ -1222,12 +1222,18 @@ def build_corpus_store(settings: Settings, engine: AsyncEngine) -> PostgresStore
 
 
 def build_trace_withdrawal(
-    settings: Settings, engine: AsyncEngine
+    settings: Settings,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> TraceWithdrawal | None:
     """The deletion side of tracing, for the ingest process.
 
     Built from the same three settings as the exporter, because a deployment
     that exports must withdraw and one that does not has nothing to withdraw.
+    `transport` replaces httpx's default network transport. The ingest
+    entrypoint passes none; the end-to-end harness passes FakeWeb's, which
+    without this parameter it could not, so no test could see a trace being
+    withdrawn.
     """
     if not settings.tracing_enabled or not settings.langfuse_host:
         return None
@@ -1240,6 +1246,7 @@ def build_trace_withdrawal(
             public_key=settings.langfuse_public_key.get_secret_value(),
             secret_key=settings.langfuse_secret_key.get_secret_value(),
             timeout=settings.tracing_timeout_seconds,
+            transport=transport,
         ),
     )
 
