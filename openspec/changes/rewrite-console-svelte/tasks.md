@@ -1,8 +1,8 @@
 ## 1. CI gate for the current console
 
-- [ ] 1.1 Add a `console` job to `.github/workflows/ci.yml`: `npm ci`, `npm test`, `npm run build`
-- [ ] 1.2 Widen `no-browser-storage.test.ts` to `.svelte` and `.svelte.ts`, and strip HTML comments
-- [ ] 1.3 Test: a `.svelte` fixture that uses `localStorage` fails the guard
+- [x] 1.1 Add a `console` job to `.github/workflows/ci.yml`: `npm ci`, `npm test`, `npm run build`
+- [x] 1.2 Widen `no-browser-storage.test.ts` to `.svelte` and `.svelte.ts`, and strip HTML comments
+- [x] 1.3 Test: a `.svelte` fixture that uses `localStorage` fails the guard
 
 ## 2. Svelte foundation (`console-svelte/`)
 
