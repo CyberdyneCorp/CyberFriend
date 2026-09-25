@@ -38,7 +38,7 @@ async def test_the_capability_description_is_remembered() -> None:
         async def answer(self, q: object) -> object:
             raise AssertionError("self-description should answer this itself")
 
-    front = SelfDescriptionAnswerService(Fallback(), external_tools=[])  # type: ignore[arg-type]
+    front = SelfDescriptionAnswerService(Fallback())  # type: ignore[arg-type]
     answer = await front.answer(question(text="what can you do?"))
 
     assert answer.consulted_channels == frozenset()

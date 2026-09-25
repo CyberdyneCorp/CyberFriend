@@ -8,6 +8,7 @@ and every question another route owns have to stay unclaimed.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -161,7 +162,8 @@ def test_the_decision_example_the_bot_offers_is_one_it_answers() -> None:
     """"What can you do" suggests a decision question in both languages; each
     has to reach the decision route, or the bot advertises a lookup it skips."""
     for language, words in CAPABILITIES.items():
-        offered = [a for a in words["asks"] if "decid" in a]
+        quoted = [q for line in words["conversations"] for q in re.findall(r"`([^`]+)`", line)]
+        offered = [a for a in quoted if "decid" in a]
         assert offered, f"no decision example in {language}"
         for example in offered:
             asked = decision_question(example, NOW, TZ)

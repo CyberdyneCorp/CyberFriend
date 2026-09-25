@@ -104,14 +104,14 @@ def test_a_technical_question_is_never_called_english_for_its_nouns(text: str) -
 def test_the_reply_is_written_in_portuguese_when_asked_in_portuguese() -> None:
     described = describe_capabilities(ALL_TOOLS, language=Language.PORTUGUESE)
     assert "Eu sou o CyberFriend" in described
-    assert "Comandos:" in described
+    assert "**Comandos**" in described
     assert "I'm CyberFriend" not in described
 
 
 def test_the_reply_is_english_when_asked_in_english() -> None:
     described = describe_capabilities(ALL_TOOLS, language=Language.ENGLISH)
     assert "I'm CyberFriend" in described
-    assert "Commands:" in described
+    assert "**Commands**" in described
 
 
 def test_every_command_is_listed() -> None:
@@ -134,9 +134,10 @@ def test_capabilities_are_named_by_what_they_do_not_by_their_server() -> None:
     server and not a thing anybody can ask for."""
     described = describe_capabilities(ALL_TOOLS)
     assert "chain_balances" not in described
-    assert "wallet balances on Ethereum, Base and Arbitrum" in described
+    assert "Balances on Ethereum, Base and Arbitrum" in described
     assert "defi_positions" not in described
-    assert "Uniswap v3/v4 liquidity positions and Aave" in described
+    assert "Uniswap v3/v4 liquidity positions" in described
+    assert "Aave supplies, borrows and health factor" in described
     assert "serpapi" not in described
     assert "the web (Wikipedia, Google)" in described
 

@@ -459,7 +459,7 @@ lists the common ones. The settings worth knowing:
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ANSWER_TIMEZONE` | The calendar "ontem" and "last week" are read in (IANA name, default `America/Sao_Paulo`) |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations and decisions are extracted |
-| `DECISION_MIN_SIMILARITY` | How close a stored decision must be to the question's topic to be listed (cosine, default 0.4); below it the question is answered by retrieval. Not yet declared in `docker-compose.yml`, so a Coolify deployment runs the default |
+| `DECISION_MIN_SIMILARITY` | How close a stored decision must be to the question's topic to be listed (cosine, default 0.4); below it the question is answered by retrieval. |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
 | `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Alerts (range, range edge, health factor, BTC/ETH price), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
 | `VOICE_QUESTIONS_ENABLED`, `MEDIA_API_KEY` | Voice messages in a DM, transcribed at `MEDIA_BASE_URL` with `MEDIA_AUDIO_MODEL`. Off by default; enabling without a key stops the bot at boot |

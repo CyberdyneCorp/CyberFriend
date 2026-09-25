@@ -57,3 +57,59 @@ The reply SHALL be written in the language the question was asked in.
 #### Scenario: Asked in English
 - WHEN someone asks in English what the assistant can do
 - THEN the reply SHALL be in English
+
+### Requirement: Every running feature is described, and only those
+
+The reply SHALL describe each feature this deployment runs, with an example
+question in the reply's language, and SHALL NOT describe a feature that is
+switched off. It SHALL cover: questions about channels with citations,
+catch-up, what someone said, decisions, what was asked of the asker (where ask
+extraction is on), personal facts (where the process keeps them: preferred and
+full name, email, phone, home address, birth date, preferred language, several
+ETH and BTC wallets, several facts in one message, showing and forgetting
+them), wallet balances, Uniswap v3/v4 positions, Aave supplies, borrows and
+health factor, the portfolio total and wallet activity (where the wallet tools
+are registered), market prices (per registered market source), alerts and
+`/alert list|delete` (where alerts are available), scheduled questions (where
+they are on), voice questions in a direct message (where they are on), web and
+other external lookups (where registered), and the audience rule. Every
+example question SHALL reach the route that answers it; a feature whose route
+does not recognise the reply's language SHALL NOT be offered in that language.
+
+#### Scenario: A route that only understands English
+- WHEN ask extraction is on and someone asks in Portuguese what the assistant
+  can do
+- THEN the reply SHALL NOT offer Portuguese questions about what was asked of
+  them, because the obligation route only recognises English
+
+#### Scenario: Everything on, asked in Portuguese
+- WHEN a deployment with wallet tools, alerts and voice on is asked "o que você
+  pode fazer?" in a direct message
+- THEN the reply SHALL list the crypto, alerts, decisions and voice sections
+  in Portuguese, each with an example question
+
+#### Scenario: A feature switched off
+- WHEN a feature's setting is off, or the tool it needs is not registered
+  (such as wallet tools without an Infura key)
+- THEN the reply SHALL NOT mention that feature
+
+#### Scenario: A bare mention
+- WHEN someone mentions the assistant with no question
+- THEN the reply SHALL be the same description, in the person's saved
+  language, from the same configuration
+
+#### Scenario: Asked in a direct message
+- WHEN the question is asked in a direct message
+- THEN the reply SHALL state the audience rule without telling the person to
+  ask in a direct message
+
+### Requirement: The reply fits Discord
+
+The reply SHALL be laid out as short sections separated by blank lines, SHALL
+be answered without a model call, and SHALL be deliverable as messages of at
+most 2000 characters each, with no section split across two messages.
+
+#### Scenario: Everything on
+- WHEN every feature is on
+- THEN each message sent SHALL be at most 2000 characters
+- AND each section SHALL arrive whole in one message

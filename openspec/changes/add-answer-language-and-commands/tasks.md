@@ -31,3 +31,16 @@
 
 - [ ] 5.1 Deploy
 - [ ] 5.2 Confirm a Portuguese question is answered in Portuguese
+
+## 6. Complete capabilities
+
+- [x] 6.1 Describe every running feature in short sections, EN and PT, each
+      with example questions, each shown only where its feature is on
+- [x] 6.2 One `Capabilities` value built from settings and registered tools,
+      shared by "what can you do?" and a bare mention
+- [x] 6.3 Keep every message within Discord's 2000-character limit, split
+      between sections
+- [x] 6.4 Test: a table of setting -> phrase, with everything on and each off
+- [x] 6.5 Test: the alert, fact, catch-up and decision examples reach their routes
+- [x] 6.6 E2E: a Portuguese DM with features on lists crypto, alerts,
+      decisions and voice, and a switched-off feature is not mentioned

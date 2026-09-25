@@ -26,7 +26,7 @@ from chatmemory.app.reasoning.service import (
 )
 from chatmemory.app.reasoning.verdicts import Verdict
 from chatmemory.app.routing import explicit_web_search, mcp_change_request
-from chatmemory.app.self_description import SelfDescriptionAnswerService
+from chatmemory.app.self_description import Capabilities, SelfDescriptionAnswerService
 from tests.unit.test_composition import FakeChat
 from tests.unit.test_loop_invocation import ScriptedSurface
 from tests.unit.test_reasoning_fixed import (
@@ -141,7 +141,8 @@ def test_naming_the_web_is_not_a_request_to_search_it() -> None:
 async def test_a_self_description_front_does_not_swallow_a_web_request() -> None:
     surface = ScriptedSurface(WEB, completion=WANTS_WEB, outcome=web_outcome())
     front = SelfDescriptionAnswerService(
-        service(surface, FakeRetrieval([[evidence(1)]])), external_tools=["serpapi:search"]
+        service(surface, FakeRetrieval([[evidence(1)]])),
+        Capabilities(external_tools=("serpapi:search",)),
     )
 
     answer = await front.answer(question(text="can you search the web for python 3.14 news"))
@@ -270,7 +271,7 @@ async def test_asking_chat_to_add_an_mcp_server_is_refused_and_points_to_the_con
     surface = ScriptedSurface(WEB, completion=WANTS_WEB, outcome=web_outcome())
     retrieval = FakeRetrieval([[evidence(1)]])
     front = SelfDescriptionAnswerService(
-        service(surface, retrieval), external_tools=["serpapi:search"]
+        service(surface, retrieval), Capabilities(external_tools=("serpapi:search",))
     )
 
     answer = await front.answer(

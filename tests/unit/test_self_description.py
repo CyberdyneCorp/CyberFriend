@@ -9,6 +9,7 @@ from chatmemory.app.self_description import (
     ALWAYS_AVAILABLE,
     INDEX,
     UNINDEX,
+    Capabilities,
     SelfDescriptionAnswerService,
     describe_capabilities,
 )
@@ -177,7 +178,7 @@ def _in_channel(text: str) -> Question:
 async def test_a_dm_is_not_told_about_guild_only_commands() -> None:
     """Asked in a DM, the reply named `/index` and `/unindex`, which Discord
     only lists in the server: a person told to pick them found no such entry."""
-    service = SelfDescriptionAnswerService(Recording(), commands=ALWAYS_AVAILABLE)
+    service = SelfDescriptionAnswerService(Recording(), Capabilities(commands=ALWAYS_AVAILABLE))
 
     in_dm = (await service.answer(q("what can you do?"))).text
     in_channel = (await service.answer(_in_channel("what can you do?"))).text

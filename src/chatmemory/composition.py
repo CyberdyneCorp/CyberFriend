@@ -205,6 +205,7 @@ from chatmemory.app.self_description import (
     ALWAYS_AVAILABLE,
     NOTIFICATIONS,
     SCHEDULED,
+    Capabilities,
     Command,
     SelfDescriptionAnswerService,
 )
@@ -256,6 +257,10 @@ class AnswerStack:
     reasoning: ReasoningAnswerService
     obligations: ObligationService
     federation: FederatedTools | None = None
+    #: What this deployment says it can do. Carried so the Discord surface
+    #: describes the same configuration for a bare mention as `answers` does
+    #: for "what can you do?".
+    capabilities: Capabilities = Capabilities()
 
 
 def declared_capabilities(settings: Settings) -> frozenset[ModelCapability] | None:
@@ -985,6 +990,30 @@ def available_commands(settings: Settings) -> tuple[Command, ...]:
     return tuple(commands)
 
 
+def deployment_capabilities(
+    settings: Settings, external_tools: Sequence[str] = (), *, personal_facts: bool = False
+) -> Capabilities:
+    """What "what can you do?" describes for this deployment.
+
+    `external_tools` are the registered tool names, not the settings that
+    asked for them: a wallet tool switched on without an Infura key is not
+    registered, and must not be promised.
+    """
+    return Capabilities(
+        tuple(external_tools),
+        # Only the commands this deployment actually registers. Listing
+        # `/notifications` where the feature is off tells somebody to use a
+        # command Discord will not show them.
+        available_commands(settings),
+        personal_facts=personal_facts,
+        # Without extraction there are no asks, and "what do I need to do?"
+        # would only ever be answered that nothing was asked.
+        obligations=settings.ask_extraction_enabled,
+        # Whether a voice message in a DM is heard.
+        voice_questions=settings.voice_questions_enabled,
+    )
+
+
 def _infura_key(settings: Settings) -> str:
     return settings.infura_key.get_secret_value().strip() if settings.infura_key else ""
 
@@ -1616,6 +1645,11 @@ async def build_answer_stack(
         tracer=tracer,
         clock=edges.clock,
     )
+    capabilities = deployment_capabilities(
+        settings,
+        sorted(federation.federation.permits) if federation is not None else (),
+        personal_facts=personal_facts,
+    )
     return AnswerStack(
         engine=engine,
         search=search,
@@ -1639,16 +1673,9 @@ async def build_answer_stack(
                 ),
                 clock=edges.clock,
             ),
-            external_tools=(
-                sorted(federation.federation.permits) if federation is not None else ()
-            ),
-            personal_facts=personal_facts,
-            # Only the commands this deployment actually registers. Listing
-            # `/notifications` where the feature is off tells somebody to use
-            # a command Discord will not show them.
-            commands=available_commands(settings),
-            voice_questions=settings.voice_questions_enabled,
+            capabilities,
         ),
+        capabilities=capabilities,
         reasoning=reasoning,
         obligations=obligations,
         federation=federation,
