@@ -319,8 +319,9 @@ class PositionsProvider:
             redact=self._redact,
         )
         wallets = [await reader.read(address) for address in cleared.addresses]
-        conversion = await asker_conversion(self._rates, cleared.question)
-        return render_portfolio(wallets, portfolio_language(cleared.question), conversion)
+        language = portfolio_language(cleared.question)
+        conversion = await asker_conversion(self._rates, cleared.question, language)
+        return render_portfolio(wallets, language, conversion)
 
     async def activity(self, cleared: Cleared) -> str:
         """What the cleared wallet did. The span is the cleared question's."""
@@ -339,14 +340,15 @@ class PositionsProvider:
             chains, client, timeout_seconds=self._timeout, redact=self._redact
         )
         found, known = await reader.read(cleared.address, window)
+        language = activity_language(cleared.question)
         return render_activity(
             cleared.address,
             window,
             found,
             known,
-            activity_language(cleared.question),
+            language,
             private=cleared.private,
-            conversion=await asker_conversion(self._rates, cleared.question),
+            conversion=await asker_conversion(self._rates, cleared.question, language),
         )
 
     def _redact(self, text: str) -> str:

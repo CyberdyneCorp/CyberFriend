@@ -905,7 +905,10 @@ A person can say which currency they want money shown in besides US dollars
 (*minha moeda é o real*, *my currency is euro*, *moeda preferida: BRL*, or
 *uso reais* inside an introduction). It is stored as an ISO 4217 code, in the
 `preferred_currency` kind migration 0027 adds; it is not private, and is shown
-in a channel like the preferred language.
+in a channel like the preferred language. *Uso* / *I use* takes a currency
+name, never a bare code or a coin: *I use PHP* and *eu uso bitcoin* are
+ordinary messages. A code works where only money is meant (*prefiro ver em
+BRL*, *moeda preferida: BRL*).
 
 Every figure the assistant reads is in dollars. With a preference saved, each
 dollar figure it renders — a BTC/ETH price, a balance, a pool, an Aave

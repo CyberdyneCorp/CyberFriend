@@ -9,6 +9,7 @@ may reach. A failing rate host leaves the answer in dollars alone.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
@@ -16,12 +17,14 @@ import httpx
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from tests.e2e.harness.chain import V3Position
 from tests.e2e.harness.conversation import E2EBot
 from tests.e2e.harness.process import e2e_settings, start
 from tests.e2e.harness.web import NetworkSeal
 from tests.e2e.test_portfolio import (
     AAVE_NET_USD,
     BASE_HOST,
+    WALLET,
     WALLET_USD,
     base_chain,
     pt_usd,
@@ -32,6 +35,8 @@ FX_HOST = "api.frankfurter.dev"
 COINGECKO = "api.coingecko.com"
 BRL = Decimal("5.46")
 BTC_USD = Decimal("63210")
+LP_TOKEN = 4242
+LP_POOL = "0x" + "d" * 40
 
 
 def pt_brl(value: Decimal) -> str:
@@ -116,6 +121,26 @@ async def test_the_bitcoin_price_is_shown_in_dollars_and_reais(market_bot: E2EBo
     assert len(fx_calls) == 1
 
 
+async def test_a_cached_price_is_converted_again_for_each_asker(market_bot: E2EBot) -> None:
+    """The second question inside the quote's freshness reads no new price, and
+    still gets the figure its own asker wants: reais for Leo, dollars for Ana."""
+    bot = market_bot
+    leo, ana = bot.person("Leo"), bot.person("Ana")
+    await bot.dm(leo).say("prefiro ver em reais")
+    bot.web.script(COINGECKO, bitcoin)
+    bot.web.script(FX_HOST, fx)
+    converted = f"Bitcoin (BTC): 63,210 USD ({pt_brl(BTC_USD * BRL)})"
+
+    first = await bot.dm(leo).say("qual o preço do bitcoin?")
+    again = await bot.dm(leo).say("e o preço do bitcoin agora?")
+    other = await bot.dm(ana).say("qual o preço do bitcoin?")
+
+    assert converted in first.text and converted in again.text
+    assert "Bitcoin (BTC): 63,210 USD" in other.text
+    assert "R$" not in other.text, "one asker's currency never reaches another"
+    assert len([r for r in bot.web.calls if r.url.host == COINGECKO]) == 1, "served cached"
+
+
 async def test_with_the_rate_host_failing_the_price_is_in_dollars_only(
     market_bot: E2EBot,
 ) -> None:
@@ -185,3 +210,30 @@ async def test_forgetting_the_currency_by_name_removes_only_it(bot: E2EBot) -> N
     assert turn.text == "Pronto. Não tenho mais sua moeda preferida."
     facts = await bot.facts_of(leo)
     assert "preferred_currency" not in facts and facts["preferred_name"] == "Leo"
+
+
+async def test_liquidity_and_aave_positions_show_both_figures(bot: E2EBot) -> None:
+    """The positions answer, not only the portfolio: every dollar value in the
+    Uniswap and Aave lines is followed by reais, and the rate is read once."""
+    leo = bot.person("Leo")
+    dm = bot.dm(leo)
+    await dm.say("prefiro ver em reais")
+    chain = base_chain()
+    chain.v3[LP_TOKEN] = V3Position(WALLET, LP_POOL, -199560, -195770, 10**15)
+    chain.ticks[LP_POOL] = -197404
+    bot.web.script(BASE_HOST, chain.handle)
+    bot.web.script(FX_HOST, fx)
+
+    turn = await dm.say(f"quais as posições de liquidez e no Aave da carteira {WALLET}?")
+
+    assert turn.edge() == "CHAIN" and not turn.searched
+    collateral, debt = Decimal("16974.73"), Decimal("15221.12")
+    assert (
+        f"Collateral ${collateral:,.2f} ({pt_brl(collateral * BRL)}) · "
+        f"Debt ${debt:,.2f} ({pt_brl(debt * BRL)})"
+    ) in turn.text
+    assert re.search(r"Holds: .* ≈ \$[\d,.]+ \(R\$ [\d.]+,\d\d\)", turn.text), "the LP value"
+    assert re.search(r"Uncollected: .* ≈ \$[\d,.]+ \(R\$ [\d.]+,\d\d\)", turn.text)
+    assert re.search(r"0\.8386 WETH ≈ \$[\d,.]+ \(R\$ [\d.]+,\d\d\)", turn.text), "an asset line"
+    assert turn.text.count("BRL pela taxa de referência diária") == 1, "one footnote"
+    assert len([r for r in bot.web.calls if r.url.host == FX_HOST]) == 1, "one rate per answer"

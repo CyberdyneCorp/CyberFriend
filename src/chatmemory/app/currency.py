@@ -173,17 +173,22 @@ async def conversion_to(
     return Conversion(code, rate, language)
 
 
-async def asker_conversion(rates: UsdRates | None, question: str) -> Conversion | None:
+async def asker_conversion(
+    rates: UsdRates | None, question: str, language: Language | None = None
+) -> Conversion | None:
     """The current asker's conversion, for a tool rendering its answer.
 
     The preference is read from the asker's facts for this answer (see
     `app.asker.answering_with_facts`), never from anything the model wrote;
-    outside an answer there are none, and nothing is added.
+    outside an answer there are none, and nothing is added. `language` is the
+    one the renderer already settled on, when it has its own rule: the second
+    figure and its footnote must read like the rest of the answer.
     """
     facts = current_facts()
     if facts is None or facts.preferred_currency is None:
         return None
-    return await conversion_to(facts.preferred_currency, rates, figure_language(question))
+    written = language if language is not None else figure_language(question)
+    return await conversion_to(facts.preferred_currency, rates, written)
 
 
 def figure_language(question: str) -> Language:

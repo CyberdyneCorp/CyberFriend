@@ -19,6 +19,23 @@ convert a figure.
 - WHEN that person asks "quanto eu tenho no total?"
 - THEN every total, chain and section value SHALL show both figures
 
+#### Scenario: Liquidity and Aave positions in reais
+- WHEN that person asks for the liquidity and Aave positions of a wallet
+- THEN each position's holdings and uncollected fees, each supplied and
+  borrowed asset, and the collateral and debt SHALL show both figures, with one
+  rate footnote for the whole answer
+
+#### Scenario: The same notation throughout
+- WHEN the question is in neither language by detection but the answer is
+  written in Portuguese ("e no total?")
+- THEN the converted figure and the rate footnote SHALL be written in
+  Portuguese too
+
+#### Scenario: A cached price
+- WHEN a second asker asks for the same price while the quote is still cached
+- THEN no new price SHALL be read, and the figure SHALL be converted for that
+  asker's own preference, or not at all
+
 #### Scenario: Dollars as the preference
 - WHEN the preferred currency is USD, or none is saved
 - THEN no second figure SHALL be shown and no rate SHALL be read

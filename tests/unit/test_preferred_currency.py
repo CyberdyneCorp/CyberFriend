@@ -8,19 +8,43 @@ and that a rate that cannot be read leaves an answer in dollars alone.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import httpx
 import pytest
 
-from chatmemory.adapters.chain.positions_render import dollars, usd
+from chatmemory.adapters.chain.activity import ChainActivity, Recognised
+from chatmemory.adapters.chain.activity_reader import ActivityReader
+from chatmemory.adapters.chain.activity_render import render_activity
+from chatmemory.adapters.chain.clearance import Cleared
+from chatmemory.adapters.chain.deployments import DEPLOYMENTS
+from chatmemory.adapters.chain.portfolio import (
+    ChainPortfolio,
+    ChainWallet,
+    Held,
+    WalletPortfolio,
+)
+from chatmemory.adapters.chain.portfolio_reader import PortfolioReader
+from chatmemory.adapters.chain.positions import ChainLending, ChainLiquidity
+from chatmemory.adapters.chain.positions_provider import LIQUIDITY_TOOL, PositionsProvider
+from chatmemory.adapters.chain.positions_render import (
+    dollars,
+    render_lending,
+    render_liquidity,
+    usd,
+)
+from chatmemory.adapters.chain.provider import WALLET_TOOL, PricedAsset, WalletProvider
+from chatmemory.adapters.chain.rpc import ChainReader
+from chatmemory.adapters.chain.tokens import BASE, ETHEREUM
+from chatmemory.adapters.chain.uniswap import UniswapReader
 from chatmemory.adapters.market.coingecko import CoinGeckoProvider
 from chatmemory.adapters.market.frankfurter import FrankfurterProvider
 from chatmemory.adapters.market.quotes import Quote, Timing
 from chatmemory.adapters.market.usd_rates import UsdReferenceRates
-from chatmemory.adapters.web.limits import CallBudget
-from chatmemory.app.alerts import evaluate, render_alert
+from chatmemory.adapters.web.limits import CallBudget, RateLimiter
+from chatmemory.app.alerts import AlertRunner, evaluate, render_alert
 from chatmemory.app.asker import AskerFacts, answering_with_facts
 from chatmemory.app.currency import (
     Conversion,
@@ -31,18 +55,45 @@ from chatmemory.app.currency import (
     money,
     rate_note,
 )
-from chatmemory.app.egress import ISO_4217_CODES
+from chatmemory.app.egress import (
+    ISO_4217_CODES,
+    AuthorizedQuery,
+    EgressGuard,
+    EgressRequest,
+    ProvenancedQuery,
+    QueryOrigin,
+    authorized,
+)
 from chatmemory.app.fact_replies import fact_set_reply, facts_shown_reply
 from chatmemory.app.facts import FactOutcome, PersonalFactsService, visible_facts
 from chatmemory.app.language import Language
 from chatmemory.app.routing import FactAction, fact_intent
+from chatmemory.app.wallet_activity import ActivityWindow
+from chatmemory.composition import build_alert_runner
 from chatmemory.domain.currency import SUPPORTED_CODES, currency_code
 from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.ports.alerts import AlertState
 from chatmemory.ports.facts import FactKind, FactRejection, InvalidFact, PersonalFact
 from chatmemory.ports.memory import ConversationLocation
+from tests.unit.activity_rows import WALLET, base_week
 from tests.unit.test_alert_kinds import NOW, btc, price_alert
+from tests.unit.test_defi_positions import OWNER
+from tests.unit.test_defi_positions import _asset as lending_asset
+from tests.unit.test_defi_positions import _position as lp_position
 from tests.unit.test_facts import FakeFactStore
+from tests.unit.test_position_alerts import (
+    FakeMessenger,
+    FakeObserver,
+    MemoryStore,
+    health_alert,
+    hf,
+)
+from tests.unit.test_position_alerts_wiring import _Messenger as AlertMessenger
+from tests.unit.test_position_alerts_wiring import settings as alert_settings
+from tests.unit.test_wallet_activity import BASE_KNOWN, WINDOW
+from tests.unit.test_wallet_activity import _chains as activity_chains
+from tests.unit.test_wallet_balances import ADDRESS as ETH_ADDRESS
+from tests.unit.test_wallet_balances import _rpc as rpc_client
 
 EN, PT = Language.ENGLISH, Language.PORTUGUESE
 LEO = PersonRef("discord", 7)
@@ -358,3 +409,293 @@ async def test_without_a_rate_the_crypto_price_is_in_dollars_only() -> None:
     line = "Bitcoin (BTC): 63,210 USD"
     with answering_with_facts(AskerFacts(LEO, preferred_currency="BRL")):
         assert await provider.annotate(line, _quote(), "qual o preço do bitcoin?") == line
+
+
+# --- the loose verbs -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["I use PHP", "eu uso PHP", "i use CAD", "uso CAD", "I use TRY",
+     "eu uso bitcoin", "i use ethereum", "uso ether"],
+)
+def test_use_with_a_code_or_a_coin_is_not_a_currency_preference(text: str) -> None:
+    """Regression: "I use PHP" was stored as the Philippine peso, and "eu uso
+    bitcoin" answered with the refusal meant for a currency."""
+    intent = fact_intent(text)
+    assert intent is None or intent.kind is not FactKind.PREFERRED_CURRENCY
+
+
+@pytest.mark.parametrize(
+    "text", ["Hi, my name is Leo and I use PHP", "Oi, me chamo Leo e uso ethereum"]
+)
+def test_an_introduction_that_uses_a_code_or_a_coin_saves_no_currency(text: str) -> None:
+    intent = fact_intent(text)
+    assert intent is not None
+    kinds = {kind for kind, _ in intent.sets} | {intent.kind}
+    assert FactKind.PREFERRED_CURRENCY not in kinds
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [("prefiro ver em BRL", "BRL"), ("show me prices in EUR", "EUR"),
+     ("minha moeda é bitcoin", "bitcoin")],
+)
+def test_codes_and_coins_are_still_read_where_only_money_is_meant(text: str, value: str) -> None:
+    intent = fact_intent(text)
+    assert intent is not None and (intent.kind, intent.value) == (
+        FactKind.PREFERRED_CURRENCY, value
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "others"),
+    [
+        ("Oi, me chamo Leo, moro no Brasil e uso reais. Qual o preço do bitcoin?",
+         {(FactKind.PREFERRED_NAME, "Leo"), (FactKind.HOME_ADDRESS, "Brasil")}),
+        ("Oi, me chamo Leo e uso reais no dia a dia", {(FactKind.PREFERRED_NAME, "Leo")}),
+    ],
+)
+def test_a_loose_currency_clause_may_run_on_inside_an_introduction(
+    text: str, others: set[tuple[FactKind, str]]
+) -> None:
+    """Regression: the currency was dropped silently when anything followed
+    it, while the other facts were saved and confirmed."""
+    intent = fact_intent(text)
+    assert intent is not None and intent.action is FactAction.SET_MANY
+    assert set(intent.sets) == {*others, (FactKind.PREFERRED_CURRENCY, "reais")}
+
+
+def test_moeda_preferida_starts_a_clause_of_its_own() -> None:
+    intent = fact_intent("Oi, me chamo Leo, moeda preferida: BRL")
+    assert intent is not None and intent.action is FactAction.SET_MANY
+    assert set(intent.sets) == {
+        (FactKind.PREFERRED_NAME, "Leo"), (FactKind.PREFERRED_CURRENCY, "BRL")
+    }
+
+
+def test_alone_a_loose_statement_must_end_at_the_currency() -> None:
+    assert fact_intent("uso reais para pagar o aluguel") is None
+
+
+# --- every dollar figure the chain tools render ------------------------------------
+
+REAIS_EN = Conversion("BRL", BRL_RATE, EN)
+
+
+def test_a_liquidity_position_values_holdings_and_fees_in_both() -> None:
+    text = render_liquidity(OWNER, [ChainLiquidity(BASE, positions=(lp_position(),))], REAIS_EN)
+    assert "≈ $5,400.00 (R$29,484.00)" in text
+    assert "Uncollected: 0.01 WETH + 5 USDC ≈ $32.00 (R$174.72)" in text
+
+
+def test_an_aave_account_values_totals_and_assets_in_both() -> None:
+    chain = ChainLending(
+        BASE,
+        collateral_usd=Decimal("1000"), debt_usd=Decimal("400"),
+        health_factor=Decimal("2"),
+        assets=(lending_asset("WETH", "1", "0", "2000"), lending_asset("USDC", "0", "400", "1")),
+    )
+    text = render_lending(OWNER, [chain], REAIS_EN)
+    assert "Collateral $1,000.00 (R$5,460.00) · Debt $400.00 (R$2,184.00)" in text
+    assert "1 WETH ≈ $2,000.00 (R$10,920.00)" in text
+    assert "400 USDC ≈ $400.00 (R$2,184.00)" in text
+
+
+def test_wallet_activity_values_each_line_in_both_and_names_the_rate() -> None:
+    chains = activity_chains(base_week())
+    text = render_activity(WALLET, WINDOW, chains, BASE_KNOWN, EN, private=True,
+                           conversion=REAIS_EN)
+    assert "Aave: supplied 0.0222090 ETH (≈ $88.84 · R$485.04)" in text
+    assert text.endswith(
+        "_BRL at the daily reference rate: 1 USD = 5.4600 BRL (Frankfurter/ECB)._"
+    )
+
+
+class _Priced:
+    async def usd_price(self, symbol: str) -> PricedAsset | None:
+        return PricedAsset(symbol, Decimal(2000), "2026-09-18T10:00Z")
+
+
+def _wallet_clearance(question: str) -> AuthorizedQuery:
+    return EgressGuard().authorize(
+        EgressRequest(
+            asker=LEO,
+            query=ProvenancedQuery(text=ETH_ADDRESS, origin=QueryOrigin.ASKER, question=question),
+            provider=WalletProvider.server,
+        )
+    )
+
+
+async def test_wallet_balances_value_native_and_pegged_tokens_in_both() -> None:
+    rates = FixedRates()
+    provider = WalletProvider(
+        [ChainReader(ETHEREUM, "key", client=rpc_client({0: hex(10**18), 1: hex(5 * 10**6)}))],
+        CallBudget(3),
+        prices=_Priced(),
+        rates=rates,
+    )
+    question = f"what does {ETH_ADDRESS} hold?"
+    with (
+        answering_with_facts(AskerFacts(LEO, preferred_currency="BRL")),
+        authorized(_wallet_clearance(question)),
+    ):
+        result = await provider.call_tool(WALLET_TOOL, {"address": ETH_ADDRESS})
+
+    assert "1.000000 ETH (~$2,000.00 · R$10,920.00 at 2026-09-18T10:00Z)" in result.text
+    assert "5.000000 USDC (~$5.00 · R$27.30)" in result.text
+    assert result.text.endswith("1 USD = 5.4600 BRL (Frankfurter/ECB)._")
+    assert rates.asked == ["BRL"]
+
+
+# --- the positions provider reads the asker's conversion -----------------------------
+
+
+def _positions(rates: FixedRates) -> PositionsProvider:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    return PositionsProvider(
+        DEPLOYMENTS, "key", CallBudget(3), RateLimiter(0), client=client, timeout_seconds=2,
+        rates=rates,
+    )
+
+
+async def test_a_positions_answer_carries_both_figures_and_one_footnote(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def liquidity(self: UniswapReader, owner: str) -> ChainLiquidity:
+        return ChainLiquidity(self._d.chain, positions=(lp_position(),))
+
+    monkeypatch.setattr(UniswapReader, "liquidity", liquidity)
+    rates = FixedRates()
+    with answering_with_facts(AskerFacts(LEO, preferred_currency="BRL")):
+        text = await _positions(rates).report(LIQUIDITY_TOOL, OWNER, "show my pools")
+
+    assert text.count("≈ $5,400.00 (R$29,484.00)") == len(DEPLOYMENTS)
+    assert text.count("1 USD = 5.4600 BRL") == 1, "the rate once, for the whole answer"
+    assert rates.asked == ["BRL"]
+
+
+async def test_activity_is_converted_in_the_language_the_answer_is_written_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def read(
+        self: ActivityReader, address: str, window: ActivityWindow
+    ) -> tuple[list[ChainActivity], dict[str, Recognised]]:
+        return activity_chains(base_week()), BASE_KNOWN
+
+    monkeypatch.setattr(ActivityReader, "read", read)
+    # Detected as neither language; the renderer settles on Portuguese.
+    question = f"movimentacoes {WALLET}"
+    with answering_with_facts(AskerFacts(LEO, preferred_currency="BRL")):
+        text = await _positions(FixedRates()).activity(
+            Cleared((WALLET,), question=question, private=True)
+        )
+
+    assert "(≈ US$ 88,84 · R$ 485,04)" in text
+    assert "_BRL pela taxa de referência diária: 1 USD = 5,4600 BRL" in text
+
+
+async def test_a_portfolio_follow_up_is_converted_in_the_answers_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: "e no total?" is detected as neither language, and the
+    dollars came out in Portuguese beside reais and a footnote in English."""
+    held = ChainWallet(BASE, (Held("USDC", Decimal(1000), Decimal(1)),))
+    wallet = WalletPortfolio(
+        OWNER,
+        (ChainPortfolio(held, ChainLiquidity(BASE), ChainLending(BASE)),),
+    )
+
+    async def read(self: PortfolioReader, address: str) -> WalletPortfolio:
+        return wallet
+
+    monkeypatch.setattr(PortfolioReader, "read", read)
+    with answering_with_facts(AskerFacts(LEO, preferred_currency="BRL")):
+        text = await _positions(FixedRates()).portfolio(
+            Cleared((OWNER,), question="e no total?", private=True)
+        )
+
+    assert "US$ 1.000,00 (R$ 5.460,00)" in text
+    assert "_BRL pela taxa de referência diária: 1 USD = 5,4600 BRL" in text
+    assert "daily reference rate" not in text
+
+
+# --- alerts ------------------------------------------------------------------------
+
+
+class FakeCurrencies(PreferredCurrencies):
+    """The owner's conversion, recording who was asked in which language."""
+
+    def __init__(self, conversion: Conversion | None) -> None:
+        self.conversion = conversion
+        self.asked: list[tuple[PersonRef, Language]] = []
+
+    async def conversion_for(self, person: PersonRef, language: Language) -> Conversion | None:
+        self.asked.append((person, language))
+        return self.conversion
+
+
+def test_a_health_alert_shows_collateral_and_debt_in_both() -> None:
+    firing = evaluate(health_alert(), hf("1.2"), NOW).firing
+    assert firing is not None
+    text = render_alert(firing, conversion=REAIS_EN)
+    assert "Collateral $27,699.05 (R$151,236.81), debt $15,221.12 (R$83,107.32)" in text
+
+
+async def test_the_sweep_prices_a_price_alert_for_its_owner_in_the_alerts_language() -> None:
+    currencies = FakeCurrencies(REAIS)
+    messenger = FakeMessenger()
+    alert = price_alert(AlertState.BELOW)
+    runner = AlertRunner(
+        MemoryStore([alert]),
+        FakeObserver({}),
+        messenger,
+        prices=FakeObserver({alert.id: btc("100000")}),
+        currencies=currencies,
+    )
+
+    assert await runner.run_due(NOW) == 1
+    [(_, _, text)] = messenger.sent
+    assert "agora US$ 100.000,00 (R$ 546.000,00)" in text
+    assert currencies.asked == [(alert.person, PT)], "a Portuguese alert, a Portuguese figure"
+
+
+async def test_the_sweep_prices_an_english_health_alert_in_english() -> None:
+    currencies = FakeCurrencies(REAIS_EN)
+    messenger = FakeMessenger()
+    health = health_alert()
+    runner = AlertRunner(
+        MemoryStore([health]),
+        FakeObserver({health.id: hf("1.2")}),
+        messenger,
+        currencies=currencies,
+    )
+
+    assert await runner.run_due(NOW) == 1
+    [(_, _, text)] = messenger.sent
+    assert "(R$151,236.81)" in text
+    assert currencies.asked == [(health.person, EN)]
+
+
+def test_the_alert_sweep_is_built_with_the_owners_currency() -> None:
+    runner = build_alert_runner(
+        alert_settings(alerts_enabled=True, infura_key="k"), object(), AlertMessenger()  # type: ignore[arg-type]
+    )
+    assert runner is not None
+    # The seam is private; what matters is that it is wired at all.
+    assert isinstance(runner._currencies, PreferredCurrencies)
+
+
+# --- the model is told, and a slow rate host is not waited on ------------------------
+
+
+async def test_a_hanging_rate_host_is_given_up_on_within_the_timeout() -> None:
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200)
+
+    provider = FrankfurterProvider(
+        CallBudget(4), ttl_seconds=0, timeout_seconds=0.05, transport=httpx.MockTransport(hang)
+    )
+    rates = UsdReferenceRates(provider)
+    assert await asyncio.wait_for(rates.usd_to("BRL"), timeout=2) is None

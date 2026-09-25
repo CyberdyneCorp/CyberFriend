@@ -23,10 +23,23 @@ asker's language, that lists the supported codes.
 - THEN nothing SHALL be stored, and the reply SHALL say it is not a currency
   that can be converted and list the supported codes
 
+#### Scenario: A clause that runs on inside an introduction
+- WHEN a DM reads "Oi, me chamo Leo e uso reais no dia a dia" or "Oi, me chamo
+  Leo, moro no Brasil e uso reais. Qual o preço do bitcoin?"
+- THEN BRL SHALL be stored alongside the other facts, not dropped
+
 #### Scenario: Words near a currency are not a preference
 - WHEN someone writes "uso o Discord", "prefiro ver em português" or "quanto é
   100 dólares em reais?"
 - THEN no preferred currency SHALL be stored
+
+#### Scenario: Using a code or a coin is not a preference
+- WHEN someone writes "I use PHP", "uso CAD", "eu uso bitcoin" or "Hi, my name
+  is Leo and I use PHP"
+- THEN no preferred currency SHALL be stored and no currency refusal SHALL be
+  sent; a code is read only where only money is meant ("prefiro ver em BRL",
+  "moeda preferida: BRL"), and a coin is refused only when named as the
+  currency outright ("minha moeda é bitcoin")
 
 #### Scenario: Shown, replaced and forgotten
 - WHEN someone asks "o que você sabe sobre mim?", states another currency, or

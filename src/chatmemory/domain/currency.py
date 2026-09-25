@@ -104,10 +104,15 @@ UNSUPPORTED_NAMES = frozenset({
     "peso argentino", "pesos argentinos", "argentine peso", "argentine pesos",
     "peso chileno", "pesos chilenos", "chilean peso", "chilean pesos",
     "peso colombiano", "pesos colombianos", "colombian peso", "colombian pesos",
-    "sol peruano", "peruvian sol", "bitcoin", "bitcoins", "ether", "ethereum",
+    "sol peruano", "peruvian sol",
 })
-"""Money people name that the rate source does not publish -- or that is not a
-currency to convert into at all. Recognised only to be refused by name."""
+"""Money people name that the rate source does not publish. Recognised only to
+be refused by name."""
+
+NOT_CURRENCIES = frozenset({"bitcoin", "bitcoins", "ether", "ethereum"})
+"""Coins, not currencies to convert into. Refused when named as a preference
+outright ("minha moeda é bitcoin"), and never read as one from a loose verb:
+"eu uso bitcoin" is chat about a coin."""
 
 _ALIASES: Mapping[str, str] = MappingProxyType(
     {name: code for code, names in _NAMES.items() for name in names}
@@ -135,7 +140,7 @@ def currency_code(text: str) -> str | None:
 def names_a_currency(text: str) -> bool:
     """Whether `text` names money at all, supported or not."""
     folded = _ARTICLE.sub("", _fold(text))
-    return currency_code(text) is not None or folded in UNSUPPORTED_NAMES
+    return currency_code(text) is not None or folded in UNSUPPORTED_NAMES | NOT_CURRENCIES
 
 
 def _written(name: str) -> str:
@@ -145,16 +150,23 @@ def _written(name: str) -> str:
     return "".join(accented.get(c, c) for c in escaped)
 
 
-def _alternation() -> str:
+def _alternation(*, codes: bool) -> str:
     spoken = {n for n in (*_ALIASES, *UNSUPPORTED_NAMES) if n.isascii() and n[0].isalpha()}
     # Longest first, so "real brasileiro" wins over "real".
-    names = sorted(spoken, key=len, reverse=True)
-    codes = "|".join(sorted(CURRENCIES))
-    # A code only in capitals: "uso git" names no currency, "uso BRL" does.
-    return "(?:" + "|".join(_written(n) for n in names) + f"|(?-i:{codes}))"
+    names = "|".join(_written(n) for n in sorted(spoken, key=len, reverse=True))
+    if not codes:
+        return f"(?:{names})"
+    # A code only in capitals: "prefiro ver em git" names no currency.
+    return f"(?:{names}|(?-i:{'|'.join(sorted(CURRENCIES))}))"
 
 
-CURRENCY_NAMES = _alternation()
-"""A regex alternation of every currency name (and a supported code in capitals),
-for the phrases that are about a currency only when one is named: "uso reais"
-is a preference, "uso o Discord" is not. Unanchored; the caller bounds it."""
+CURRENCY_NAMES = _alternation(codes=False)
+"""A regex alternation of every spoken currency name, for the loosest phrases,
+which are about a currency only when one is named: "uso reais" is a
+preference, "uso o Discord" is not. No codes: "I use PHP" is a language and
+"uso CAD" a drawing tool. No coins: "uso bitcoin" is not a currency to convert
+into. Unanchored; the caller bounds it."""
+
+CURRENCY_NAMES_OR_CODES = _alternation(codes=True)
+"""`CURRENCY_NAMES`, or a supported code in capitals, for the phrases that are
+only ever about money: "prefiro ver em BRL", "show me prices in EUR"."""

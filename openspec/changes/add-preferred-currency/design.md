@@ -25,7 +25,13 @@ Strict statements ("minha moeda é X", "my currency is X", "moeda preferida:
 X", "change my currency to X") take any value and are validated, so an unknown
 currency gets the supported list. Loose ones ("uso X", "prefiro ver em X", "I
 prefer prices in X") match only when X is a currency name, and start a clause
-of an introduction only then.
+of an introduction only then. "Prefer to see in" is only ever about money, so
+it also takes a code in capitals ("prefiro ver em BRL"); "uso / I use" takes a
+spoken name only, because "I use PHP" is a language and "uso CAD" a drawing
+tool. Coins (bitcoin, ether) are refused only when named outright ("minha moeda
+é bitcoin"); "eu uso bitcoin" is chat about a coin and stays a question. Inside
+an introduction a loose clause may run on past the currency ("uso reais no dia
+a dia"); on its own the currency must end the message.
 
 ### Converted in code, once per answer
 
