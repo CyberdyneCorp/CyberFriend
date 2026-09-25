@@ -33,9 +33,14 @@ class BoundedHttpFetcher:
         self,
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        *,
+        follow_redirects: bool = True,
     ) -> None:
         self._client = client
         self._transport = transport
+        # Off where the caller has already decided which hosts may be reached:
+        # a redirect would take the request somewhere that decision never saw.
+        self._follow_redirects = follow_redirects
 
     async def fetch(self, url: str, max_bytes: int, timeout: float) -> bytes | None:
         """Bytes, or None. A failed attachment never fails its message."""
@@ -50,7 +55,7 @@ class BoundedHttpFetcher:
     def _new_client(self, timeout: float) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             timeout=timeout,
-            follow_redirects=True,
+            follow_redirects=self._follow_redirects,
             max_redirects=MAX_REDIRECTS,
             transport=self._transport,
         )
@@ -60,7 +65,8 @@ class BoundedHttpFetcher:
     ) -> bytes | None:
         try:
             async with client.stream("GET", url, timeout=timeout) as response:
-                if response.status_code >= 400:
+                # A 3xx only reaches here with redirects off, and is not the file.
+                if response.status_code >= 300:
                     return None
                 buffer = bytearray()
                 async for piece in response.aiter_bytes(CHUNK):

@@ -50,6 +50,8 @@ OWNER_ID = 900002
 permission check, so no scenario's person may be one."""
 
 EPHEMERAL = 1 << 6
+IS_VOICE_MESSAGE = 1 << 13
+"""The message flag Discord sets on a voice message recorded in the client."""
 
 VIEW_CHANNEL = 1 << 10
 SEND_MESSAGES = 1 << 11
@@ -256,6 +258,8 @@ def message_payload(
     member: Mapping[str, Any] | None = None,
     mentions: Sequence[Mapping[str, Any]] = (),
     at: datetime | None = None,
+    attachments: Sequence[Mapping[str, Any]] = (),
+    flags: int = 0,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": str(snowflake()),
@@ -268,17 +272,43 @@ def message_payload(
         "mention_everyone": False,
         "mentions": [dict(m) for m in mentions],
         "mention_roles": [],
-        "attachments": [],
+        "attachments": [dict(a) for a in attachments],
         "embeds": [],
         "pinned": False,
         "type": 0,
-        "flags": 0,
+        "flags": flags,
         "components": [],
     }
     if guild_id is not None:
         payload["guild_id"] = str(guild_id)
     if member is not None:
         payload["member"] = {k: v for k, v in member.items() if k != "user"}
+    return payload
+
+
+def attachment_payload(
+    url: str,
+    *,
+    content_type: str = "audio/ogg",
+    size: int = 48_000,
+    duration: float | None = 6.5,
+    filename: str = "voice-message.ogg",
+) -> dict[str, Any]:
+    """An attachment as the gateway sends it; by default a Discord voice note.
+
+    `duration` is `duration_secs`, which Discord sets on voice messages only.
+    """
+    payload: dict[str, Any] = {
+        "id": str(snowflake()),
+        "filename": filename,
+        "size": size,
+        "url": url,
+        "proxy_url": url,
+        "content_type": content_type,
+    }
+    if duration is not None:
+        payload["duration_secs"] = duration
+        payload["waveform"] = "AAAA"
     return payload
 
 
@@ -498,18 +528,35 @@ class FakeDiscord:
 
     # --- inbound -------------------------------------------------------
 
-    def dm_message(self, member: discord.Member, content: str) -> discord.Message:
-        """A message in the member's DM with the bot."""
+    def dm_message(
+        self,
+        member: discord.Member,
+        content: str,
+        *,
+        attachments: Sequence[Mapping[str, Any]] = (),
+        flags: int = 0,
+    ) -> discord.Message:
+        """A message in the member's DM with the bot, with any attachments."""
         channel = self.dm_channel(member.id)
         data = message_payload(
-            channel_id=channel.id, author=self._users[member.id], content=content
+            channel_id=channel.id,
+            author=self._users[member.id],
+            content=content,
+            attachments=attachments,
+            flags=flags,
         )
         return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
 
     def channel_message(
-        self, member: discord.Member, channel: discord.TextChannel, content: str
+        self,
+        member: discord.Member,
+        channel: discord.TextChannel,
+        content: str,
+        *,
+        attachments: Sequence[Mapping[str, Any]] = (),
+        flags: int = 0,
     ) -> discord.Message:
-        """A message in a guild channel that mentions the bot."""
+        """A message in a guild channel that mentions the bot, with any attachments."""
         user = self._users[member.id]
         data = message_payload(
             channel_id=channel.id,
@@ -518,6 +565,8 @@ class FakeDiscord:
             guild_id=self.layout.guild_id,
             member=member_payload(user, [r.id for r in member.roles[1:]]),
             mentions=[{**self.bot_user, "member": member_payload(self.bot_user, [])}],
+            attachments=attachments,
+            flags=flags,
         )
         return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
 

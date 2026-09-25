@@ -34,6 +34,7 @@ internet said.
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
+| **Voice questions** | Send the bot a voice message in a DM and get an answer as if you had typed it, with a small quoted line of what it understood. Transcribed by `gpt-4o-mini-transcribe`; the audio is never stored. Hard monthly caps per person and for the server. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
 | **Tracing** | Each run — question, answer and the evidence behind it — exported to Langfuse for study. Off by default |
@@ -69,6 +70,7 @@ mindmap
       Several facts in one message
       Replies in your language
       Knows the date and time
+      Voice questions in a DM, off by default
     Outside the server
       Wikipedia and Google
       Allowlisted MCP servers
@@ -438,6 +440,8 @@ lists the common ones. The settings worth knowing:
 | `DECISION_MIN_SIMILARITY` | How close a stored decision must be to the question's topic to be listed (cosine, default 0.4); below it the question is answered by retrieval |
 | `SCHEDULED_TASKS_ENABLED` | Questions asked on a schedule. Off by default |
 | `ALERTS_ENABLED`, `ALERT_SWEEP_SECONDS` | Alerts (range, range edge, health factor, BTC/ETH price), created by asking and confirming. Off by default, and needs `INFURA_KEY` |
+| `VOICE_QUESTIONS_ENABLED`, `MEDIA_API_KEY` | Voice messages in a DM, transcribed at `MEDIA_BASE_URL` with `MEDIA_AUDIO_MODEL`. Off by default; enabling without a key stops the bot at boot |
+| `VOICE_PERSON_MONTHLY_MINUTES`, `MEDIA_AUDIO_MONTHLY_MINUTES` | Hard monthly caps on transcription, per person (default 60) and overall (default 1500) |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 

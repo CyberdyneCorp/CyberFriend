@@ -101,6 +101,16 @@ from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import ScheduleService
+from chatmemory.app.voice import (
+    Heard,
+    VoiceClip,
+    VoiceQuestions,
+    VoiceRefusal,
+    declared_type,
+    heard_excerpt,
+    is_audio,
+    voice_reply,
+)
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.answers import Citation
 from chatmemory.ports.notifications import (
@@ -337,6 +347,46 @@ mention has no words to detect a language from, so the saved preference is
 the only signal."""
 
 
+VOICE_CAPABILITY = "In a DM you can also send me a voice message instead of typing."
+VOICE_CAPABILITY_PT = (
+    "Numa mensagem direta você também pode me mandar um áudio em vez de digitar."
+)
+"""Added to the capabilities reply only where voice questions are switched on."""
+
+
+def heard_line(transcript: str) -> str:
+    """What was understood of a voice question, quoted small above the answer.
+
+    The person has to be able to see a mishearing before they trust the
+    answer to it. Escaped, because a transcript is text nobody typed and
+    Discord would render whatever markdown it happened to spell.
+    """
+    return f'-# \U0001f3a4 "{escape_markdown(heard_excerpt(transcript))}"'
+
+
+def voice_clip(attachment: discord.Attachment) -> VoiceClip:
+    """An attachment as the voice path sees it. Nothing in it is trusted yet."""
+    return VoiceClip(
+        url=attachment.url,
+        content_type=declared_type(attachment.content_type),
+        size=attachment.size,
+        duration_seconds=attachment.duration,
+        filename=attachment.filename,
+    )
+
+
+def question_limit_reply(retry_after_seconds: float) -> str:
+    return (
+        f"You've hit your question limit. Try again in "
+        f"{int(retry_after_seconds // 60) + 1} minute(s)."
+    )
+
+
+def carries_audio(message: discord.Message) -> bool:
+    """A voice message, or any attachment that says it is audio."""
+    return message.flags.voice or any(is_audio(a.content_type) for a in message.attachments)
+
+
 _CHANNEL_NAME = re.compile(r"(?<![<\w&])#([\w-]{1,100})")
 """A channel typed by name. Not `<#123>` (already a link) and not `&#39;`."""
 
@@ -503,6 +553,11 @@ def _render(scoped: ScopedAnswer) -> str:
             lines.append(_citation_line(number, citation))
             number += 1
     return "\n".join(lines)
+
+
+def _with_heard(heard: str, body: str) -> str:
+    """`body`, under the quoted line of a voice question when there is one."""
+    return f"{heard}\n{body}" if heard else body
 
 
 def _messages(scoped: ScopedAnswer) -> list[str]:
@@ -995,6 +1050,16 @@ class CyberFriendClient(discord.Client):
         self._channels: ChannelListingService | None = None
         self._schedules: ScheduleService | None = None
         self._alerts: AlertRequests | None = None
+        self._voice: VoiceQuestions | None = None
+
+    def attach_voice(self, voice: VoiceQuestions) -> None:
+        """Hear voice messages sent in a DM.
+
+        Without it a voice message is answered that voice is not enabled here,
+        and nothing is downloaded -- the half a deployment that switched
+        nothing on should get, because the recording would leave the process.
+        """
+        self._voice = voice
 
     def attach_indexing(self, indexing: IndexingService) -> None:
         """Give `/index` and `/unindex` somewhere to act.
@@ -1455,8 +1520,7 @@ class CyberFriendClient(discord.Client):
             )
             if outcome.rate_limited:
                 await interaction.followup.send(
-                    f"You've hit your question limit. Try again in "
-                    f"{int(outcome.retry_after_seconds // 60) + 1} minute(s).",
+                    question_limit_reply(outcome.retry_after_seconds),
                     ephemeral=True,
                 )
                 return
@@ -1488,13 +1552,58 @@ class CyberFriendClient(discord.Client):
             return
 
         text = self._strip_mention(message.content).strip()
-        if not text:
-            language = await self._asks.reply_language(_person(message.author))
-            reply = CAPABILITIES_PT if language is Language.PORTUGUESE else CAPABILITIES
-            await message.reply(reply, mention_author=False)
+        # A DM only. In a channel a voice note that mentions the bot gets the
+        # capabilities reply below: audio posted where others can hear it is
+        # not the asker's alone, and hearing it is a separate decision.
+        if is_dm and not text and carries_audio(message):
+            await self._answer_voice(message)
             return
+        if not text:
+            await message.reply(await self._capabilities(message.author), mention_author=False)
+            return
+        await self._answer(message, text)
 
-        destination = ChannelRef(PLATFORM, message.channel.id) if not is_dm else None
+    async def _capabilities(self, user: discord.User | discord.Member) -> str:
+        language = await self._asks.reply_language(_person(user))
+        portuguese = language is Language.PORTUGUESE
+        reply = CAPABILITIES_PT if portuguese else CAPABILITIES
+        if self._voice is None:
+            return reply
+        return f"{reply}\n{VOICE_CAPABILITY_PT if portuguese else VOICE_CAPABILITY}"
+
+    async def _answer_voice(self, message: discord.Message) -> None:
+        """A voice question: heard, then answered exactly as typed text.
+
+        Off, it is answered once that voice is not enabled, and nothing is
+        downloaded. Every refusal is one fixed reply in the person's language.
+        """
+        if self._voice is None:
+            heard = Heard(refusal=VoiceRefusal.DISABLED)
+        else:
+            allowance = self._asks.allowance(_person(message.author))
+            if not allowance.allowed:
+                # Before the download: minutes are not spent on a question the
+                # limit would refuse once it was heard.
+                await message.reply(
+                    question_limit_reply(allowance.retry_after_seconds), mention_author=False
+                )
+                return
+            clips = tuple(voice_clip(a) for a in message.attachments)
+            async with message.channel.typing():
+                heard = await self._voice.hear(_person(message.author), clips)
+        if heard.refusal is None:
+            await self._answer(message, heard.transcript, heard=heard_line(heard.transcript))
+            return
+        language = await self._asks.reply_language(_person(message.author))
+        max_seconds = self._voice.limits.max_seconds if self._voice is not None else 0
+        await message.reply(
+            voice_reply(heard.refusal, language, max_seconds=max_seconds),
+            mention_author=False,
+        )
+
+    async def _answer(self, message: discord.Message, text: str, *, heard: str = "") -> None:
+        """Answer `text` as a question. `heard` quotes a voice question above it."""
+        destination = ChannelRef(PLATFORM, message.channel.id) if message.guild else None
         asking = self._asks.ask(
             AskRequest(
                 asker=_person(message.author),
@@ -1510,18 +1619,25 @@ class CyberFriendClient(discord.Client):
         outcome = await self._with_progress(message, text, asking)
 
         if outcome.rate_limited:
-            await message.reply(
-                f"You've hit your question limit. Try again in "
-                f"{int(outcome.retry_after_seconds // 60) + 1} minute(s).",
-                mention_author=False,
+            await self._reply_parts(
+                message,
+                [
+                    _with_heard(heard, question_limit_reply(outcome.retry_after_seconds))
+                ],
             )
             return
 
         if outcome.alert is not None:
+            if heard:
+                await self._reply_parts(message, [heard])
             await reply_with_confirmation(message, outcome.alert, self._confirm_alerts)
             return
         assert outcome.scoped is not None
-        for index, part in enumerate(_messages(outcome.scoped)):
+        await self._reply_parts(message, split_message(_with_heard(heard, _render(outcome.scoped))))
+        await self._notify_if_withheld(outcome.scoped, message.author, message.channel)
+
+    async def _reply_parts(self, message: discord.Message, parts: Sequence[str]) -> None:
+        for index, part in enumerate(parts):
             if index == 0:
                 await message.reply(
                     part, mention_author=False, allowed_mentions=discord.AllowedMentions.none()
@@ -1530,7 +1646,6 @@ class CyberFriendClient(discord.Client):
                 # A plain send: replying again would stack a reply preview on
                 # every part of one answer.
                 await message.channel.send(part, allowed_mentions=discord.AllowedMentions.none())
-        await self._notify_if_withheld(outcome.scoped, message.author, message.channel)
 
     async def _with_progress(
         self, message: discord.Message, text: str, asking: Awaitable[AskOutcome]

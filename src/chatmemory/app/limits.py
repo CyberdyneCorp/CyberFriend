@@ -31,13 +31,24 @@ class RateLimiter:
     def check(self, person: PersonRef, now: float | None = None) -> LimitDecision:
         """Test and record in one step, so concurrent asks cannot both pass."""
         current = time.monotonic() if now is None else now
+        decision = self.peek(person, current)
+        if decision.allowed:
+            self._events[person].append(current)
+        return decision
+
+    def peek(self, person: PersonRef, now: float | None = None) -> LimitDecision:
+        """What `check` would say, without recording a question.
+
+        For work that is spent before the question exists, such as
+        transcribing a voice note: refused early, it is never spent on a
+        question the limit would refuse anyway. Not a reservation -- `check`
+        still decides when the question is asked.
+        """
+        current = time.monotonic() if now is None else now
         events = self._events[person]
         cutoff = current - self._window
         while events and events[0] <= cutoff:
             events.popleft()
-
         if len(events) >= self._max:
             return LimitDecision(False, retry_after_seconds=events[0] + self._window - current)
-
-        events.append(current)
         return LimitDecision(True)

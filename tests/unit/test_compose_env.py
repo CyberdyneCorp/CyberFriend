@@ -298,3 +298,26 @@ def test_the_check_tolerates_a_reconnect(service: str) -> None:
     block = service_block(service)
     assert "retries: 5" in block
     assert "start_period: 90s" in block
+
+
+VOICE_SETTINGS = (
+    "VOICE_QUESTIONS_ENABLED",
+    "VOICE_MAX_SECONDS",
+    "VOICE_MAX_BYTES",
+    "VOICE_PERSON_MONTHLY_MINUTES",
+    "MEDIA_AUDIO_MONTHLY_MINUTES",
+    "MEDIA_BASE_URL",
+    "MEDIA_API_KEY",
+    "MEDIA_AUDIO_MODEL",
+    "MEDIA_TIMEOUT_SECONDS",
+)
+
+
+@pytest.mark.parametrize("setting", VOICE_SETTINGS)
+def test_voice_settings_reach_the_bot_and_nothing_else(setting: str) -> None:
+    """Voice questions are heard in the bot only. The switch defaults to off
+    in the compose file, and no other container is handed the media key."""
+    assert f"{setting}=${{{setting}" in service_block("bot")
+    for other in ("ingest", "mcp", "admin"):
+        assert f"{setting}=" not in service_block(other)
+    assert "VOICE_QUESTIONS_ENABLED=${VOICE_QUESTIONS_ENABLED:-false}" in service_block("bot")

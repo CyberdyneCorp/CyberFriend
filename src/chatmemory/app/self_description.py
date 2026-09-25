@@ -230,6 +230,10 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "`what do you know about me?` to see it; I only show your email to "
             "you, in a direct message."
         ),
+        "voice": (
+            "In a direct message you can also send me a voice message instead "
+            "of typing; I show what I understood above the answer."
+        ),
         "audience": (
             "In a channel, I only cite what everyone there can read. Ask me in "
             "a direct message for your full view."
@@ -270,6 +274,10 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "`o que você sabe sobre mim?` para ver; eu só mostro seu e-mail "
             "para você, numa mensagem direta."
         ),
+        "voice": (
+            "Numa mensagem direta você também pode me mandar um áudio em vez de "
+            "digitar; eu mostro o que entendi acima da resposta."
+        ),
         "audience": (
             "Num canal, eu só cito o que todos ali podem ler. Me pergunte numa "
             "mensagem direta para ver tudo o que você pode."
@@ -284,6 +292,7 @@ def describe_capabilities(
     personal_facts: bool = False,
     commands: Sequence[Command] = ALWAYS_AVAILABLE,
     language: Language = Language.ENGLISH,
+    voice_questions: bool = False,
 ) -> str:
     key = language if language in _TEXT else Language.ENGLISH
     words = _TEXT[key]
@@ -316,6 +325,8 @@ def describe_capabilities(
         lines += [f"• {c.described(key)}" for c in commands]
     if personal_facts:
         lines += ["", words["facts"]]
+    if voice_questions:
+        lines += ["", words["voice"]]
     lines += ["", words["audience"]]
     return "\n".join(lines)
 
@@ -330,11 +341,15 @@ class SelfDescriptionAnswerService:
         *,
         personal_facts: bool = False,
         commands: Sequence[Command] = ALWAYS_AVAILABLE,
+        voice_questions: bool = False,
     ) -> None:
         self._fallback = fallback
         self._tools = tuple(external_tools)
         self._personal_facts = personal_facts
         self._commands = tuple(commands)
+        # Whether a voice message in a DM is heard, so the description only
+        # offers it where the switch is on.
+        self._voice_questions = voice_questions
 
     async def answer(self, question: Question) -> Answer:
         if self_description_question(question.text):
@@ -350,6 +365,7 @@ class SelfDescriptionAnswerService:
                     personal_facts=self._personal_facts,
                     commands=self._offered_where(question),
                     language=language if language.known else Language.ENGLISH,
+                    voice_questions=self._voice_questions,
                 ),
                 # An empty set, not None: it read no channel. None means
                 # "never established", and memory refuses to store that.

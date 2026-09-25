@@ -28,6 +28,12 @@ Handler = Callable[[httpx.Request], httpx.Response]
 INFURA_HOSTS = ("mainnet.infura.io", "base-mainnet.infura.io", "arbitrum-mainnet.infura.io")
 BLOCKSCOUT_HOSTS = ("eth.blockscout.com", "base.blockscout.com", "arbitrum.blockscout.com")
 PRICE_HOSTS = ("api.coingecko.com",)
+DISCORD_CDN_HOSTS = ("cdn.discordapp.com", "media.discordapp.net")
+MEDIA_HOSTS = ("api.openai.com",)
+"""Where voice questions are transcribed: MEDIA_BASE_URL's default host.
+
+Neither this nor the CDN is a default fixture. A voice scenario scripts the
+hosts it expects to reach, so any other scenario reaching one fails."""
 
 EMPTY_WORD = "0x" + "0" * 64
 """An ABI-encoded zero: no balance, no positions, no tokens."""
@@ -93,6 +99,29 @@ def explorer(request: httpx.Request) -> httpx.Response:
 
 def no_prices(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={})
+
+
+def serve_bytes(data: bytes, content_type: str = "audio/ogg") -> Handler:
+    """A CDN that answers every path with `data`."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=data, headers={"content-type": content_type})
+
+    return handle
+
+
+class ScriptedTranscription:
+    """An OpenAI-compatible `/audio/transcriptions` that says what it is told."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.method != "POST" or not request.url.path.endswith("/audio/transcriptions"):
+            return httpx.Response(404, json={"error": "not found"})
+        return httpx.Response(200, json={"text": self.text})
 
 
 def default_fixtures() -> dict[str, Handler]:

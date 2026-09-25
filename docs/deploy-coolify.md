@@ -82,6 +82,14 @@ Set at **runtime** scope, not build scope — the image must contain no secrets.
 | `EMBEDDING_MODEL` | `text-embedding-3-small`. |
 | `EMBEDDING_DIMENSIONS` | `1536`. Changing this later is a reindex, not a swap. |
 | `MCP_TOKENS` | Bearer tokens, each bound to one person. See below. |
+| `VOICE_QUESTIONS_ENABLED` | Optional, default `false`. Voice messages sent to the bot in a DM are transcribed and answered. Bot only. Needs `MEDIA_API_KEY`; enabling without it stops the bot at boot. |
+| `MEDIA_API_KEY` | The transcription endpoint's key. Separate from `LLM_API_KEY` on purpose: where voices go is its own decision. |
+| `MEDIA_BASE_URL` | Optional, default `https://api.openai.com/v1`. Any OpenAI-compatible endpoint serving `/audio/transcriptions`. |
+| `MEDIA_AUDIO_MODEL` | Optional, default `gpt-4o-mini-transcribe`. |
+| `VOICE_MAX_SECONDS`, `VOICE_MAX_BYTES` | Optional, defaults `120` and `10000000`. Longest and largest voice question accepted. |
+| `VOICE_PERSON_MONTHLY_MINUTES` | Optional, default `60`. Hard cap per person per calendar month (UTC). |
+| `MEDIA_AUDIO_MONTHLY_MINUTES` | Optional, default `1500`. Hard cap for the whole deployment per month: the ceiling on the transcription bill. |
+| `MEDIA_TIMEOUT_SECONDS` | Optional, default `30`. Bound on one download and on one transcription. |
 | `ANSWER_TIMEZONE` | Optional. IANA zone whose days "ontem" and "semana passada" mean; defaults to `America/Sao_Paulo`. An unknown name stops the bot at boot. |
 | `DECISION_MIN_SIMILARITY` | Optional. Cosine a stored decision must reach against the topic of "o que decidimos sobre Y?" to be listed; defaults to `0.4`. Lower it if a multilingual embedding model misses cross-language matches. |
 

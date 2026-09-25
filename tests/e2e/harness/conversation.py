@@ -16,7 +16,7 @@ bot said is a command Discord offers where it said it.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import ModuleType
@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from chatmemory.adapters.discord import alerts as discord_alerts
 from chatmemory.adapters.discord import bot as discord_bot
 from chatmemory.adapters.store.postgres import PostgresStore
-from chatmemory.app import alert_requests, ask, catchup, localise
+from chatmemory.app import alert_requests, ask, catchup, localise, voice
 from chatmemory.app.asks import obligations
 from chatmemory.app.ingest import EmbeddingWorker
 from chatmemory.app.language import Language, detect
@@ -39,6 +39,7 @@ from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message, Window
 from chatmemory.entrypoints.bot import Process
 from tests.e2e.harness.discord_wire import (
+    IS_VOICE_MESSAGE,
     CommandMentionedButNotOffered,
     FakeDiscord,
     Sent,
@@ -82,6 +83,7 @@ _FIXED_REPLY_MODULES: tuple[ModuleType, ...] = (
     loop,
     service,
     localise,
+    voice,
 )
 
 _INLINE_ENGLISH = ("You've hit your question limit",)
@@ -201,6 +203,23 @@ class Conversation:
             message = wire.channel_message(self.who, self.channel, content)
         return await self._bot.turn(lambda: wire.client.on_message(message))
 
+    async def say_voice(self, *attachments: Mapping[str, Any], voice_flag: bool = True) -> Turn:
+        """A message carrying `attachments` and no text: a voice message by default.
+
+        In a channel it mentions the bot, as a voice reply to it would.
+        `voice_flag` is the IS_VOICE_MESSAGE flag the Discord client sets on a
+        recorded note; an uploaded audio file has none.
+        """
+        wire = self._bot.discord
+        flags = IS_VOICE_MESSAGE if voice_flag else 0
+        if self.channel is None:
+            message = wire.dm_message(self.who, "", attachments=attachments, flags=flags)
+        else:
+            message = wire.channel_message(
+                self.who, self.channel, "", attachments=attachments, flags=flags
+            )
+        return await self._bot.turn(lambda: wire.client.on_message(message))
+
     async def mention_only(self) -> Turn:
         return await self.say("")
 
@@ -208,9 +227,7 @@ class Conversation:
         """Run a slash command here. Raises `CommandNotOffered` where Discord
         would not list it. `locale` is the person's Discord client language."""
         wire = self._bot.discord
-        interaction = wire.interaction(
-            self.who, name, options, channel=self.channel, locale=locale
-        )
+        interaction = wire.interaction(self.who, name, options, channel=self.channel, locale=locale)
 
         async def run() -> None:
             with wire.webhooks_installed():

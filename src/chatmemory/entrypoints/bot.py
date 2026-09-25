@@ -82,6 +82,13 @@ and sends through the same `DiscordTaskMessenger`, and `main` runs
 without `ALERTS_ENABLED` (and an Infura key) `BotGraph.alerts` is None and
 nothing starts.
 
+Voice questions take the same edges: `assemble` ->
+`build_voice_questions(settings, engine, edges.http_transport, edges.clock)`
+-> `build_bot(voice=...)` -> `CyberFriendClient.attach_voice`. The CDN
+download and the transcription both go through the process's transport. Off
+by default: without `VOICE_QUESTIONS_ENABLED` nothing is built, and a voice
+message in a DM is answered that voice is not enabled here.
+
 `main` and `assemble` are split at the network. `assemble(settings, edges)`
 builds the whole object graph -- every chain above -- over an `Edges` value
 holding the models, the embedding endpoint and the database engine, and
@@ -136,6 +143,7 @@ from chatmemory.app.notifications import NotificationDelivery
 from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import ScheduledTaskRunner
 from chatmemory.app.scope import LiveScope, ScopeProvider
+from chatmemory.app.voice import VoiceQuestions
 from chatmemory.composition import (
     AnswerStack,
     Edges,
@@ -154,6 +162,7 @@ from chatmemory.composition import (
     build_said_by,
     build_schedules,
     build_task_runner,
+    build_voice_questions,
 )
 from chatmemory.config import Settings, get_settings
 from chatmemory.domain.identity import ChannelRef
@@ -244,6 +253,7 @@ def build_bot(
     notifications: AsyncEngine | None = None,
     alert_transport: httpx.AsyncBaseTransport | None = None,
     clock: Clock = utc_now,
+    voice: VoiceQuestions | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -306,6 +316,10 @@ def build_bot(
         asks.attach_corrections(corrections)
     client = CyberFriendClient(asks, settings.discord_guild_id)
     attach_permission_listeners(client, caches)
+    if voice is not None:
+        # Voice messages in a DM. Without it they are answered that voice is
+        # not enabled here, and nothing is downloaded.
+        client.attach_voice(voice)
     if alert_requests is not None:
         # `/alert list|delete` and the Confirm button. Without it both say
         # alerts are unavailable here.
@@ -673,6 +687,10 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # When a new alert is first checked: one sweep after it is created, on
         # the clock the sweep itself runs on.
         clock=edges.clock,
+        # Voice questions: the CDN download and the transcription through the
+        # same transport as every other outbound call, the month on the same
+        # clock. None unless VOICE_QUESTIONS_ENABLED.
+        voice=build_voice_questions(settings, stack.engine, edges.http_transport, edges.clock),
     )
     return Process(
         graph=graph,

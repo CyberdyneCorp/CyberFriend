@@ -106,6 +106,11 @@ Asks *addressed to* the person are deleted, unlike mentions. An obligation
 report that still lists "Alice, can you review this" has not withdrawn Alice
 from anything.
 
+Voice questions are refused for an opted-out person: nothing is downloaded and
+nothing is sent to the transcription endpoint. Their `media_usage` rows (seconds
+per month, no content) are kept, because dropping them would hand the month's
+minutes back to the deployment's ceiling.
+
 ## Running the migration
 
 Migration `0008` creates `person_opt_out` and the two triggers. It chains onto
@@ -155,6 +160,12 @@ the scripted model, which answers with what `bot.chat.script_asks(...)` and
 `bot.chat.script_decisions(...)` set for that message -- so a scenario runs
 capture, extraction, question and cited answer on the real ask tables, and
 `bot.decision_rows()` reads what the same pass stored as decisions.
+
+Voice questions use the same wire: `dm.say_voice(attachment_payload(url, ...))`
+sends a DM carrying an attachment and the `IS_VOICE_MESSAGE` flag. Neither the
+Discord CDN nor the transcription host is a default fixture, so a scenario
+scripts them (`serve_bytes`, `ScriptedTranscription`) and any other scenario
+reaching one fails.
 
 Scenarios assert only what an outsider could see: what Discord received,
 whether the corpus was searched, which hosts were reached, which model stages
@@ -913,3 +924,78 @@ should for a question the corpus cannot answer.
 The route is anchored to questions whose whole content is the clock. "What was
 decided today" and "what time did the deploy finish" are questions about the
 corpus that merely contain the word, and they still go there.
+
+## Voice questions
+
+A person can send the bot a Discord voice message — or an audio file — in a
+DM, and it is answered exactly as if they had typed the words: every route
+(facts, what someone said, catch-up, obligations, decisions, crypto, the
+reasoning loop), the progress note, and conversation memory. The reply opens
+with a small quoted line of what was understood, `-# 🎤 "…"`, so a mishearing is
+visible before the answer is trusted. Channels are unchanged: a voice note that
+mentions the bot in a channel gets the ordinary capabilities reply.
+
+| | |
+|---|---|
+| `VOICE_QUESTIONS_ENABLED` | Off by default. Bot only. Needs `MEDIA_API_KEY`, or the bot refuses to start |
+| `MEDIA_BASE_URL`, `MEDIA_API_KEY`, `MEDIA_AUDIO_MODEL` | Where audio is sent: `{MEDIA_BASE_URL}/audio/transcriptions`, default OpenAI `gpt-4o-mini-transcribe` |
+| `VOICE_MAX_SECONDS`, `VOICE_MAX_BYTES` | Longest and largest accepted: 120 s and 10 MB |
+| `VOICE_PERSON_MONTHLY_MINUTES` | Per person per calendar month (UTC): 60 |
+| `MEDIA_AUDIO_MONTHLY_MINUTES` | Everybody, per month: 1500. Shared with any later channel transcription |
+| `MEDIA_TIMEOUT_SECONDS` | One download, and separately one transcription: 30 |
+
+Switched off, a voice message gets one fixed reply — voice is not enabled here,
+please type — and nothing is downloaded.
+
+### What is checked, in order
+
+1. **The attachment, from its metadata alone.** Exactly one attachment; a
+   declared type of `audio/ogg` (a Discord voice message; MP3, M4A, WAV and WebM
+   uploads are refused, because their length cannot be counted); a URL on
+   `https://cdn.discordapp.com` or `https://media.discordapp.net` and nowhere
+   else; within the byte limit and, when the client declares one, the duration
+   limit.
+2. **The person and the month.** An opted-out person is refused. Then the
+   minutes are charged against both caps in one transaction under an advisory
+   lock — by the duration the client declares, rounded up, or the whole
+   `VOICE_MAX_SECONDS` for an uploaded file that declares none. Over either cap
+   the person is told which one (their own, or the server's), and nothing is
+   fetched or sent. A charge is not refunded if a later step fails: the cap is
+   the ceiling on the bill, not an estimate of it.
+3. **The download**, through the process's HTTP transport, redirects not
+   followed, abandoned past `VOICE_MAX_BYTES`. Its real length is then counted
+   from its Opus packets. The declared duration is written by the uploading
+   client and bounds nothing, so audio longer than `VOICE_MAX_SECONDS`, or
+   longer than it was charged, is refused here and never sent. Anything that
+   is not a single Ogg Opus stream is not sent either. This is what makes the
+   caps a ceiling on what is transcribed.
+4. **The transcription**: one multipart POST, no retries. The transcript,
+   flattened to one line, is the question; one longer than 4000 characters (a
+   typed message's limit) is refused as too long.
+
+A person already at their hourly question limit is told so before anything is
+downloaded, so minutes are not spent on a question that would be refused.
+
+Every failure from step 3 on is one reply — "I couldn't understand the audio,
+please try again or type" — never an exception. All fixed replies are in the
+person's saved language (Portuguese or English; English when none is saved).
+
+### What is kept, and what leaves
+
+The audio is never stored: downloaded, sent, discarded. The transcript is kept
+only where typed text is kept — as the question in conversation memory — and
+leaves only where typed text leaves. `media_usage` (migration 0025) holds seconds
+per person, month and purpose (`question` now, `channel` reserved for channel
+transcription), and nothing else. Logs record the refusal reason and the
+transcript's length, never its words.
+
+What does leave is the recording itself, to `MEDIA_BASE_URL`. With the default
+that is OpenAI, a third party receiving people's voices; point it at a
+self-hosted OpenAI-compatible Whisper to keep voice inside the network.
+
+### What it costs
+
+`gpt-4o-mini-transcribe` is about $0.003 per minute (check current pricing). At
+the default ceiling of 1,500 minutes a month that is at most about $4.50; a
+person at their 60-minute cap costs about $0.18.
+
