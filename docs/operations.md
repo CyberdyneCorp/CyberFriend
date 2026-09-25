@@ -106,6 +106,10 @@ Asks *addressed to* the person are deleted, unlike mentions. An obligation
 report that still lists "Alice, can you review this" has not withdrawn Alice
 from anything.
 
+Feature requests (`/suggest`) are deleted too, by a trigger on
+`person_opt_out` (migration 0030), and a suggestion from an opted-out person is
+dropped before it is stored; the command tells them so.
+
 Voice questions are refused for an opted-out person: nothing is downloaded and
 nothing is sent to the transcription endpoint. Their `media_usage` rows (seconds
 per month, no content) are kept, because dropping them would hand the month's
@@ -743,6 +747,30 @@ A person whose direct messages are closed has **all** their tasks stopped, with
 the reason shown in `/schedule list`. The obstacle is their settings rather than
 any one question, and retrying the rest would be knocking on a door already
 shut. Removing a person's data deletes their tasks with it.
+
+## Feature requests
+
+`/suggest text:<...>` records a suggestion in the person's own words;
+`/suggestions` lists theirs, newest first, with each one's status. Both are
+registered on every deployment and answer privately. Rows live in
+`feature_request` (migration 0030): the text, its language, how it arrived
+(`command` today), the guild and channel ids (none for a DM), a status and the
+triage fields the admin console will set. No message text, channel name or
+surrounding conversation is stored.
+
+- **Refused before storing**: text over 1000 characters, and text containing
+  an email address, a phone number, an ETH or BTC address, or a statement of
+  the person's own contact details. The reply names what was found.
+- **Idempotent**: the same text (case, whitespace and punctuation ignored) from
+  the same person is one row, and resubmitting answers with its number.
+- **Five a day**: at most five accepted per person in any rolling 24 hours,
+  enforced inside the insert.
+- **Status news is opt-in**: the acknowledgement asks whether to DM them when
+  the status changes; nothing is stored unless they press Yes. The sweep that
+  sends those DMs arrives with the admin triage screen.
+- **Privacy**: an opt-out deletes a person's suggestions in the same
+  transaction, and deleting the person cascades. When `purge_person_derived`
+  (add-privacy-dashboard) lands, its delete replaces 0030's trigger.
 
 ## Position alerts
 

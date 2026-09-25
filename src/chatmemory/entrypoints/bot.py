@@ -156,6 +156,7 @@ from chatmemory.composition import (
     build_catch_up,
     build_channel_listing,
     build_conversations,
+    build_feature_requests,
     build_live_scope,
     build_notification_delivery,
     build_notification_preferences,
@@ -357,6 +358,10 @@ def build_bot(
         runner = build_task_runner(
             settings, notifications, asks, DiscordTaskMessenger(client.fetch_user)
         )
+    if notifications is not None:
+        # `/suggest` and `/suggestions`. Without it both say suggestions cannot
+        # be taken here.
+        client.attach_feature_requests(build_feature_requests(notifications, clock))
     # Position alerts: the chain read through `alert_transport` (the process's
     # edge), the message through the scheduled-task messenger with no heading
     # of its own, since an alert's text carries one in its own language.

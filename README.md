@@ -36,6 +36,7 @@ internet said.
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
+| **Feature requests** | `/suggest` records an idea in your own words (up to 1000 characters) and answers with its number; `/suggestions` lists yours and their status. The team sees the text and your Discord name. Text with an email, phone number or wallet address is refused, resubmitting is idempotent, and five a day at most. Opt-out deletes them |
 | **Voice questions** | Send the bot a voice message in a DM and get an answer as if you had typed it, with a small quoted line of what it understood. Transcribed by `gpt-4o-mini-transcribe`; the audio is never stored. Hard monthly caps per person and for the server. Off by default |
 | **Channel media (recording only)** | From `MEDIA_ENABLED_AT`, voice notes and images posted in indexed channels are recorded as pending rows: metadata and a CDN link, nothing downloaded and nothing searchable yet. Transcribing voice notes and reading images come later. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
@@ -100,6 +101,7 @@ mindmap
       /resolve /notifications
       /schedule create, list, delete
       /alert list, delete
+      /suggest /suggestions
       In the server and in DMs
       /index /unindex in the server
     Operators
@@ -143,6 +145,7 @@ graph LR
     YOU --> Y3["answers in the language you asked in"]
     YOU --> Y5["prefiro ver em reais &middot; prices and totals in USD and BRL"]
     YOU --> Y4["/forget &middot; /notifications"]
+    YOU --> Y6["/suggest an idea &middot; /suggestions"]
     YOU --> Y5["a voice message in a DM, answered as typed"]
 
     P --> WHEN["On a schedule"]
@@ -176,6 +179,8 @@ moment: scheduled questions and position alerts.
 | `/notifications` | Turn DMs about obligations on or off |
 | `/schedule create`, `list`, `delete` | Questions asked on a rhythm |
 | `/alert list`, `delete` | Your alerts (range, range edge, health factor, BTC/ETH price), and stopping one. An alert is created by asking in words and pressing Confirm |
+| `/suggest` | Suggest something the bot should learn to do; the reply gives its number and asks whether to DM you when its status changes |
+| `/suggestions` | Your suggestions and their status (new, triaged, planned, done, declined, duplicate) |
 
 Every command except `/index` and `/unindex` works in the server **and in a
 direct message with the bot**; those two act on a channel, so they live in the

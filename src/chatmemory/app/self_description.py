@@ -132,6 +132,17 @@ RESOLVE = Command(
     "Fechar ou descartar algo que eu disse que pediram a você",
 )
 
+SUGGEST = Command(
+    "suggest",
+    "Suggest something I should learn to do",
+    "Sugerir algo que eu deveria aprender a fazer",
+)
+SUGGESTIONS = Command(
+    "suggestions",
+    "Show your suggestions and their status",
+    "Mostrar suas sugestões e o status de cada uma",
+)
+
 CHANNELS = Command(
     "channels",
     "List the channels I archive that you can read",
@@ -177,7 +188,7 @@ ALERTS = (ALERT_LIST, ALERT_DELETE)
 asking ("tell me when my LP goes out of range") and pressing Confirm; these are
 how somebody sees and stops theirs."""
 
-ALWAYS_AVAILABLE = (ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE)
+ALWAYS_AVAILABLE = (ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE, SUGGEST, SUGGESTIONS)
 """Commands the bot registers unconditionally.
 
 `notifications` is not here: it is only registered when the feature is on, and
