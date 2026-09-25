@@ -2,8 +2,8 @@
 
 Access token: RS256 against the issuer's JWKS, `iss` equal to discovery's,
 `exp` in the future, `type == "access"`, `aud == "cyberfriend"`. Id token:
-RS256, `iss`, `aud == client_id`, `exp`, and -- at sign-in -- the nonce that
-sign-in issued. People are keyed on `sub`.
+RS256, `iss`, `aud == client_id`, `exp`, not `type == "access"`, and -- at
+sign-in -- the nonce that sign-in issued. People are keyed on `sub`.
 
 Expiry is checked against an injected clock rather than PyJWT's own, so the
 session code and these rules agree about what "now" is.
@@ -87,6 +87,10 @@ async def verify_id_token(
 ) -> IdClaims:
     """`nonce_hash` is the sign-in's; None only for an id token from a refresh."""
     claims = await _verified(token, keys=keys, issuer=issuer, audience=client_id, now=now)
+    # The client id is `cyberfriend`, the access audience too, so `aud` alone
+    # cannot tell the two apart: an access token is never an id token.
+    if claims.get("type") == "access":
+        raise InvalidToken("type")
     if nonce_hash is not None:
         nonce = claims.get("nonce")
         if not isinstance(nonce, str) or not same_digest(nonce, nonce_hash):

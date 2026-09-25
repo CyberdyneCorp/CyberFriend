@@ -8,19 +8,22 @@ test drives the same routes, middleware and route table production runs.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 from starlette.testclient import TestClient
 
 from chatmemory.admin.audit import ChangeKind
-from chatmemory.admin.auth import SESSION_COOKIE, Principal, Role
-from chatmemory.admin.oidc.crypto import digest
-from chatmemory.admin.oidc.service import SignedIn
+from chatmemory.admin.auth import SESSION_COOKIE, UNAUTHENTICATED, Principal, Role
+from chatmemory.admin.oidc.crypto import TokenCipher, digest
+from chatmemory.admin.oidc.provider import TokenResponse
+from chatmemory.admin.oidc.service import LOGIN_LIFETIME, SignedIn, SignInFailed
 from tests.e2e.harness.oidc import END_SESSION
 from tests.unit.oidc_support import (
     CSRF,
     PUBLIC_URL,
+    SESSION_KEY,
     Rig,
     browser_sign_in,
     rig,
@@ -532,3 +535,198 @@ async def test_a_bearer_request_reaches_the_handler_without_its_cookies(signing:
 
     assert response.status_code == 200
     assert response.json() == {"cookie": None}
+
+
+async def _signed_in(signing: Rig) -> str:
+    """A sign-in straight through the service; the session id."""
+    begun = await signing.sign_in.begin()
+    code, state = signing.fake.authorize(begun.authorization_url, "ana-sub")
+    result = await signing.sign_in.complete(state=state, code=code, binding=begun.binding)
+    assert isinstance(result, SignedIn)
+    return result.session_id
+
+
+def _store_access_token(signing: Rig, token: str) -> None:
+    """Put `token` in the one session, sealed as the service would seal it."""
+    ((id_hash, record),) = signing.sessions.records.items()
+    sealed = TokenCipher(SESSION_KEY).seal(token, context=f"access:{id_hash}")
+    signing.sessions.records[id_hash] = replace(record, access_token_enc=sealed)
+
+
+def test_a_session_refreshes_again_with_the_rotated_refresh_token(
+    console: Console, signing: Rig
+) -> None:
+    """Reuse detection: the second refresh must present the token the first
+    one was given, or CyberdyneAuth revokes the family."""
+    _signed_in_near_expiry(console, signing, "ana-sub")
+    assert console.client.get("/api/status").status_code == 200
+
+    signing.clock.advance(timedelta(seconds=signing.fake.access_ttl - 30))
+    assert console.client.get("/api/status").status_code == 200
+    signing.clock.advance(timedelta(seconds=signing.fake.access_ttl - 30))
+    assert console.client.get("/api/status").status_code == 200
+
+    assert signing.fake.grants == [
+        "authorization_code",
+        "refresh_token",
+        "refresh_token",
+        "refresh_token",
+    ]
+    assert not _revoked(signing)
+
+
+async def test_a_sign_out_during_a_refresh_leaves_nothing_live(
+    signing: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signing.fake.access_ttl = 30
+    session_id = await _signed_in(signing)
+    provider = signing.sign_in.provider
+    refresh = provider.refresh
+
+    async def refresh_while_signing_out(token: str) -> TokenResponse:
+        tokens = await refresh(token)
+        await signing.sign_in.sign_out(session_id)
+        return tokens
+
+    monkeypatch.setattr(provider, "refresh", refresh_while_signing_out)
+    (before,) = signing.sessions.records.values()
+
+    result = await signing.sign_in.authenticate(session_id)
+
+    assert result is UNAUTHENTICATED
+    # Sign-out revoked the spent token; the refresh revoked the one it was given.
+    assert len(signing.fake.revoked) == 2
+    assert signing.fake.revoked[0] != signing.fake.revoked[1]
+    (after,) = signing.sessions.records.values()
+    assert after.revoked_at is not None
+    assert after.refresh_token_enc == before.refresh_token_enc
+
+
+def test_a_bearer_write_from_another_origin_is_refused(console: Console, signing: Rig) -> None:
+    response = console.client.post(
+        "/api/optouts",
+        json=OPT_OUT,
+        headers={**console.auth(), "Origin": "https://evil.test"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"error": "cross-site request refused"}
+
+
+def test_a_repeated_session_cookie_is_refused_whichever_copy_is_valid(
+    console: Console, signing: Rig
+) -> None:
+    browser_sign_in(console.client, signing.fake, "ana-sub")
+    session_id = _session_id(console.client)
+
+    response = _browser(console).get(
+        "/api/status",
+        headers={"Cookie": f"{SESSION_COOKIE}=other; {SESSION_COOKIE}={session_id}"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_a_refresh_for_another_subject_ends_the_session(
+    console: Console, signing: Rig
+) -> None:
+    _signed_in_near_expiry(console, signing, "ana-sub")
+    signing.fake.access_overrides["sub"] = "ben-sub"
+
+    assert console.client.get("/api/status").status_code == 401
+    assert _revoked(signing)
+
+
+def test_a_refreshed_id_token_for_another_subject_ends_the_session(
+    console: Console, signing: Rig
+) -> None:
+    _signed_in_near_expiry(console, signing, "ana-sub")
+    signing.fake.id_token_on_refresh = True
+    signing.fake.id_overrides["sub"] = "ben-sub"
+
+    assert console.client.get("/api/status").status_code == 401
+    assert _revoked(signing)
+
+
+def test_a_refreshed_id_token_for_the_same_subject_replaces_the_stored_one(
+    console: Console, signing: Rig
+) -> None:
+    _signed_in_near_expiry(console, signing, "ana-sub")
+    (before,) = signing.sessions.records.values()
+    signing.fake.id_token_on_refresh = True
+
+    assert console.client.get("/api/status").status_code == 200
+    (after,) = signing.sessions.records.values()
+    assert after.id_token_enc != before.id_token_enc
+
+
+def test_a_stored_access_token_for_another_subject_is_refused(
+    console: Console, signing: Rig
+) -> None:
+    browser_sign_in(console.client, signing.fake, "ana-sub")
+    _store_access_token(signing, signing.fake.mint_access("ben-sub"))
+
+    assert console.client.get("/api/status").status_code == 401
+
+
+@pytest.mark.parametrize(
+    "roles", [None, ["other-client:admin"]], ids=["no-roles-claim", "neither-role"]
+)
+def test_a_stored_access_token_without_a_console_role_is_refused(
+    console: Console, signing: Rig, roles: list[str] | None
+) -> None:
+    browser_sign_in(console.client, signing.fake, "ana-sub")
+    _store_access_token(signing, signing.fake.mint_access("ana-sub", roles=roles))
+
+    assert console.client.get("/api/status").status_code == 401
+
+
+async def test_a_login_purpose_refusal_is_the_state_rule(signing: Rig) -> None:
+    begun = await signing.sign_in.begin()
+    code, state = signing.fake.authorize(begun.authorization_url, "ana-sub")
+    ((state_hash, (login, used)),) = signing.logins.records.items()
+    signing.logins.records[state_hash] = (replace(login, purpose="link"), used)
+
+    result = await signing.sign_in.complete(state=state, code=code, binding=begun.binding)
+
+    assert result == SignInFailed("state")
+
+
+def test_a_login_older_than_ten_minutes_is_refused(console: Console, signing: Rig) -> None:
+    code, state = signing.fake.authorize(start(console.client), "ana-sub")
+    signing.clock.advance(LOGIN_LIFETIME + timedelta(seconds=1))
+
+    response = console.client.get(
+        "/auth/callback", params={"code": code, "state": state}, follow_redirects=False
+    )
+
+    assert response.status_code == 400
+    assert signing.sessions.records == {}
+
+
+def test_a_used_login_is_dropped_when_the_next_begins(console: Console, signing: Rig) -> None:
+    browser_sign_in(console.client, signing.fake, "ana-sub")
+    start(_browser(console))
+
+    ((_, (_, used)),) = signing.logins.records.items()
+    assert used is None
+
+
+def test_a_token_response_that_is_not_bearer_creates_no_session(
+    console: Console, signing: Rig
+) -> None:
+    signing.fake.token_type = "mac"
+
+    assert browser_sign_in(console.client, signing.fake, "ana-sub") == 400
+    assert signing.sessions.records == {}
+
+
+def test_each_request_keeps_a_session_from_going_idle(console: Console, signing: Rig) -> None:
+    signing.fake.access_ttl = 2 * 86400  # no refresh: only the request marks it seen
+    browser_sign_in(console.client, signing.fake, "ana-sub")
+
+    signing.clock.advance(timedelta(hours=11))
+    assert console.client.get("/api/status").status_code == 200
+    signing.clock.advance(timedelta(hours=11))
+
+    assert console.client.get("/api/status").status_code == 200

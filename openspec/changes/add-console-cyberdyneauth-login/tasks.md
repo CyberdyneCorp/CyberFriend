@@ -25,6 +25,9 @@
 - [x] 2.14 Tests: bearer plus a valid cookie is served as the bearer and the session is untouched; invalid bearer plus valid cookie is 401
 - [x] 2.15 Test: two concurrent requests near expiry trigger exactly one refresh
 - [x] 2.16 e2e: admin process + FakeOIDC; operator sees read-only, admin mutates, logout ends the session
+- [x] 2.17 The issuer alone is the switch: unset with the other four still set starts with sign-in off (break-glass); set without them refuses to start
+- [x] 2.18 Tests: two refreshes in a row present the rotated refresh token; a sign-out racing a refresh serves nothing and revokes the new refresh token; an access token is refused as an id token with client id `cyberfriend`
+- [x] 2.19 Used and expired `admin_login` rows are dropped when the next sign-in starts
 
 ## 3. Console sign-in (after the Svelte swap)
 

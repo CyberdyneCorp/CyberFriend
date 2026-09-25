@@ -95,9 +95,9 @@ class PostgresSessionStore:
             row = result.mappings().first()
         return None if row is None else _session(row)
 
-    async def refreshed(self, id_hash: str, tokens: RefreshedTokens, now: datetime) -> None:
+    async def refreshed(self, id_hash: str, tokens: RefreshedTokens, now: datetime) -> bool:
         async with self._engine.begin() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 admin_sql.REFRESH_ADMIN_SESSION,
                 {
                     "id_hash": id_hash,
@@ -110,6 +110,7 @@ class PostgresSessionStore:
                     "now": now,
                 },
             )
+        return bool(result.rowcount)
 
     async def touch(self, id_hash: str, now: datetime) -> None:
         async with self._engine.begin() as conn:

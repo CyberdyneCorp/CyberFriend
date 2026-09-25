@@ -7,7 +7,8 @@ userinfo, revocation and an end-session endpoint. The admin process is built
 over `transport`, so a scenario signs in end to end without a network.
 
 Knobs for the negative cases are plain attributes: overrides merged into the
-next access or id token, a different `sub` for userinfo, a missing nonce.
+next access or id token, a different `sub` for userinfo, a missing nonce, the
+token type, and whether a refresh returns an id token.
 """
 
 from __future__ import annotations
@@ -84,6 +85,10 @@ class FakeOIDC:
     id_overrides: dict[str, Any] = field(default_factory=dict)
     userinfo_sub: str | None = None
     omit_nonce: bool = False
+    #: The token response's `token_type`.
+    token_type: str = "Bearer"
+    #: Whether a refresh also returns an id token (the contract allows either).
+    id_token_on_refresh: bool = False
     #: What was asked of the fake, for assertions.
     grants: list[str] = field(default_factory=list)
     jwks_fetches: int = 0
@@ -128,6 +133,10 @@ class FakeOIDC:
             algorithm="RS256",
             headers={"kid": kid, **header},
         )
+
+    def sign_without_kid(self, claims: dict[str, Any]) -> str:
+        """Signed with the current key, with no `kid` in the header."""
+        return jwt.encode(claims, self._signing_key(self._kid), algorithm="RS256")
 
     def access_claims(self, sub: str, **overrides: Any) -> dict[str, Any]:
         now = int(self.clock())
@@ -272,12 +281,12 @@ class FakeOIDC:
         self._access[access] = sub
         body: dict[str, Any] = {
             "access_token": access,
-            "token_type": "Bearer",
+            "token_type": self.token_type,
             "expires_in": self.access_ttl,
             "refresh_token": refresh,
             "refresh_expires_in": 30 * 86400,
         }
-        if nonce is not None:
+        if nonce is not None or self.id_token_on_refresh:
             body["id_token"] = self.sign(self.id_claims(sub, nonce))
         return httpx.Response(200, json=body)
 

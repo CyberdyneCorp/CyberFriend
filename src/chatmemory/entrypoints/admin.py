@@ -106,7 +106,7 @@ OIDC_ISSUER_VAR = ISSUER_VAR
 Set (with the client id, secret, session key and public URL, see
 `admin.oidc.config`): people sign in with CyberdyneAuth, tokens are operator
 (read-only), and admin rights come only from the identity provider's role.
-Unsetting it again is the break-glass rollback.
+Unsetting it again is the break-glass rollback; the other four may stay set.
 """
 
 FORBIDDEN_CREDENTIALS = ("DISCORD_TOKEN", "LLM_API_KEY", "SERPAPI_KEY")
@@ -238,9 +238,10 @@ def build(
     discovery on the first sign-in (or `main`'s warm-up). `transport` carries
     every outbound call to CyberdyneAuth; None is the real network.
 
-    Sign-in partly configured raises `MisconfiguredSignIn`, naming what is
-    missing: the issuer alone would downscope every token to operator with no
-    way left to sign in as admin.
+    An issuer without the other sign-in settings raises `MisconfiguredSignIn`,
+    naming what is missing: the issuer alone would downscope every token to
+    operator with no way left to sign in as admin. No issuer is sign-in off,
+    whatever else is set -- the break-glass rollback.
     """
     warn_about_credentials(environ)
     settings = sign_in_settings(environ)
@@ -289,7 +290,9 @@ async def warm_up(signing_in: SignIn | None) -> None:
     """Fetch discovery at startup, so a bad issuer shows in the log at once.
 
     Best effort: CyberdyneAuth being down must not stop the console, whose
-    bearer tokens and existing sessions keep working without it.
+    bearer tokens keep working without it. Sessions do not: discovery and the
+    key set are cached in memory only, so a process started during an outage
+    refuses every session request until CyberdyneAuth answers.
     """
     if signing_in is None:
         return

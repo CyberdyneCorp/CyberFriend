@@ -282,7 +282,7 @@ class SignIn:
 
     async def _refresh(self, session: SessionRecord, now: datetime) -> Principal | Denied:
         try:
-            refreshed, access = await self._rotate(session, now)
+            refreshed, access, new_refresh = await self._rotate(session, now)
         except _FAILURES as exc:
             log.info("admin.oidc.refresh_failed", sub=session.sub, reason=str(exc))
             await self._sessions.revoke(session.id_hash, now)
@@ -296,14 +296,22 @@ class SignIn:
             await self._sessions.revoke(session.id_hash, now)
             log.info("admin.oidc.refresh_denied", sub=session.sub, reason="no console role")
             return NO_CONSOLE_ACCESS
-        await self._sessions.refreshed(
+        stored = await self._sessions.refreshed(
             session.id_hash, replace(refreshed, roles=_role_names(roles)), now
         )
+        if not stored:
+            # Signed out while the refresh was in flight. Sign-out revoked the
+            # refresh token we had just spent; the one we were given is live.
+            log.info("admin.oidc.refresh_after_sign_out", sub=session.sub)
+            if new_refresh:
+                await self._provider.revoke(new_refresh)
+            return UNAUTHENTICATED
         return _principal(session.sub, session.email, roles)
 
     async def _rotate(
         self, session: SessionRecord, now: datetime
-    ) -> tuple[RefreshedTokens, AccessClaims]:
+    ) -> tuple[RefreshedTokens, AccessClaims, str | None]:
+        """The tokens to store, the verified access token, and the new refresh token."""
         if session.refresh_token_enc is None:
             raise InvalidToken("no refresh token")
         refresh_token = self._open(session.refresh_token_enc, "refresh", session.id_hash)
@@ -329,6 +337,7 @@ class SignIn:
                 else session.expires_at,
             ),
             access,
+            tokens.refresh_token,
         )
 
     async def _refreshed_id_token(

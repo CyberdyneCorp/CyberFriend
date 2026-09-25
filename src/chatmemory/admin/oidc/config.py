@@ -1,10 +1,15 @@
-"""Sign-in settings, read from the environment. Off unless every one is set.
+"""Sign-in settings, read from the environment. The issuer is the switch.
 
-The issuer alone is not enough: setting it downscopes every `cfa_` token to
-operator, and without the client, the session key and the public URL nobody
-could sign in to get admin back. A partial configuration therefore refuses to
-start and names what is missing, rather than starting a console nobody can
-change anything in.
+Unset issuer: sign-in is off and `cfa_` tokens are admin, whatever else is
+set. That is the break-glass rollback -- unsetting one variable must bring
+admin back, so the other four left in place are ignored with a warning rather
+than refusing to start at the moment an urgent change is needed.
+
+Set issuer: the other four are required. The issuer alone downscopes every
+`cfa_` token to operator, and without the client, the session key and the
+public URL nobody could sign in to get admin back. So a set issuer with any of
+them missing refuses to start and names what is missing, rather than starting
+a console nobody can change anything in.
 """
 
 from __future__ import annotations
@@ -14,6 +19,8 @@ import binascii
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+
+import structlog
 
 ISSUER_VAR = "ADMIN_OIDC_ISSUER"
 CLIENT_ID_VAR = "ADMIN_OIDC_CLIENT_ID"
@@ -31,6 +38,8 @@ ACCESS_AUDIENCE = "cyberfriend"
 """The `aud` every access token must carry, from the CyberdyneAuth contract."""
 
 DEFAULT_SCOPES = "openid email profile"
+
+log = structlog.get_logger()
 
 SESSION_KEY_BYTES = 32
 
@@ -75,7 +84,11 @@ class SignInSettings:
 def sign_in_settings(environ: Mapping[str, str]) -> SignInSettings | None:
     """The settings, None when sign-in is off, or `MisconfiguredSignIn`."""
     values = {name: environ.get(name, "").strip() for name in REQUIRED_VARS}
-    if not any(values.values()):
+    if not values[ISSUER_VAR]:
+        ignored = sorted(name for name, value in values.items() if value)
+        if ignored:
+            # Names only: two of these are secrets.
+            log.warning("admin.oidc.off_without_issuer", ignored=ignored)
         return None
     missing = [name for name, value in values.items() if not value]
     if missing:

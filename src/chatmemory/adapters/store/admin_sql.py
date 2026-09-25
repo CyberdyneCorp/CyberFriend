@@ -99,10 +99,13 @@ VALUES
      :max_age, :expires_at)
 """)
 
-# Logins live ten minutes; a day of grace keeps a replayed state explainable
-# in the table while it is still being looked at.
+# Run by every new login. `/auth/login` is public, so each anonymous request
+# adds a row: dropping used and expired ones at once keeps the table at most
+# ten minutes of requests deep, where a day of grace let a flood of them pile
+# up. A replayed state is refused just the same once its row is gone.
 FORGET_EXPIRED_ADMIN_LOGINS = text("""
-DELETE FROM admin_login WHERE expires_at < CAST(:now AS timestamptz) - interval '1 day'
+DELETE FROM admin_login
+WHERE used_at IS NOT NULL OR expires_at <= CAST(:now AS timestamptz)
 """)
 
 # Used once: marking it used is the lookup, so two callbacks with one state

@@ -342,13 +342,31 @@ def test_configuring_sign_in_makes_every_token_operator_only() -> None:
     assert (status, body) == (403, {"error": "requires admin"})
 
 
-@pytest.mark.parametrize("missing", sorted(SIGN_IN))
+@pytest.mark.parametrize("missing", sorted(set(SIGN_IN) - {"ADMIN_OIDC_ISSUER"}))
 def test_sign_in_partly_configured_refuses_to_start(missing: str) -> None:
     """The issuer without the rest would leave nobody able to sign in as admin."""
     environ = {**ENVIRON, **{k: v for k, v in SIGN_IN.items() if k != missing}}
 
     with pytest.raises(MisconfiguredSignIn, match=missing):
         admin.build(environ)
+
+
+@pytest.mark.usefixtures("any_token_is_ana")
+def test_unsetting_only_the_issuer_is_the_break_glass_rollback() -> None:
+    """The documented rollback: the other four stay set, and the console starts
+    with sign-in off and `cfa_` tokens admin again, rather than refusing to
+    start at the moment an urgent change is needed."""
+    environ = {**ENVIRON, **{k: v for k, v in SIGN_IN.items() if k != "ADMIN_OIDC_ISSUER"}}
+
+    process = admin.build(environ)
+    status, _ = _opt_out_as_a_token(environ)
+
+    assert process.sign_in is None
+    assert status == 400  # past the admin check
+    login = TestClient(process.app, base_url=PUBLIC_URL).get(
+        "/auth/login", follow_redirects=False
+    )
+    assert login.status_code == 404
 
 
 def test_sign_in_is_wired_to_postgres_and_the_injected_transport(

@@ -399,13 +399,17 @@ configured, every `cfa_` token is **operator only**: admin rights then come
 only from the CyberdyneAuth role. A token never reads personal content
 (`admin_oidc` routes), whatever its role. Unsetting the issuer is the
 break-glass rollback: tokens are admin again on the next start, and sessions
-stop being accepted.
+stop being accepted. The other four sign-in variables may stay set; without an
+issuer they are ignored, with a warning naming them.
 
 ## Signing in with CyberdyneAuth
 
 The admin API is a backend-for-frontend: it runs the OIDC authorization code
 flow with PKCE (S256) against CyberdyneAuth itself, and the browser only ever
-holds an opaque cookie. No access, refresh or id token reaches the browser.
+holds an opaque cookie. No access or refresh token ever reaches the browser,
+and the id token only once: as the `id_token_hint` of the end-session URL at
+sign-out, after the session it belonged to has been revoked (RP-initiated
+logout needs it, and it is not a credential for this API).
 The code is in `src/chatmemory/admin/oidc/`.
 
 | Route | Access | What it does |
@@ -466,9 +470,11 @@ exactly as before. The record stays append-only.
 
 ### Configuration
 
-Sign-in is on only when all five are set; setting some but not all refuses to
-start and names what is missing (the issuer alone would downscope every token
-with no way left to sign in as admin).
+The issuer is the switch. Unset (or blank), sign-in is off whatever else is
+set, which is what makes unsetting it alone a working rollback. Set, the other
+four are required: a set issuer with any of them missing refuses to start and
+names what is missing (the issuer alone would downscope every token with no way
+left to sign in as admin).
 
 | Variable | Value |
 |---|---|

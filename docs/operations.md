@@ -235,19 +235,24 @@ corpus or the bot's accounts, and neither is ever logged, recorded in
 | `ADMIN_SESSION_KEY` | 32 bytes (base64) that encrypt the tokens in `admin_session`. `openssl rand -base64 32`. | Replace it and redeploy: every existing session stops decrypting and people sign in again. |
 
 The other sign-in variables (`ADMIN_OIDC_ISSUER`, `ADMIN_OIDC_CLIENT_ID`,
-`ADMIN_PUBLIC_URL`) are not secret. Set all five or none: a partial set refuses
-to start and names what is missing.
+`ADMIN_PUBLIC_URL`) are not secret. The issuer is the switch: with it set, the
+other four are required and a missing one refuses to start, naming it; with it
+unset, sign-in is off and the other four are ignored (a warning names them).
 
 **Break-glass.** If CyberdyneAuth is down while an admin change is urgent,
-unset `ADMIN_OIDC_ISSUER` (and the other four) and redeploy `admin`: sessions
-stop being accepted and `cfa_` tokens are admin again. Set them back once
-CyberdyneAuth is up. While CyberdyneAuth is merely unreachable, existing
-sessions keep working until their access token needs a refresh, and bearer
-tokens keep working throughout.
+unset `ADMIN_OIDC_ISSUER` and redeploy `admin`: sessions stop being accepted
+and `cfa_` tokens are admin again. The other four can stay set. Set the issuer
+back once CyberdyneAuth is up. While CyberdyneAuth is merely unreachable,
+existing sessions keep working until their access token needs a refresh --
+but only in an `admin` process that fetched discovery and the key set before
+the outage. Both are cached in memory, so after a restart or redeploy during
+the outage every session request is a 401 until CyberdyneAuth answers again.
+Bearer tokens keep working throughout.
 
 `admin_session` and `admin_login` hold hashes and ciphertext only. Revoked and
-expired sessions stay until the table is pruned; used and expired logins are
-dropped a day after they expire, when the next sign-in starts.
+expired sessions stay until the table is pruned. `/auth/login` is public and
+each request stores a login, so used and expired logins are dropped as soon as
+the next sign-in starts: the table holds at most ten minutes of them.
 
 ## Tracing
 

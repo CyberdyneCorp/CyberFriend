@@ -6,6 +6,7 @@ here means that rule -- and not some other one -- refused it.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any
 
@@ -13,6 +14,7 @@ import jwt
 import pytest
 
 from chatmemory.admin.auth import Role
+from chatmemory.admin.oidc.config import ACCESS_AUDIENCE
 from chatmemory.admin.oidc.crypto import digest
 from chatmemory.admin.oidc.provider import OIDCProvider
 from chatmemory.admin.oidc.verify import InvalidToken, verify_access_token, verify_id_token
@@ -228,21 +230,71 @@ async def test_an_id_token_for_another_client_is_refused(
         await _id(token, provider, clock)
 
 
+@pytest.mark.parametrize("nonce", [NONCE, None], ids=["at-sign-in", "on-refresh"])
 async def test_an_access_token_is_not_an_id_token(
-    fake: FakeOIDC, provider: OIDCProvider, clock: Clock
+    fake: FakeOIDC, provider: OIDCProvider, clock: Clock, nonce: str | None
 ) -> None:
-    """Its audience is `cyberfriend` the API, not the client, so it cannot pass."""
-    fake.client_id = "console-client"
+    """The production client id is `cyberfriend`, equal to the access audience,
+    so `aud` passes: the token type is what refuses it."""
+    assert CLIENT_ID == ACCESS_AUDIENCE
 
+    with pytest.raises(InvalidToken, match="type"):
+        await _id(fake.mint_access("ana-sub", nonce=NONCE), provider, clock, nonce=nonce)
+
+
+async def test_the_access_audience_is_cyberfriend_whatever_the_client_id(
+    fake: FakeOIDC, clock: Clock
+) -> None:
+    """`aud` is the contract's `cyberfriend`; roles are keyed on the client id."""
+    fake.client_id = "console-client"
+    fake.add("eve-sub", "eve@cyberdyne.test", [fake.role("admin")])
+    settings = replace(SETTINGS, client_id="console-client")
+    provider = OIDCProvider(settings, transport=fake.transport)
+
+    claims = await verify_access_token(
+        fake.mint_access("eve-sub"),
+        keys=provider,
+        issuer=ISSUER,
+        client_id="console-client",
+        now=clock(),
+    )
+    assert claims.roles == frozenset({Role.ADMIN})
     with pytest.raises(InvalidToken, match="aud"):
-        await verify_id_token(
-            fake.mint_access("ana-sub", nonce=NONCE),
+        await verify_access_token(
+            fake.mint_access("eve-sub", aud="console-client"),
             keys=provider,
             issuer=ISSUER,
             client_id="console-client",
             now=clock(),
-            nonce_hash=digest(NONCE),
         )
+
+
+async def test_a_token_not_yet_valid_is_refused(
+    fake: FakeOIDC, provider: OIDCProvider, clock: Clock
+) -> None:
+    token = fake.mint_access("ana-sub", nbf=int(clock.epoch()) + 60)
+
+    with pytest.raises(InvalidToken, match="nbf"):
+        await _access(token, provider, clock)
+
+
+async def test_a_token_without_a_kid_is_refused_when_several_keys_are_published(
+    fake: FakeOIDC, provider: OIDCProvider, clock: Clock
+) -> None:
+    fake.rotate_key()  # two published keys
+    token = fake.sign_without_kid(fake.access_claims("ana-sub"))
+    assert "kid" not in jwt.get_unverified_header(token)
+
+    with pytest.raises(InvalidToken, match="kid"):
+        await _access(token, provider, clock)
+
+
+async def test_a_token_without_a_kid_is_accepted_when_one_key_is_published(
+    fake: FakeOIDC, provider: OIDCProvider, clock: Clock
+) -> None:
+    token = fake.sign_without_kid(fake.access_claims("ana-sub"))
+
+    assert (await _access(token, provider, clock)).sub == "ana-sub"
 
 
 async def test_a_subject_with_whitespace_is_refused(

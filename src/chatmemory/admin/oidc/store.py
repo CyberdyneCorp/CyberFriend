@@ -76,8 +76,12 @@ class SessionStore(Protocol):
         """The session, if not revoked, not expired and seen within `idle`."""
         ...
 
-    async def refreshed(self, id_hash: str, tokens: RefreshedTokens, now: datetime) -> None:
-        """Replace the tokens after a refresh, and mark the session seen."""
+    async def refreshed(self, id_hash: str, tokens: RefreshedTokens, now: datetime) -> bool:
+        """Replace the tokens after a refresh, and mark the session seen.
+
+        False when the session was revoked meanwhile (a sign-out racing the
+        refresh): nothing is written, and the caller must not serve it.
+        """
         ...
 
     async def touch(self, id_hash: str, now: datetime) -> None: ...
@@ -92,7 +96,9 @@ class InMemoryLoginStore:
         self.records: dict[str, tuple[LoginRecord, datetime | None]] = {}
 
     async def begin(self, login: LoginRecord, now: datetime) -> None:
-        self.records = {k: v for k, v in self.records.items() if v[0].expires_at > now}
+        self.records = {
+            k: v for k, v in self.records.items() if v[1] is None and v[0].expires_at > now
+        }
         self.records[login.state_hash] = (login, None)
 
     async def consume(self, state_hash: str, now: datetime) -> LoginRecord | None:
@@ -116,8 +122,10 @@ class InMemorySessionStore:
             return None
         return found if found.last_seen_at > now - idle else None
 
-    async def refreshed(self, id_hash: str, tokens: RefreshedTokens, now: datetime) -> None:
-        found = self.records[id_hash]
+    async def refreshed(self, id_hash: str, tokens: RefreshedTokens, now: datetime) -> bool:
+        found = self.records.get(id_hash)
+        if found is None or found.revoked_at is not None:
+            return False
         self.records[id_hash] = replace(
             found,
             roles=tokens.roles,
@@ -128,6 +136,7 @@ class InMemorySessionStore:
             expires_at=tokens.expires_at,
             last_seen_at=now,
         )
+        return True
 
     async def touch(self, id_hash: str, now: datetime) -> None:
         found = self.records.get(id_hash)

@@ -35,6 +35,24 @@ def test_the_issuer_alone_is_refused_with_what_is_missing() -> None:
         assert name in str(refusal.value)
 
 
+def test_without_the_issuer_the_rest_is_ignored_and_sign_in_is_off() -> None:
+    """Break-glass: unsetting the issuer alone turns sign-in off."""
+    without_issuer = {k: v for k, v in ENVIRON.items() if k != "ADMIN_OIDC_ISSUER"}
+
+    assert sign_in_settings(without_issuer) is None
+    assert sign_in_settings({**without_issuer, "ADMIN_OIDC_ISSUER": "  "}) is None
+
+
+@pytest.mark.parametrize(
+    "missing", sorted(set(ENVIRON) - {"ADMIN_OIDC_ISSUER"})
+)
+def test_an_issuer_with_one_other_missing_is_refused(missing: str) -> None:
+    environ = {k: v for k, v in ENVIRON.items() if k != missing}
+
+    with pytest.raises(MisconfiguredSignIn, match=missing):
+        sign_in_settings(environ)
+
+
 @pytest.mark.parametrize(
     "key",
     ["not base64 !!", base64.b64encode(b"short").decode(), base64.b64encode(bytes(33)).decode()],

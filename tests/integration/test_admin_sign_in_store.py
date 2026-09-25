@@ -85,6 +85,17 @@ async def test_an_expired_login_is_not_consumed(clean: AsyncEngine) -> None:
     assert await logins.consume("s1", NOW) is None
 
 
+def _refreshed(at: datetime) -> RefreshedTokens:
+    return RefreshedTokens(
+        roles=("operator",),
+        access_token_enc=b"\x11new-access",
+        refresh_token_enc=b"\x12new-refresh",
+        id_token_enc=b"\x03id",
+        access_expires_at=at + timedelta(minutes=15),
+        expires_at=at + timedelta(days=30),
+    )
+
+
 async def test_old_logins_are_dropped_when_a_new_one_begins(clean: AsyncEngine) -> None:
     logins = PostgresLoginStore(clean)
     await logins.begin(_login("old", expires_at=NOW - timedelta(days=2)), NOW - timedelta(days=3))
@@ -93,6 +104,21 @@ async def test_old_logins_are_dropped_when_a_new_one_begins(clean: AsyncEngine) 
     async with clean.connect() as conn:
         states = set((await conn.execute(text("SELECT state_hash FROM admin_login"))).scalars())
     assert states == {"new"}
+
+
+async def test_used_and_expired_logins_are_dropped_at_once(clean: AsyncEngine) -> None:
+    """`/auth/login` is public: the table holds at most ten minutes of it."""
+    logins = PostgresLoginStore(clean)
+    await logins.begin(_login("used"), NOW)
+    await logins.consume("used", NOW)
+    await logins.begin(_login("expired", expires_at=NOW + timedelta(minutes=1)), NOW)
+    await logins.begin(_login("live", expires_at=NOW + timedelta(minutes=12)), NOW)
+
+    await logins.begin(_login("new"), NOW + timedelta(minutes=2))
+
+    async with clean.connect() as conn:
+        states = set((await conn.execute(text("SELECT state_hash FROM admin_login"))).scalars())
+    assert states == {"live", "new"}
 
 
 async def test_a_session_round_trips(clean: AsyncEngine) -> None:
@@ -117,24 +143,28 @@ async def test_a_refresh_replaces_the_tokens(clean: AsyncEngine) -> None:
     await sessions.create(_session())
     later = NOW + timedelta(minutes=14)
 
-    await sessions.refreshed(
-        "h1",
-        RefreshedTokens(
-            roles=("operator",),
-            access_token_enc=b"\x11new-access",
-            refresh_token_enc=b"\x12new-refresh",
-            id_token_enc=b"\x03id",
-            access_expires_at=later + timedelta(minutes=15),
-            expires_at=later + timedelta(days=30),
-        ),
-        later,
-    )
+    stored = await sessions.refreshed("h1", _refreshed(later), later)
+
+    assert stored is True
 
     found = await sessions.live("h1", later, IDLE)
     assert found is not None
     assert found.roles == ("operator",)
     assert found.refresh_token_enc == b"\x12new-refresh"
     assert found.last_seen_at == later
+
+
+async def test_a_refresh_after_sign_out_writes_nothing(clean: AsyncEngine) -> None:
+    sessions = PostgresSessionStore(clean)
+    await sessions.create(_session())
+    await sessions.revoke("h1", NOW)
+
+    stored = await sessions.refreshed("h1", _refreshed(NOW), NOW)
+
+    assert stored is False
+    async with clean.connect() as conn:
+        kept = await conn.scalar(text("SELECT refresh_token_enc FROM admin_session"))
+    assert bytes(kept) == b"\x02refresh"
 
 
 async def test_a_revoked_session_is_returned_once_and_never_live_again(
