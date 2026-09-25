@@ -6,10 +6,15 @@ message starting like a suggestion is answered as, through the ask service.
 
 from __future__ import annotations
 
+import ast
+import importlib
+import inspect
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
+from chatmemory.app import suggestion_intent as suggestion_intent_module
 from chatmemory.app.ask import AskRequest
 from chatmemory.app.language import Language
 from chatmemory.app.limits import RateLimiter
@@ -22,6 +27,8 @@ from chatmemory.app.suggestion_intent import (
     suggestion_intent,
 )
 from tests.unit.test_ask import GENERAL, LEAD, build, ch, person
+from tests.unit.test_conversation_memory import FakeMemoryStore, in_general
+from tests.unit.test_conversation_memory import service as remembering_service
 
 PT, EN = Language.PORTUGUESE, Language.ENGLISH
 NOW = datetime(2026, 9, 25, 15, 0, tzinfo=UTC)
@@ -128,6 +135,67 @@ def test_every_route_has_a_case() -> None:
     assert set(CLAIMED) == {name for name, _ in ROUTE_CLAIMS}
 
 
+#: The modules that pick a route for a message, and the route predicates they
+#: import that are not routes away from the corpus answer.
+DISPATCHERS = ("ask.py", "reasoning/service.py")
+PREDICATE_MODULES = frozenset(
+    f"chatmemory.app.{name}"
+    for name in (
+        "routing",
+        "routing_crypto",
+        "alert_intent",
+        "catchup",
+        "said_by",
+        "self_description",
+    )
+)
+NOT_A_ROUTE = {
+    "classify": "fixed path or loop, both the corpus answer",
+    "typed_command_reply": "the reply to a typed command, not the check for one",
+}
+
+
+def _functions_imported_from_predicate_modules(source: str) -> set[str]:
+    names = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom) and node.module in PREDICATE_MODULES:
+            module = importlib.import_module(node.module)
+            names |= {a.name for a in node.names if inspect.isfunction(getattr(module, a.name))}
+    return names
+
+
+def _called_in_route_claims() -> set[str]:
+    tree = ast.parse(Path(suggestion_intent_module.__file__).read_text())
+    [claims] = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "ROUTE_CLAIMS"
+    ]
+    return {
+        node.func.id
+        for node in ast.walk(claims)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def test_every_route_the_pipeline_dispatches_on_is_in_route_claims() -> None:
+    """Not the list checked against itself: a route predicate the ask service
+    or the reasoning service starts reading must be added to `ROUTE_CLAIMS`,
+    or a suggestion would be proposed over what that route can answer."""
+    app = Path(suggestion_intent_module.__file__).parent
+    dispatched = set().union(
+        *(
+            _functions_imported_from_predicate_modules((app / module).read_text())
+            for module in DISPATCHERS
+        )
+    )
+
+    assert dispatched - set(NOT_A_ROUTE) <= _called_in_route_claims()
+    assert set(NOT_A_ROUTE) <= dispatched, "an exclusion no dispatcher uses any more"
+
+
 @pytest.mark.parametrize(("route", "message"), sorted(CLAIMED.items()))
 def test_each_route_claims_its_own_message(route: str, message: str) -> None:
     assert route_claiming(message, now=NOW) == route
@@ -191,6 +259,19 @@ async def test_a_price_question_after_the_form_is_a_price_question() -> None:
     assert outcome.suggestion is None
     assert [q.text for q in answers.seen] == ["sugestão: me diga o preço do BTC"]
     assert route_claiming(answers.seen[0].text) == "market"
+
+
+async def test_a_follow_up_after_the_form_is_read_with_the_earlier_questions() -> None:
+    """'e em euros?' is the market route only after a price question, so the
+    asker's earlier questions must reach the check, not an empty history."""
+    service, answers = remembering_service(FakeMemoryStore())
+    await service.ask(in_general(LEAD, "qual o preço do BTC?"), suggest=True)
+
+    outcome = await service.ask(in_general(LEAD, "sugestão: e em euros?"), suggest=True)
+
+    assert route_claiming("e em euros?") is None, "claimed only because of what came before"
+    assert outcome.suggestion is None
+    assert [q.text for q in answers.seen] == ["qual o preço do BTC?", "e em euros?"]
 
 
 async def test_a_portfolio_request_after_the_form_is_asked_as_those_words() -> None:

@@ -399,8 +399,10 @@ P&L and impermanent loss. History is the activity tool's (below). Adding a chain
 ## Portfolio total
 
 A fourth tool on the same server, `portfolio_summary`, answers "quanto eu tenho
-no total?", "what's my portfolio worth?", "what's my net worth on chain?" and
-"e no total?" after a wallet or positions question. It is recognised before
+no total?", "what's my portfolio worth?", "what's my net worth on chain?", the
+whole-message short forms "show my portfolio" / "show me my crypto portfolio" /
+"me mostra o meu portfólio", and "e no total?" after a wallet or positions
+question. It is recognised before
 retrieval (route label `PORTFOLIO`, ahead of the positions and balance routes)
 and needs no setting beyond the positions ones.
 

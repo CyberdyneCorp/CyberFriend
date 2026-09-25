@@ -729,6 +729,18 @@ class FakeDiscord:
             return
         await item.view._scheduled_task(item, interaction)
 
+    def view_timeout(self, sent: Sent) -> float | None:
+        """The timeout discord.py holds for the live view on the message `sent`.
+
+        What `expire` stands in for: a view with no timeout would never expire
+        on Discord, however many times a test calls `expire` on it.
+        """
+        items = self.state._view_store._views.get(sent.message_id, {})
+        view = next((item.view for item in items.values() if item.view is not None), None)
+        assert view is not None, "no live view on that message"
+        timeout: float | None = view.timeout
+        return timeout
+
     async def expire(self, sent: Sent) -> None:
         """The view on the message `sent` times out, as discord.py would time it out.
 

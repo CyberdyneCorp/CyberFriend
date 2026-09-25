@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import text
 
 from chatmemory.adapters.discord.bot import PLATFORM
+from chatmemory.adapters.discord.suggestions import PROPOSAL_WINDOW_SECONDS
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.app.optout import OptOutService
 from chatmemory.domain.identity import PersonRef
@@ -212,6 +213,7 @@ async def test_declining_answers_the_message_and_stores_nothing(bot: E2EBot) -> 
 async def test_an_unanswered_proposal_answers_the_message_when_it_expires(bot: E2EBot) -> None:
     dm = bot.dm(bot.person("Leo"))
     offer = proposal(await dm.say("feature request: a weekly digest of decisions"))
+    assert bot.discord.view_timeout(offer) == PROPOSAL_WINDOW_SECONDS == 120.0
 
     expired = await dm.expire(offer)
 
