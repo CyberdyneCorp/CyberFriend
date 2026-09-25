@@ -6,6 +6,7 @@ same image runs against OpenAI, a LiteLLM proxy, or a self-hosted gateway.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -342,6 +343,22 @@ class Settings(BaseSettings):
     media_timeout_seconds: float = 30.0
     """What one download, and separately one transcription, may take."""
 
+    # --- Channel media ---------------------------------------------------
+    media_enabled_at: datetime | None = None
+    """From when voice notes and images posted in indexed channels are recorded.
+
+    Unset -- the default -- records nothing. Set, each message created at or
+    after it gets one pending row per allowlisted attachment: metadata and a
+    signed CDN URL, never the bytes, and nothing is downloaded or sent to a
+    model by capture. A moment rather than a switch, so the operator names when
+    members were told, and nobody's earlier voice notes are swept in by
+    turning it on. A value without a zone is read as UTC.
+    """
+
+    media_backfill_days: int = 0
+    """Days before MEDIA_ENABLED_AT whose media is recorded too, when history is
+    re-read. 0 records only what was posted after it."""
+
     # --- Time ----------------------------------------------------------
     answer_timezone: str = "America/Sao_Paulo"
     """The zone whose calendar a question's "ontem" or "last week" means.
@@ -538,6 +555,27 @@ class Settings(BaseSettings):
         if self.voice_questions_enabled and self.media_api_key is None:
             raise ValueError("voice_questions_enabled needs media_api_key")
         return self
+
+    @field_validator("media_enabled_at")
+    @classmethod
+    def _utc_when_unzoned(cls, v: datetime | None) -> datetime | None:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=UTC)
+        return v
+
+    @field_validator("media_backfill_days")
+    @classmethod
+    def _non_negative_backfill(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("must be 0 or more")
+        return v
+
+    @property
+    def media_capture_since(self) -> datetime | None:
+        """The oldest message whose media is recorded, or None when none is."""
+        if self.media_enabled_at is None:
+            return None
+        return self.media_enabled_at - timedelta(days=self.media_backfill_days)
 
     @field_validator("ask_stale_after_days", "ask_extraction_window_messages")
     @classmethod

@@ -30,7 +30,9 @@ import discord
 import structlog
 
 from chatmemory.app.routing import states_own_contact
+from chatmemory.app.voice import declared_type, from_discord_cdn
 from chatmemory.domain.identity import ChannelRef, PersonRef
+from chatmemory.domain.media import AUDIO_TYPES, IMAGE_TYPES, MediaKind, MediaRef
 from chatmemory.domain.messages import Message
 from chatmemory.ports.sources import SourceUnavailable
 
@@ -64,6 +66,15 @@ class RawReference(Protocol):
 
 class RawChannel(Protocol):
     id: int
+
+
+class RawAttachment(Protocol):
+    id: int
+    filename: str
+    size: int
+    url: str
+    content_type: str | None
+    duration: float | None
 
 
 class RawMessage(Protocol):
@@ -154,6 +165,46 @@ def withholds_personal_fact(raw: RawMessage) -> bool:
     return states_own_contact(raw.content)
 
 
+def _media_kind(content_type: str, voice: bool) -> MediaKind | None:
+    if content_type in AUDIO_TYPES:
+        return MediaKind.VOICE if voice else MediaKind.AUDIO
+    if content_type in IMAGE_TYPES:
+        return MediaKind.IMAGE
+    return None
+
+
+def media_of(raw: RawMessage) -> tuple[MediaRef, ...]:
+    """The attachments worth keeping a pending media row for.
+
+    Only an allowlisted declared type served from the Discord CDN: a URL
+    anywhere else is a host the process would later be pointed at by somebody
+    else's payload. A voice note is told apart by the message's
+    IS_VOICE_MESSAGE flag, which the client sets on a recording and never on an
+    uploaded file. Read with getattr, as `channel_of` reads threads, because
+    the plain objects the core is tested against need not carry either.
+    """
+    voice = bool(getattr(getattr(raw, "flags", None), "voice", False))
+    attachments = cast("Sequence[RawAttachment]", getattr(raw, "attachments", ()))
+    refs: list[MediaRef] = []
+    for attachment in attachments:
+        content_type = declared_type(attachment.content_type)
+        kind = _media_kind(content_type, voice)
+        if kind is None or not from_discord_cdn(attachment.url):
+            continue
+        refs.append(
+            MediaRef(
+                attachment_id=attachment.id,
+                kind=kind,
+                content_type=content_type,
+                byte_size=attachment.size,
+                url=attachment.url,
+                filename=attachment.filename,
+                duration_seconds=attachment.duration,
+            )
+        )
+    return tuple(refs)
+
+
 def to_message(raw: RawMessage) -> Message | None:
     """Convert a platform message, or None when it must not be indexed."""
     channel, thread_id = channel_of(raw)
@@ -173,6 +224,7 @@ def to_message(raw: RawMessage) -> Message | None:
         # Captured as structure rather than left in the text: "what did people
         # ask me?" must not depend on scanning message bodies for a mention.
         mentions=frozenset(PersonRef(PLATFORM, u.id) for u in raw.mentions),
+        media=media_of(raw),
     )
 
 

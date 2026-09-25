@@ -286,6 +286,12 @@ def message_payload(
     return payload
 
 
+def _date_id(payload: dict[str, Any], at: datetime) -> None:
+    """Mint the message id from `at`: discord.py dates a message by its snowflake."""
+    # The low 22 bits are free for uniqueness below the millisecond.
+    payload["id"] = str(discord.utils.time_snowflake(at) + snowflake() % (1 << 22))
+
+
 def attachment_payload(
     url: str,
     *,
@@ -517,6 +523,29 @@ class FakeDiscord:
             return existing  # type: ignore[no-any-return]
         return self.state.add_dm_channel(self.dm_payload(user_id))  # type: ignore[no-any-return]
 
+    def private_thread(self, parent: str) -> discord.Thread:
+        """A private thread under #`parent`: readable only by who was added to it."""
+        data = {
+            "id": str(snowflake()),
+            "guild_id": str(self.layout.guild_id),
+            "parent_id": str(self.channel(parent).id),
+            "owner_id": str(OWNER_ID),
+            "name": "private",
+            "type": 12,
+            "last_message_id": None,
+            "rate_limit_per_user": 0,
+            "message_count": 0,
+            "member_count": 0,
+            "thread_metadata": {
+                "archived": False,
+                "auto_archive_duration": 1440,
+                "archive_timestamp": _now(),
+                "locked": False,
+                "invitable": False,
+            },
+        }
+        return discord.Thread(guild=self.guild, state=self.state, data=data)  # type: ignore[arg-type]
+
     def is_dm(self, channel_id: int) -> bool:
         return channel_id in self._dm_channels.values()
 
@@ -535,8 +564,11 @@ class FakeDiscord:
         *,
         attachments: Sequence[Mapping[str, Any]] = (),
         flags: int = 0,
+        at: datetime | None = None,
     ) -> discord.Message:
-        """A message in the member's DM with the bot, with any attachments."""
+        """A message in the member's DM with the bot, with any attachments.
+
+        `at` dates it, as `chatter` does; without one it dates to 2015."""
         channel = self.dm_channel(member.id)
         data = message_payload(
             channel_id=channel.id,
@@ -544,7 +576,10 @@ class FakeDiscord:
             content=content,
             attachments=attachments,
             flags=flags,
+            at=at,
         )
+        if at is not None:
+            _date_id(data, at)
         return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
 
     def channel_message(
@@ -573,11 +608,13 @@ class FakeDiscord:
     def chatter(
         self,
         member: discord.Member,
-        channel: discord.TextChannel,
+        channel: discord.TextChannel | discord.Thread,
         content: str,
         *,
         mentions: Sequence[discord.Member] = (),
         at: datetime,
+        attachments: Sequence[Mapping[str, Any]] = (),
+        flags: int = 0,
     ) -> discord.Message:
         """A message in a guild channel that is not addressed to the bot.
 
@@ -596,9 +633,10 @@ class FakeDiscord:
             member=member_payload(user, [r.id for r in member.roles[1:]]),
             mentions=[self._mention(m) for m in mentions],
             at=at,
+            attachments=attachments,
+            flags=flags,
         )
-        # The low 22 bits are free for uniqueness below the millisecond.
-        data["id"] = str(discord.utils.time_snowflake(at) + snowflake() % (1 << 22))
+        _date_id(data, at)
         return discord.Message(state=self.state, channel=channel, data=data)  # type: ignore[arg-type]
 
     def _mention(self, member: discord.Member) -> dict[str, Any]:

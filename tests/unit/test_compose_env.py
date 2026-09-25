@@ -31,6 +31,10 @@ DEPLOYMENT_SETTINGS = {
     "EMBEDDING_MODEL": ("ingest", "bot", "mcp"),
     "EMBEDDING_DIMENSIONS": ("ingest", "bot", "mcp"),
     "CHAT_MODEL": ("bot",),
+    # Channel media is recorded by the process that captures messages; unset,
+    # which is the default, nothing is recorded.
+    "MEDIA_ENABLED_AT": ("ingest",),
+    "MEDIA_BACKFILL_DAYS": ("ingest",),
     # The bot summarises conversation memory on the extraction model, so it
     # needs the operator's choice as much as the ingest process does.
     "EXTRACTION_MODEL": ("ingest", "bot"),

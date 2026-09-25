@@ -890,3 +890,41 @@ self-hosted OpenAI-compatible Whisper to keep voice inside the network.
 the default ceiling of 1,500 minutes a month that is at most about $4.50; a
 person at their 60-minute cap costs about $0.18.
 
+
+## Channel media
+
+Voice notes and images posted in indexed channels are recorded as pending
+`message_media` rows (migration 0026), for a later worker to transcribe or
+describe. Today only the recording exists: nothing is downloaded, no model is
+called, and nothing about a voice note or image is searchable yet.
+
+| | |
+|---|---|
+| `MEDIA_ENABLED_AT` | Unset by default: nothing is recorded. An ISO timestamp (UTC when it has no zone); messages created at or after it are recorded. Ingest only |
+| `MEDIA_BACKFILL_DAYS` | Default 0. Days before `MEDIA_ENABLED_AT` also recorded, when history is re-read by backfill or reconciliation |
+
+A moment rather than a switch, on purpose: members posted their earlier voice
+notes without expecting them to be transcribed, so set it to when they were
+told, and leave the backfill at 0 unless they were told that too.
+
+### What is recorded
+
+One row per attachment whose declared type is `audio/ogg`, `audio/mpeg`,
+`audio/mp4`, `audio/wav`, `audio/webm`, `image/png`, `image/jpeg` or
+`image/webp`, and whose URL is on `https://cdn.discordapp.com` or
+`https://media.discordapp.net`. A voice note (the message carries Discord's
+`IS_VOICE_MESSAGE` flag) is `voice`; any other audio is `audio`. Each row holds
+the declared type, size, filename, the duration Discord declares on a voice
+note, and the signed CDN URL — never the bytes.
+
+- **Only stored messages.** A row references its message, so DMs, private
+  threads, channels out of scope, bot messages and opted-out authors — none of
+  which become a stored message — can have none.
+- **Re-reading refreshes, never resets.** A CDN URL expires in about a day;
+  each re-read of a message replaces a pending row's URL and leaves its status
+  and attempts alone.
+- **Edits.** An edit that removes an attachment removes its row.
+- **Deletion.** Deleting a message withdraws its rows in the same transaction:
+  status `withdrawn`, any derived text and the URL cleared.
+- **Retention, opt-out, channel purge.** All three delete messages, and the
+  rows go with them by cascade.

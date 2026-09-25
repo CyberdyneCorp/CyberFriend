@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from chatmemory.domain.identity import ChannelRef, PersonRef
+from chatmemory.domain.media import MediaRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,9 @@ class Message:
     # because it is what the platform said at the time; the canonical person
     # keeps the latest one it has seen.
     author_display: str = ""
+    # The voice notes and images it carries, as the platform described them.
+    # Empty on a message read back from the store: only capture sets it.
+    media: tuple[MediaRef, ...] = ()
 
     @property
     def is_visible(self) -> bool:

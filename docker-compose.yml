@@ -52,6 +52,11 @@ services:
       - WINDOW_MAX_MESSAGES=${WINDOW_MAX_MESSAGES}
       - WINDOW_MAX_TOKENS=${WINDOW_MAX_TOKENS}
       - WINDOW_GAP_SECONDS=${WINDOW_GAP_SECONDS}
+      # Voice notes and images posted in indexed channels are recorded as
+      # pending rows -- metadata only, nothing downloaded -- for messages
+      # created from MEDIA_ENABLED_AT (minus MEDIA_BACKFILL_DAYS). Unset, none.
+      - MEDIA_ENABLED_AT=${MEDIA_ENABLED_AT}
+      - MEDIA_BACKFILL_DAYS=${MEDIA_BACKFILL_DAYS}
       # How long what people asked the assistant is kept. This process runs
       # the sweep that deletes it; the bot only reads and writes it.
       - MEMORY_RETENTION_DAYS=${MEMORY_RETENTION_DAYS}

@@ -25,8 +25,8 @@ from typing import cast
 import discord
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.discord.gateway import GatewayEventHandler
 from chatmemory.adapters.discord.source import DiscordChatSource, RawMessage, to_message
-from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.prompt import (
     OUTPUT_SCHEMA,
@@ -36,7 +36,7 @@ from chatmemory.app.asks.prompt import (
 )
 from chatmemory.app.ingest import IngestService
 from chatmemory.app.windowing import WindowBuilder
-from chatmemory.composition import build_ask_pipeline
+from chatmemory.composition import build_ask_pipeline, build_corpus_store
 from chatmemory.config import Settings
 from chatmemory.domain.messages import Message
 from chatmemory.entrypoints.ingest import live_loop
@@ -70,6 +70,16 @@ class OneMessageSource:
         yield self._message
 
 
+class CollectingFeed:
+    """The gateway's `LiveFeed`, keeping what it was handed for `live_loop`."""
+
+    def __init__(self) -> None:
+        self.published: list[Message] = []
+
+    def publish(self, message: Message) -> None:
+        self.published.append(message)
+
+
 class Ingest:
     """Capture, then extraction, over the database the bot answers from."""
 
@@ -80,7 +90,9 @@ class Ingest:
         chat: ScriptedChat,
         embeddings: HashEmbeddings,
     ) -> None:
-        store = PostgresStore(engine)
+        # The ingest entrypoint's builder, so channel media is recorded from
+        # the moment the settings say and not from whenever a copy says.
+        store = build_corpus_store(settings, engine)
         self.service = IngestService(
             # Only backfill reads the source, and no scenario backfills.
             source=cast(ChatSource, None),
@@ -108,6 +120,21 @@ class Ingest:
         # only when the store took the message.
         assert state.last_message_ingested_at is not None, f"not captured: {raw.content!r}"
         return message
+
+    async def deliver(self, raw: discord.Message) -> Message | None:
+        """Run one gateway event through the production handler, then `live_loop`.
+
+        Unlike `capture`, nothing is assumed indexable: the handler drops bots,
+        DMs, private threads and channels out of scope before anything is
+        buffered, which is the gate a scenario about them is asserting.
+        Returns the message stored, or None when the handler dropped it.
+        """
+        feed = CollectingFeed()
+        await GatewayEventHandler(self.service, feed).on_message(cast(RawMessage, raw))
+        for message in feed.published:
+            source = cast(DiscordChatSource, OneMessageSource(message))
+            await live_loop(source, self.service, HealthState(), self.asks.worker)
+        return feed.published[0] if feed.published else None
 
     async def extract(self) -> int:
         """Run the extraction pass over everything captured, ready or not."""
