@@ -32,6 +32,14 @@ Three things have to hold for this to be an opt-out rather than a gesture.
     belongs to the database, so no path that records an opt-out can keep an
     email address.
 
+*   **One delete path for everything derived from the person.** Since
+    migration 0028 the per-table purges above, and scheduled tasks and MCP
+    tokens, live in one SQL function, `purge_person_derived(person_id)`, which
+    the single `person_opt_out` trigger calls and erasure calls directly. A new
+    table holding person data adds its DELETE there, in its own migration.
+    The fetch log (`document_fetch`) is keyed on message ids, so it goes with
+    the message purge below rather than with the function.
+
 *   **The flag lands before the purge.** In the other order there is a window
     between "content deleted" and "exclusion recorded" in which a backfill page
     re-imports exactly what was just removed, and the opt-out reports success.
@@ -65,6 +73,7 @@ class PersonPurge:
     reactions: int = 0
     mentions: int = 0
     decisions: int = 0
+    fetch_records: int = 0
 
     @property
     def total(self) -> int:
@@ -75,6 +84,7 @@ class PersonPurge:
             + self.reactions
             + self.mentions
             + self.decisions
+            + self.fetch_records
         )
 
 
@@ -156,6 +166,7 @@ class OptOutService:
             reactions=corpus.reactions,
             mentions=corpus.mentions,
             decisions=corpus.decisions,
+            fetch_records=corpus.fetch_records,
             documents=documents,
         )
         return report

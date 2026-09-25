@@ -78,7 +78,19 @@ evidence they wrote (a decision somebody else stated in reply to their
 proposal may restate it), their reactions, the mention index rows pointing at
 them — **and the documents they uploaded**. An opt-out that covers
 messages and leaves the attached PDF searchable has withdrawn the index entry
-and kept the content, which is the wrong half.
+and kept the content, which is the wrong half. The fetch log (`document_fetch`,
+which of their messages linked which URL) goes with their messages.
+
+**Everything derived from the person goes through one function.** Recording
+the opt-out fires a single trigger on `person_opt_out`, which calls
+`purge_person_derived(person_id)` (migration 0028). It deletes their
+conversation memory, personal facts, queued notifications, position alerts,
+scheduled tasks and MCP tokens. Self-service erasure calls the same function,
+so the two cannot drift apart: a new table holding person data adds its
+`DELETE` to the function in its own migration. The scheduled-task sweep also
+skips opted-out people, so a task written afterwards never runs. Before 0028
+scheduled tasks and MCP tokens survived an opt-out; the migration purges them
+for everyone already opted out.
 
 **It survives re-ingestion.** Discord still holds their messages, and backfill
 re-reads history from Discord. The exclusion is therefore enforced by a database
