@@ -162,7 +162,7 @@ ran, and the memory and fact rows, read by SQL. Every `/name` the bot says is
 checked against the commands Discord offers where it said it.
 
 - `E2E_REQUIRE_DB=1` turns "no database" from a skip into a failure. CI sets it.
-- The suite fails the run if it takes more than 60 seconds.
+- The suite fails the run if it takes more than 90 seconds.
 - `E2E_UPDATE_SNAPSHOTS=1` rewrites `tests/e2e/snapshots/commands.json`, the
   exact command payload the bot syncs; review the diff like code.
 - discord.py is pinned to `~=2.7.1` in the dev extras because the fake wire
