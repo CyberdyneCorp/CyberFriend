@@ -271,6 +271,23 @@ curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
 The bot logs `composition.tracing enabled=true` at startup when a destination
 is configured, and `reasoning.trace_failed` when an export is dropped.
 
+## Checking the console after a deploy
+
+The operator console (see `docs/admin-console.md`) can widen what the agent
+reaches, so after a deploy that touches it, repeat these by hand. The unit and
+integration suites cover each rule; these confirm the deployed wiring honours
+them.
+
+1. Add a federated server through the console and confirm the agent uses it
+   without a redeploy.
+2. Remove a channel from scope and confirm ingestion stops within the refresh
+   period.
+3. Enable a tool that changes state and confirm the audit records it as an
+   escalation, and that the per-invocation confirmation still gates the call.
+4. Revoke one admin token and confirm it stops working while the others do not.
+5. Try to read message, document or ask content through every `/api` endpoint
+   and confirm each refuses.
+
 ## Wallet balances
 
 With `WALLET_TOOLS_ENABLED=true` and an `INFURA_KEY`, the assistant can report

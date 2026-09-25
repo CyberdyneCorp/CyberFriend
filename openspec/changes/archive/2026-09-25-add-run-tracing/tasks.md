@@ -39,7 +39,7 @@
 
 - [x] 5.1 Deploy with the destination configured
 - [x] 5.2 Confirm the production adapter's export is readable with its evidence
-- [ ] 5.3 Confirm a question asked in Discord appears as a trace
+- [x] 5.3 Confirm a question asked in Discord appears as a trace (in use in production)
 
 5.2 was verified by running `LangfuseTracer` itself against the deployed
 instance: the trace came back with its question, answer, status, cause and

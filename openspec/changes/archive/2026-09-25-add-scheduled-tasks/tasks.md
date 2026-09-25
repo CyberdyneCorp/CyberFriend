@@ -41,5 +41,5 @@
 
 ## 5. Live
 
-- [ ] 5.1 Deploy with the feature off, and turn it on deliberately
-- [ ] 5.2 Confirm a scheduled task runs and delivers
+- [x] 5.1 Deploy with the feature off, and turn it on deliberately
+- [x] 5.2 Confirm a scheduled task runs and delivers (in use in production)
