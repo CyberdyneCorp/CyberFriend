@@ -19,6 +19,7 @@
     server,
     allowed,
     busy,
+    canChange,
     onAllow,
     onRemove,
   }: {
@@ -26,6 +27,8 @@
     /** `server/tool` keys already on the allowlist, for an API that sent no flag. */
     allowed: ReadonlySet<string>;
     busy: boolean;
+    /** Whether to offer the controls that change something; the API refuses them otherwise. */
+    canChange: boolean;
     onAllow: (choice: ToolChoice) => void;
     onRemove: () => void;
   } = $props();
@@ -39,12 +42,14 @@
     </div>
     <div class="row row--tight">
       <YesNoBadge value={server.reachable} yes="reachable" no="unreachable" />
-      <ConfirmButton
-        label="Remove"
-        confirmLabel="Remove this server"
-        {busy}
-        onConfirm={onRemove}
-      />
+      {#if canChange}
+        <ConfirmButton
+          label="Remove"
+          confirmLabel="Remove this server"
+          {busy}
+          onConfirm={onRemove}
+        />
+      {/if}
     </div>
   </header>
   {#if server.failure}<p class="problem">{server.failure}</p>{/if}
@@ -68,7 +73,7 @@
             <span class="muted">
               {tool.mutation_enabled ? "allowed, mutation enabled" : "on the allowlist"}
             </span>
-          {:else}
+          {:else if canChange}
             <button
               type="button"
               class="button button--quiet"

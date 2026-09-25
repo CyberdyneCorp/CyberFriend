@@ -6,14 +6,32 @@
  * shapes are copied from `src/chatmemory/admin/handlers/*.py`; where this
  * file and those disagree, those are right and this is stale.
  *
- * It enforces the two rules the console depends on, so a test cannot pass by
- * accident: the credential is checked on every request, and a mutating tool
- * is refused unless the confirmation names it.
+ * It enforces the rules the console depends on, so a test cannot pass by
+ * accident: the credential is checked on every request (a bearer token, or
+ * the session cookie when no bearer is sent), a cookie write without the
+ * console header is refused, an operator's write is refused, and a mutating
+ * tool is refused unless the confirmation names it.
  */
 
 import { createServer, type Server } from "node:http";
 
 export const TOKEN = "cfa_test_credential";
+
+export const SESSION_COOKIE = "__Host-cf_admin";
+export const END_SESSION_URL = "https://auth.test/end-session?id_token_hint=stub";
+
+export interface StubPrincipal {
+  subject: string;
+  display: string;
+  roles: string[];
+  via: "oidc" | "token";
+}
+
+/** Sessions a test can hand the browser, by cookie value. */
+export const SESSIONS: Record<string, StubPrincipal> = {
+  "operator-session": { subject: "bo-sub", display: "bo@example.com", roles: ["operator"], via: "oidc" },
+  "admin-session": { subject: "ana-sub", display: "ana@example.com", roles: ["admin", "operator"], via: "oidc" },
+};
 
 type Json = Record<string, unknown>;
 
@@ -265,6 +283,48 @@ function otherWrites(state: Json, method: string, path: string, body: Json): Rep
   return route[2](state, last, body, path);
 }
 
+type Headers = Record<string, string | string[] | undefined>;
+
+function cookieOf(headers: Headers, name: string): string | null {
+  const raw = headers.cookie;
+  const text = Array.isArray(raw) ? raw.join(";") : (raw ?? "");
+  for (const part of text.split(";")) {
+    const [key, value] = part.trim().split("=");
+    if (key === name && value) return value;
+  }
+  return null;
+}
+
+/**
+ * Who the request is from, as the API decides it: a bearer alone when one is
+ * sent (cookies ignored), else the session cookie. With sign-in configured a
+ * token is operator only, as on the server.
+ */
+function principalOf(headers: Headers, sessions: Map<string, StubPrincipal>, signIn: boolean): StubPrincipal | null {
+  if (headers.authorization !== undefined) {
+    if (headers.authorization !== `Bearer ${TOKEN}`) return null;
+    return { subject: "sam", display: "sam", roles: signIn ? ["operator"] : ["admin", "operator"], via: "token" };
+  }
+  const id = cookieOf(headers, SESSION_COOKIE);
+  return id === null ? null : (sessions.get(id) ?? null);
+}
+
+/** Why a write by `who` is refused, or null when it is not. */
+function writeRefusal(who: StubPrincipal, headers: Headers): Reply | null {
+  if (who.via === "oidc" && headers["x-cyberfriend-console"] !== "1") {
+    return [403, { error: "cross-site request refused" }];
+  }
+  return who.roles.includes("admin") ? null : [403, { error: "requires admin" }];
+}
+
+/** One request as the stub saw it: what credential it carried. */
+export interface Seen {
+  method: string;
+  path: string;
+  authorization: string | null;
+  cookie: string | null;
+}
+
 export interface StubApi {
   origin: string;
   /** The stub's data, which a test may change before the console reads it. */
@@ -273,6 +333,12 @@ export interface StubApi {
   allowCalls: Json[];
   /** Every other write, as `METHOD /path body`, in order. */
   writes: string[];
+  /** Every request, with the credential it carried. */
+  seen: Seen[];
+  /** Live sessions by cookie value; `SESSIONS` to start with. */
+  sessions: Map<string, StubPrincipal>;
+  /** Whether `/auth/config` says sign-in is offered. */
+  options: { signIn: boolean };
   close: () => Promise<void>;
 }
 
@@ -280,6 +346,9 @@ export async function startStubApi(): Promise<StubApi> {
   const state = fixtures();
   const allowCalls: Json[] = [];
   const writes: string[] = [];
+  const seen: Seen[] = [];
+  const sessions = new Map(Object.entries(SESSIONS));
+  const options = { signIn: false };
 
   const server: Server = createServer((request, response) => {
     const path = (request.url ?? "").split("?")[0] ?? "";
@@ -292,10 +361,40 @@ export async function startStubApi(): Promise<StubApi> {
       response.end(body);
     };
 
-    if (request.headers.authorization !== `Bearer ${TOKEN}`) {
+    const method = request.method ?? "";
+    const headers = request.headers as Headers;
+    seen.push({
+      method,
+      path,
+      authorization: request.headers.authorization ?? null,
+      cookie: request.headers.cookie ?? null,
+    });
+
+    if (method === "GET" && path === "/auth/config") {
+      reply(200, { sign_in: options.signIn });
+      return;
+    }
+    if (method === "POST" && path === "/auth/logout") {
+      if (headers["x-cyberfriend-console"] !== "1") {
+        reply(403, { error: "cross-site request refused" });
+        return;
+      }
+      const id = cookieOf(headers, SESSION_COOKIE);
+      if (id !== null) sessions.delete(id);
+      reply(200, { end_session_url: END_SESSION_URL });
+      return;
+    }
+
+    const who = principalOf(headers, sessions, options.signIn);
+    if (who === null) {
       // One refusal for missing, malformed, unknown and revoked, as the API
       // does it: a refusal that distinguished them is an enumeration oracle.
       reply(401, { error: "unauthorized" });
+      return;
+    }
+    const refused = method === "GET" ? null : writeRefusal(who, headers);
+    if (refused !== null) {
+      reply(...refused);
       return;
     }
 
@@ -307,6 +406,7 @@ export async function startStubApi(): Promise<StubApi> {
 
       if (request.method === "GET") {
         const reads: Record<string, unknown> = {
+          "/api/session": who,
           "/api/status": state.status,
           "/api/settings": state.settings,
           "/api/federation/servers": state.servers,
@@ -328,7 +428,6 @@ export async function startStubApi(): Promise<StubApi> {
         return;
       }
 
-      const method = request.method ?? "";
       writes.push(`${method} ${path}${chunks.length === 0 ? "" : ` ${JSON.stringify(body)}`}`);
       const [status, payload] = otherWrites(state, method, path, body) ?? [404, { error: "no such route" }];
       reply(status, payload);
@@ -343,6 +442,9 @@ export async function startStubApi(): Promise<StubApi> {
     state,
     allowCalls,
     writes,
+    seen,
+    sessions,
+    options,
     close: () =>
       new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),

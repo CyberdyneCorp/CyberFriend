@@ -14,3 +14,15 @@ const RANK: Record<Role, number> = { operator: 1, admin: 2 };
 export function allows(held: Role | null, needed: Role): boolean {
   return held !== null && RANK[held] >= RANK[needed];
 }
+
+/**
+ * The highest console role among what the API reported, or null for none.
+ *
+ * Anything the console does not recognise counts for nothing: an unknown
+ * role name is not read as a lower or a higher one.
+ */
+export function roleOf(roles: readonly string[]): Role | null {
+  if (roles.includes("admin")) return "admin";
+  if (roles.includes("operator")) return "operator";
+  return null;
+}

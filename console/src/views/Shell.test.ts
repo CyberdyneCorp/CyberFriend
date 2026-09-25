@@ -4,8 +4,8 @@
  *
  * `Router.visibleTo` is pinned in the router's tests; this pins that the
  * shell renders its answer rather than the whole table. Every real route is
- * `operator` and every real session is `admin` until the login change, so the
- * end-to-end test cannot tell the difference -- hence a table of our own.
+ * `operator`, so the end-to-end test cannot tell the difference -- hence a
+ * table of our own.
  */
 
 import { cleanup, render, screen } from "@testing-library/svelte";
@@ -29,8 +29,14 @@ const TABLE: readonly Route<ScreenView>[] = [
 /** Just what the shell reads from the console, for a given role. */
 function consoleFor(role: Role): ConsoleVM {
   return {
-    session: { role, signOut: () => {} },
-    router: <V>(routes: readonly Route<V>[]) => new Router(routes, staticHash, "/status"),
+    session: {
+      role,
+      canChange: role === "admin",
+      principal: { subject: "s", display: "ana@example.com", roles: [role], via: "oidc" },
+      viaToken: false,
+      signOut: async () => {},
+    },
+    router: <V>(routes: readonly Route<V>[]) => new Router(routes, staticHash, "/status", () => role),
   } as unknown as ConsoleVM;
 }
 
@@ -46,5 +52,11 @@ describe("the shell's navigation", () => {
   it("offers it to a role that may", () => {
     render(Shell, { props: { app: consoleFor("admin"), routes: TABLE } });
     expect(screen.getByRole("link", { name: "Tokens" })).toBeTruthy();
+  });
+
+  it("says who is signed in and that an operator only reads", () => {
+    render(Shell, { props: { app: consoleFor("operator"), routes: TABLE } });
+    expect(screen.getByText("ana@example.com")).toBeTruthy();
+    expect(screen.getByText(/operator, read-only/)).toBeTruthy();
   });
 });

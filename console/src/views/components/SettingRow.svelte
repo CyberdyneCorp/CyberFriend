@@ -5,7 +5,11 @@
   import ActionResult from "./ActionResult.svelte";
   import SourceBadge from "./SourceBadge.svelte";
 
-  let { setting, editor }: { setting: Setting; editor: SettingEditor } = $props();
+  let {
+    setting,
+    editor,
+    canChange,
+  }: { setting: Setting; editor: SettingEditor; canChange: boolean } = $props();
 </script>
 
 <tr>
@@ -33,6 +37,8 @@
       <span class="muted">
         {setting.managed_by ? `managed at ${setting.managed_by}` : "not editable here"}
       </span>
+    {:else if !canChange}
+      <span class="muted">read-only for your role</span>
     {:else if editor.typed !== null}
       <span class="row row--tight">
         <button

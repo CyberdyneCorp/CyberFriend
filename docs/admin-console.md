@@ -4,8 +4,9 @@ A Svelte 5 + TypeScript single-page app that talks to the admin API and to
 nothing else.
 It is static files: no server of its own, no credentials of its own, no build
 step at runtime. The admin API serves it from the same origin it serves `/api`
-from, which is what lets the bundle use a relative API root and hold the
-operator's token in memory.
+from, which is what lets the bundle use a relative API root, rely on the
+CyberdyneAuth session cookie without any CORS, and hold a break-glass token in
+memory.
 
 Source is in `console/`. Build output is `console/dist/`, which is
 `.gitignore`d — it is built during the image build, not committed.
@@ -139,23 +140,29 @@ credential issue as an escalation.
 
 ## The four rules this interface is built around
 
-### The token is in memory, and nowhere else
+### No credential the page can read is ever stored
 
-The operator's token lives in a module variable in `src/services/session.ts`. Not
-`localStorage`, not `sessionStorage`, not a cookie. This console can add a
-federated server and enable a tool that changes state somewhere else, so its
-credential is a grant of new capability to the agent — and a credential in
-browser storage outlives the tab, the session and the attention of the person
-who pasted it.
+With CyberdyneAuth sign-in the credential is the `__Host-cf_admin` cookie,
+which is `HttpOnly`: JavaScript cannot read it, and the console only ever
+learns *who* it names (`GET /api/session`). A break-glass operator token lives
+in a module variable in `src/services/session.ts`. Not `localStorage`, not
+`sessionStorage`, not a cookie. This console can add a federated server and
+enable a tool that changes state somewhere else, so its credential is a grant
+of new capability to the agent — and a credential in browser storage outlives
+the tab, the session and the attention of the person who pasted it.
 
 The cost is that a reload asks for the token again, and the sign-in screen says
-so rather than leaving the operator to think it broke.
+so rather than leaving the operator to think it broke. (A CyberdyneAuth
+session survives a reload: the cookie is the browser's, not the page's.)
 
 `src/no-browser-storage.test.ts` fails the build if any source file reaches for
-browser storage, puts a token in a URL, or reads the token anywhere but the
-fetch client (`src/services/http.ts`). It is a source scan rather than a behavioural test because the
-failure it prevents is a "remember me" checkbox added in six months, which no
-test of today's code would notice.
+browser storage, puts a token in a URL, reads the token anywhere but the fetch
+client (`src/services/http.ts`), writes an `Authorization`/`Bearer` header
+anywhere but `src/services/breakGlassHttp.ts`, or asks for cookies
+(`credentials: "same-origin"`) anywhere but `src/services/http.ts`. It is a
+source scan rather than a behavioural test because the failure it prevents is a
+"remember me" checkbox added in six months, which no test of today's code
+would notice.
 
 The scan covers every file type the console is written in (`.ts`, `.svelte`,
 `.svelte.ts`) and ignores comments, HTML comments included, so a
@@ -248,7 +255,7 @@ the direction:
 | Layer | Holds | May import |
 | --- | --- | --- |
 | `domain/` | Pure rules and API types (`effect`, `settings`, `person`, `allowlist`, `format`, `roles`, `changed`) | nothing |
-| `services/` | `http.ts` (the only `fetch`, the bearer, the 401 rule), `adminApi.ts`, `session.ts`, `hashLocation.ts` | domain, types only |
+| `services/` | `http.ts` (the only `fetch`, cookie mode, the CSRF header, the 401 rule), `breakGlassHttp.ts` (the bearer request for a typed token), `adminApi.ts`, `sessionApi.ts` (who is signed in, sign-in offered, logout), `session.ts`, `hashLocation.ts` | domain, types only |
 | `viewmodels/` | `*.svelte.ts` classes: `Resource`, `Action`, `Confirmation`, `SessionVM`, `Router`, one VM per screen (`StatusVM`, `FederationVM` with `ServersVM`/`AllowlistVM`/`TypedConfirmVM`, `ChannelsVM`, `RetentionVM`, `SettingsVM`/`SettingEditor`, `TokensVM`, `AuditVM`), `ConsoleVM` | services, domain |
 | `views/` | `App`, `Shell`, `SignIn`, `screens/*Screen.svelte`, `components/` (badges, `ConfirmButton`, `TypedConfirm`, `ServerCard`, `SettingsTable`, `Loaded`, `Panel`, `ActionResult`) | viewmodels, domain |
 
@@ -261,7 +268,8 @@ holds, so no view names a service, and a test builds a view-model with fakes
 The router is a hash router over a route table in `views/routes.ts`. Every
 route declares a `minRole` (`operator` or `admin`) with no default; the
 navigation shows the routes the session's role allows, and the server stays
-the authority. An address that names no screen is rewritten to `#/status`.
+the authority. An address that names no screen, or a screen above the
+signed-in role, is rewritten to `#/status`.
 
 ## Tests
 
@@ -274,10 +282,13 @@ cd console && npm test
   `platform:id` back apart and refusing rather than guessing, the status
   screen's tolerance (which fields become cards, a null reads as a dash), and
   allowlist keys.
-- `services/*.test.ts` — the request carries the credential and nothing that
-  could name an operator; path segments from the API are escaped; `/api` is
+- `services/*.test.ts` — cookie mode sends no `Authorization` and
+  `credentials: "same-origin"`, with the CSRF header on writes only; token
+  mode sends the bearer with `credentials: "omit"`; nothing could name an
+  operator; path segments from the API are escaped; `/api` and `/auth` are
   resolved beside the page, so a prefixed mount works; a 401 signs out with one
-  sentence; there is no call that mints an MCP credential.
+  sentence; logout posts with the CSRF header and returns the end-session URL;
+  there is no call that mints an MCP credential.
 - `viewmodels/*.test.ts` — every screen's behaviour without a DOM: the typed
   gate and the read-only fast path, the note a save gives when the environment
   still wins, the unreadable-channel note, opt-outs that cannot be parsed,
@@ -285,7 +296,7 @@ cd console && npm test
 - `views/components/TypedConfirm.test.ts` and `ConfirmButton.test.ts` — the
   enable button and the two-click removal, in a DOM.
 - `views/Shell.test.ts` — the navigation leaves out a route the role may not
-  open.
+  open, and says who is signed in with which role.
 - `views/routes.test.ts` — every screen's `minRole` equals the access the
   server's `ROUTE_ACCESS` asks for the reads that screen makes (it reads
   `src/chatmemory/admin/server.py`, so a role change on either side fails it).
@@ -299,7 +310,13 @@ cd console && npm test
   readability and adding an unreadable channel, settings provenance and a save
   the environment overrides, the retention message, saving a retention setting
   under its own key, adding an opt-out, two-click removals of a channel, an
-  opt-out and a token, and the audit's refusals and filter.
+  opt-out and a token, and the audit's refusals and filter. With CyberdyneAuth
+  offered: the sign-in link first and the token form behind "Use an operator
+  token"; a cookie session opening the console with no credential header; an
+  operator seeing every screen with no control that changes anything; an admin
+  write carrying the CSRF header (the stub refuses it otherwise); sign-out
+  ending the server session before leaving for the provider; and a
+  break-glass token sent without the stale cookie the browser still holds.
 
 The end-to-end test is here because of the bug it caught. Sign-in used to put
 the token in the session and verify it afterwards, so a refused credential
@@ -390,8 +407,12 @@ and `::test_the_console_is_handed_no_way_to_mint_one` are what keep it that way.
 
 ## Requests, and what they may not say
 
-Every request carries `Authorization: Bearer <token>` and nothing else that
-could be read as an identity. No operator field, no impersonation header, no
+A request carries one credential: the session cookie (the browser attaches it
+because `http.ts` asks for `credentials: "same-origin"`; writes add
+`X-CyberFriend-Console: 1`), or, after a break-glass sign-in,
+`Authorization: Bearer <token>` with `credentials: "omit"` from
+`breakGlassHttp.ts`. Never both, and nothing else that could be read as an
+identity. No operator field, no impersonation header, no
 name in a query string: the credential decides who is acting, and a request
 that could name an operator would make the audit trail an assertion rather than
 a fact. `src/services/adminApi.test.ts` asserts that over the request the
@@ -460,12 +481,14 @@ The code is in `src/chatmemory/admin/oidc/`.
 
 | Route | Access | What it does |
 |---|---|---|
+| `GET /auth/config` | public | `{"sign_in": true}` or `false`: whether the console offers "Sign in with CyberdyneAuth". Answered with sign-in off too. |
 | `GET /auth/login` | public | Stores a login record (10 minutes), sets `__Host-cf_login` (`HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`) and redirects to CyberdyneAuth. |
 | `GET /auth/callback` | public | Consumes the login once, requires the `__Host-cf_login` value, exchanges the code, verifies both tokens and userinfo, sets `__Host-cf_admin` (`HttpOnly; Secure; SameSite=Strict; Path=/`) and redirects to `/#/status`. |
 | `POST /auth/logout` | public, CSRF header | Revokes the session, then the refresh token at CyberdyneAuth (best effort), clears the cookie and returns `{"end_session_url": ...}` with `id_token_hint` and `post_logout_redirect_uri`. The console navigates there. |
 | `GET /api/session` | operator | `{"subject", "display", "roles", "via"}` for whoever the credential names. |
 
-With sign-in off, the three `/auth/*` routes answer 404.
+With sign-in off, `/auth/login`, `/auth/callback` and `/auth/logout` answer
+404.
 
 **Verification**, exactly per the CyberdyneAuth contract. Access token: RS256
 via the issuer's JWKS, `iss` equal to discovery's, `exp`, `type == "access"`,
@@ -536,6 +559,30 @@ URI `<ADMIN_PUBLIC_URL>/auth/callback` and post-logout redirect URI
 `<ADMIN_PUBLIC_URL>/`, and assign people `cyberfriend:admin` or
 `cyberfriend:operator`.
 
-The console interface still signs in with a pasted token until its sign-in
-screen lands (task group 3 of `add-console-cyberdyneauth-login`); the API side
-above is complete and is what that screen calls.
+### In the console
+
+On load the console asks `GET /auth/config` whether sign-in is offered and
+`GET /api/session` whether the cookie already names somebody (a person coming
+back from the callback holds nothing else), and shows nothing until both
+answer.
+
+- **Sign-in offered, no session:** a "Sign in with CyberdyneAuth" link to
+  `auth/login` (a full-page navigation; the code and tokens never pass through
+  the bundle), and a "Use an operator token" button that reveals the token
+  form.
+- **Sign-in not offered:** the token form alone, as before sign-in existed.
+- **Signed in:** the navigation names the person and their role. An operator
+  sees every screen and no control that changes anything — no add form, no
+  Allow, Edit, Remove, Revoke or Opt back in. That is a courtesy: the API
+  refuses an operator's write with 403 whatever the page shows.
+- **Sign out:** with a CyberdyneAuth session, `POST /auth/logout` revokes it
+  first, then the browser goes to CyberdyneAuth's end-session URL. With a
+  token, the token is forgotten; there is no server session to end.
+
+**Break-glass.** A token typed into the form is checked with
+`GET /api/session` as a bearer before it is held, and the API's answer decides
+its role: admin while the issuer is unset, operator once it is set. So with
+CyberdyneAuth down and an admin change urgent, the way in is the rollback in
+[What a `cfa_` token is](#what-a-cfa_-token-is): unset `ADMIN_OIDC_ISSUER`,
+redeploy `admin`, and sign in with a token; the page then offers the token
+form alone. Set the issuer again when CyberdyneAuth is back.

@@ -11,7 +11,13 @@
   let {
     settings,
     editor,
-  }: { settings: Setting[]; editor: (key: string) => SettingEditor } = $props();
+    canChange,
+  }: {
+    settings: Setting[];
+    editor: (key: string) => SettingEditor;
+    /** Whether to offer the edit box; the API refuses a read-only role anyway. */
+    canChange: boolean;
+  } = $props();
 </script>
 
 <table class="table">
@@ -25,7 +31,7 @@
   </thead>
   <tbody>
     {#each settings as setting (setting.key)}
-      <SettingRow {setting} editor={editor(setting.key)} />
+      <SettingRow {setting} editor={editor(setting.key)} {canChange} />
     {/each}
   </tbody>
 </table>

@@ -188,3 +188,7 @@ p { margin: 0.25rem 0; }
 
 .signin { min-height: 100vh; display: grid; place-items: center; padding: 1rem; }
 .signin .panel { width: min(460px, 100%); display: flex; flex-direction: column; gap: 0.6rem; }
+
+.signin__form { display: flex; flex-direction: column; gap: 0.6rem; }
+.signin .panel > a.button { text-align: center; text-decoration: none; }
+.nav__who { display: block; color: var(--text); overflow-wrap: anywhere; }

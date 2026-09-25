@@ -63,14 +63,14 @@
                 {/if}
               </td>
               <td class="cell-actions">
-                {#if state === "revocable"}
+                {#if state === "revocable" && app.session.canChange}
                   <ConfirmButton
                     label="Revoke"
                     confirmLabel="Revoke this token"
                     busy={vm.action.busy}
                     onConfirm={() => void vm.revoke(token)}
                   />
-                {:else if state === "no-id"}
+                {:else if state === "no-id" && app.session.canChange}
                   <span class="muted">no id on this row</span>
                 {/if}
               </td>

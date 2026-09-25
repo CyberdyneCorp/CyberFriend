@@ -8,6 +8,7 @@ import { mount } from "svelte";
 import { adminApi } from "./services/adminApi";
 import { browserHash } from "./services/hashLocation";
 import { session } from "./services/session";
+import { sessionApi } from "./services/sessionApi";
 import "./styles.css";
 import { ConsoleVM } from "./viewmodels/console.svelte";
 import App from "./views/App.svelte";
@@ -15,4 +16,4 @@ import App from "./views/App.svelte";
 const host = document.getElementById("root");
 if (host === null) throw new Error("index.html is missing #root");
 
-mount(App, { target: host, props: { app: new ConsoleVM(adminApi, session, browserHash) } });
+mount(App, { target: host, props: { app: new ConsoleVM(adminApi, sessionApi, session, browserHash) } });

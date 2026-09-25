@@ -19,22 +19,49 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { adminApi } from "./services/adminApi";
 import { browserHash } from "./services/hashLocation";
 import { session, signOut } from "./services/session";
-import { startStubApi, TOKEN, type StubApi } from "./test/stubApi";
+import { sessionApi } from "./services/sessionApi";
+import {
+  END_SESSION_URL,
+  SESSION_COOKIE,
+  startStubApi,
+  TOKEN,
+  type StubApi,
+} from "./test/stubApi";
 import { ConsoleVM } from "./viewmodels/console.svelte";
 import App from "./views/App.svelte";
 
 let api: StubApi;
 const realFetch = globalThis.fetch;
+/** The cookie this "browser" holds for the console, as `name=value`, or null. */
+let browserCookie: string | null = null;
+/** Where the console sent the browser when it left (the provider's sign-out). */
+let left: string[] = [];
+
+/** Render the console as a fresh page load would. */
+function mount(): void {
+  render(App, {
+    props: {
+      app: new ConsoleVM(adminApi, { ...sessionApi, leave: (url) => left.push(url) }, session, browserHash),
+    },
+  });
+}
 
 beforeEach(async () => {
   // jsdom keeps one window for the whole file, and the router reads the hash
   // from it, so a test would otherwise start where the last one left off.
   window.location.hash = "";
+  browserCookie = null;
+  left = [];
   api = await startStubApi();
-  // The console asks for "/api/...", which jsdom resolves against its own origin.
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-    realFetch(new URL(String(input), api.origin), init)) as typeof fetch;
-  render(App, { props: { app: new ConsoleVM(adminApi, session, browserHash) } });
+  // The console asks for "/api/...", which jsdom resolves against its own
+  // origin. Like a browser, the cookie rides along only when the request
+  // asks for same-origin credentials.
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (init?.credentials === "same-origin" && browserCookie !== null) headers.set("cookie", browserCookie);
+    return realFetch(new URL(String(input), api.origin), { ...init, headers });
+  }) as typeof fetch;
+  mount();
 });
 
 afterEach(async () => {
@@ -45,7 +72,7 @@ afterEach(async () => {
 });
 
 async function signIn(credential: string): Promise<void> {
-  await fireEvent.input(screen.getByPlaceholderText("cfa_…"), { target: { value: credential } });
+  await fireEvent.input(await screen.findByPlaceholderText("cfa_…"), { target: { value: credential } });
   await fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 }
 
@@ -89,6 +116,8 @@ describe("the status screen", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await screen.findByPlaceholderText("cfa_…");
     expect(screen.queryByText("Ingestion")).toBeNull();
+    // A token is forgotten locally; there is no server session to end.
+    expect(api.seen.some((request) => request.path === "/auth/logout")).toBe(false);
   });
 });
 
@@ -347,5 +376,105 @@ describe("the audit screen", () => {
     await screen.findByText("No escalation changes.");
     await fireEvent.click(button("refused"));
     await screen.findByText("discord_token");
+  });
+});
+
+/** Reload the page as a browser holding `cookie`, with CyberdyneAuth sign-in offered. */
+async function reloadWithSignIn(cookie: string | null): Promise<void> {
+  // Let the first page load finish asking, so its requests are not counted as this one's.
+  await waitFor(() => expect(screen.queryByText("Checking for a session…")).toBeNull());
+  cleanup();
+  signOut();
+  api.seen.length = 0;
+  api.options.signIn = true;
+  browserCookie = cookie === null ? null : `${SESSION_COOKIE}=${cookie}`;
+  mount();
+  await waitFor(() => expect(screen.queryByText("Checking for a session…")).toBeNull());
+}
+
+describe("signing in with CyberdyneAuth", () => {
+  it("offers the sign-in link first and keeps the token form behind a button", async () => {
+    await reloadWithSignIn(null);
+    const link = screen.getByRole("link", { name: "Sign in with CyberdyneAuth" });
+    expect(link.getAttribute("href")).toBe("/auth/login");
+    expect(screen.queryByPlaceholderText("cfa_…")).toBeNull();
+    await fireEvent.click(button("Use an operator token"));
+    expect(screen.getByPlaceholderText("cfa_…")).toBeTruthy();
+  });
+
+  it("opens the console for a person the session cookie names, sending no credential header", async () => {
+    await reloadWithSignIn("admin-session");
+    await screen.findByText("Ingestion");
+    expect(screen.getByText("ana@example.com")).toBeTruthy();
+    const requests = api.seen.filter((request) => request.path.startsWith("/api/"));
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request.authorization).toBeNull();
+      expect(request.cookie).toBe(`${SESSION_COOKIE}=admin-session`);
+    }
+  });
+
+  it("shows an operator every screen with nothing that changes anything", async () => {
+    await reloadWithSignIn("operator-session");
+    await screen.findByText("Ingestion");
+    expect(screen.getByText(/operator, read-only/)).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole("link", { name: "Federation" }));
+    await screen.findAllByText("restart_service");
+    expect(screen.queryByRole("button", { name: "Add server" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+
+    await fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+    await screen.findByText("web_tools_enabled");
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+
+    await fireEvent.click(screen.getByRole("link", { name: "Retention" }));
+    await screen.findByText("discord:42");
+    expect(screen.queryByRole("button", { name: "Opt this person out" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Opt back in" })).toBeNull();
+
+    await fireEvent.click(screen.getByRole("link", { name: "Channels" }));
+    await screen.findByText("leadership");
+    expect(screen.queryByRole("button", { name: "Stop indexing" })).toBeNull();
+
+    await fireEvent.click(screen.getByRole("link", { name: "Tokens" }));
+    await screen.findByText("sam's laptop");
+    expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
+    expect(api.writes).toEqual([]);
+  });
+
+  it("lets an admin change things, with the console header on the write", async () => {
+    await reloadWithSignIn("admin-session");
+    await screen.findByText("Ingestion");
+    await fireEvent.click(screen.getByRole("link", { name: "Channels" }));
+    await screen.findByText("leadership");
+    await fireEvent.input(screen.getByPlaceholderText("e.g. 1234567890"), { target: { value: "300" } });
+    await fireEvent.click(button("Index this channel"));
+    // The stub refuses a cookie write without the header, so this landing is the proof.
+    await screen.findByText(/the bot cannot read it, so nothing will be indexed/);
+    expect(api.writes).toEqual(['POST /api/channels {"id":"300"}']);
+  });
+
+  it("ends the session at the server, then leaves for the provider's sign-out", async () => {
+    await reloadWithSignIn("admin-session");
+    await screen.findByText("Ingestion");
+    await fireEvent.click(button("Sign out"));
+    await waitFor(() => expect(left).toEqual([END_SESSION_URL]));
+    expect(api.sessions.has("admin-session")).toBe(false);
+    expect(screen.queryByText("Ingestion")).toBeNull();
+  });
+
+  it("gives a break-glass token only what the API grants it, and sends it without the cookie", async () => {
+    // The browser still holds a cookie from a session that has since ended.
+    await reloadWithSignIn("ended-session");
+    await fireEvent.click(button("Use an operator token"));
+    await signIn(TOKEN);
+    await screen.findByText("Ingestion");
+    // With sign-in configured the API makes a token operator; the console follows.
+    expect(screen.getByText(/operator, read-only/)).toBeTruthy();
+    const withToken = api.seen.filter((request) => request.authorization !== null);
+    expect(withToken.length).toBeGreaterThan(0);
+    for (const request of withToken) expect(request.cookie).toBeNull();
   });
 });

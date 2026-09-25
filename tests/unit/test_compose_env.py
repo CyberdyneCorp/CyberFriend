@@ -255,6 +255,28 @@ def test_the_console_holds_database_credentials_and_no_others() -> None:
     assert held == ["DATABASE_URL"], f"the console is given {held}"
 
 
+def test_the_console_environment_is_the_database_its_own_settings_and_nothing_else() -> None:
+    """An allowlist, so a variable pasted into the wrong service fails here.
+
+    The console gets `DATABASE_URL`, its own `ADMIN_*` variables (sign-in
+    included), its domain, and the non-secret setting baselines it reports
+    provenance for. Anything else -- the bot token, the model key, the search
+    key, a tracing key -- is authority it has no use for.
+    """
+    block = service_block("admin")
+    declared = re.findall(r"^\s+- ([A-Z][A-Z0-9_]*)(?:=|$)", block, re.M)
+    baselines = {key.upper() for key in SETTINGS}
+    unexpected = [
+        name
+        for name in declared
+        if name != "DATABASE_URL"
+        and not name.startswith(("ADMIN_", "SERVICE_FQDN_"))
+        and name not in baselines
+    ]
+    assert declared, "no environment found for the admin service"
+    assert unexpected == [], f"the console is given {unexpected}"
+
+
 def test_the_console_is_not_given_the_model_endpoint_either() -> None:
     """It neither embeds nor answers, so it has no reason to reach the model.
 

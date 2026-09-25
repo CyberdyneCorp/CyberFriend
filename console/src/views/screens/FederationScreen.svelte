@@ -36,20 +36,22 @@
   {#snippet actions()}
     <button type="button" class="button button--quiet" onclick={vm.refresh}>Refresh</button>
   {/snippet}
-  <form class="form-row" onsubmit={addServer}>
-    <label class="field">
-      <span>Name</span>
-      <input bind:value={servers.name} spellcheck={false} />
-    </label>
-    <label class="field field--wide">
-      <span>Target</span>
-      <input bind:value={servers.target} spellcheck={false} placeholder="https://…" />
-    </label>
-    <button type="submit" class="button" disabled={!servers.canAdd}>
-      {servers.adding.busy ? "Probing…" : "Add server"}
-    </button>
-    <ActionResult action={servers.adding} />
-  </form>
+  {#if app.session.canChange}
+    <form class="form-row" onsubmit={addServer}>
+      <label class="field">
+        <span>Name</span>
+        <input bind:value={servers.name} spellcheck={false} />
+      </label>
+      <label class="field field--wide">
+        <span>Target</span>
+        <input bind:value={servers.target} spellcheck={false} placeholder="https://…" />
+      </label>
+      <button type="submit" class="button" disabled={!servers.canAdd}>
+        {servers.adding.busy ? "Probing…" : "Add server"}
+      </button>
+      <ActionResult action={servers.adding} />
+    </form>
+  {/if}
   <ActionResult action={vm.action} />
   {#if vm.pending !== null}
     <TypedConfirm
@@ -70,6 +72,7 @@
             {server}
             allowed={vm.allowlist.keys}
             busy={vm.action.busy}
+            canChange={app.session.canChange}
             onAllow={(choice) => void vm.choose(choice)}
             onRemove={() => void vm.removeServer(server)}
           />
@@ -110,12 +113,14 @@
                 />
               </td>
               <td class="cell-actions">
-                <ConfirmButton
-                  label="Revoke"
-                  confirmLabel="Revoke this tool"
-                  busy={vm.action.busy}
-                  onConfirm={() => void vm.revoke(entry)}
-                />
+                {#if app.session.canChange}
+                  <ConfirmButton
+                    label="Revoke"
+                    confirmLabel="Revoke this tool"
+                    busy={vm.action.busy}
+                    onConfirm={() => void vm.revoke(entry)}
+                  />
+                {/if}
               </td>
             </tr>
           {/each}

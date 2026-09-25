@@ -23,7 +23,8 @@ What is authenticated and what is not:
     token typed into it or a session cookie.
 *   `/auth/login`, `/auth/callback` and `/auth/logout` are open: they are how
     a CyberdyneAuth session is obtained and ended (see `admin.oidc`). With
-    sign-in off they answer 404.
+    sign-in off they answer 404. `/auth/config` is open too: it tells the
+    console, before anybody is signed in, whether to offer sign-in.
 *   Every response carries the security headers in `headers.py`.
 
 The last route is a refusal. Anything under `/api` that no handler claimed
@@ -127,6 +128,7 @@ ROUTE_ACCESS: Mapping[RouteKey, Access] = {
     # Sign-in: how a session is obtained and ended. Logout is the one non-read
     # outside `admin`: it only ever narrows access, checks the CSRF header
     # itself, and must work for an operator (see LOGOUT below).
+    ("GET", "/auth/config"): _PUBLIC,  # whether sign-in is offered at all
     ("GET", "/auth/login"): _PUBLIC,
     ("GET", "/auth/callback"): _PUBLIC,
     ("POST", "/auth/logout"): _PUBLIC,

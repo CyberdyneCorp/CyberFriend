@@ -33,11 +33,21 @@
         {route.title}
       </a>
     {/each}
-    <button type="button" class="button button--quiet nav__out" onclick={app.session.signOut}>
+    <button
+      type="button"
+      class="button button--quiet nav__out"
+      onclick={() => void app.session.signOut()}
+    >
       Sign out
     </button>
     <p class="nav__note">
-      Your token is in this tab's memory only. Closing or reloading it signs you out.
+      {#if app.session.principal}
+        <span class="nav__who">{app.session.principal.display}</span>
+      {/if}
+      {app.session.canChange ? "admin" : "operator, read-only"}.
+      {#if app.session.viaToken}
+        Your token is in this tab's memory only. Closing or reloading it signs you out.
+      {/if}
     </p>
   </nav>
   <main class="main">

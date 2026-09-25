@@ -153,3 +153,28 @@ export interface AuditEntry {
   at: string;
   reason?: string | null;
 }
+
+/**
+ * GET /api/session: who the credential names, and with which roles.
+ *
+ * `via` says how they got here: a CyberdyneAuth session (`oidc`, the cookie)
+ * or an operator token typed into the break-glass form (`token`). The roles
+ * are the server's decision; the console only reads them to choose what to
+ * show.
+ */
+export interface Principal {
+  subject: string;
+  display: string;
+  roles: string[];
+  via: "oidc" | "token";
+}
+
+/** GET /auth/config: whether "Sign in with CyberdyneAuth" is offered at all. */
+export interface SignInConfig {
+  sign_in: boolean;
+}
+
+/** POST /auth/logout: where to send the browser to end the provider's session too. */
+export interface SignedOut {
+  end_session_url: string | null;
+}

@@ -1,4 +1,4 @@
-"""`/auth/login`, `/auth/callback`, `/auth/logout` and `GET /api/session`.
+"""`/auth/config`, `/auth/login`, `/auth/callback`, `/auth/logout` and `GET /api/session`.
 
 The `/auth/*` routes are public rows in the route table: they are how a
 credential is obtained. With sign-in off they answer 404, so a deploy without
@@ -44,6 +44,12 @@ NO_ACCESS = ("No access.", "This account has no access to the CyberFriend consol
 
 
 def routes(sign_in: SignIn | None) -> list[Route]:
+    async def config(_: Request) -> JSONResponse:
+        # Whether to offer "Sign in with CyberdyneAuth". Open, because the
+        # console asks before anybody is signed in, and it says nothing
+        # `/auth/login` answering 302 or 404 does not already say.
+        return JSONResponse({"sign_in": sign_in is not None}, headers=NO_STORE)
+
     async def login(_: Request) -> Response:
         if sign_in is None:
             return _not_found()
@@ -119,6 +125,7 @@ def routes(sign_in: SignIn | None) -> list[Route]:
         )
 
     return [
+        Route("/auth/config", config, methods=["GET"], name="auth_config"),
         Route("/auth/login", login, methods=["GET"], name="auth_login"),
         Route("/auth/callback", callback, methods=["GET"], name="auth_callback"),
         Route("/auth/logout", logout, methods=["POST"], name="auth_logout"),

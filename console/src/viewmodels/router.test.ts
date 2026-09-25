@@ -25,6 +25,8 @@ function fakeHash(start: string): HashPort & { go: (path: string) => void; repla
   };
 }
 
+const admin = () => "admin" as const;
+
 const ROUTES: Route<string>[] = [
   { path: "/status", title: "Status", view: "status", minRole: "operator" },
   { path: "/tokens", title: "Tokens", view: "tokens", minRole: "operator" },
@@ -33,14 +35,14 @@ const ROUTES: Route<string>[] = [
 
 describe("Router", () => {
   it("opens the screen the address names", () => {
-    const router = new Router(ROUTES, fakeHash("/tokens"), "/status");
+    const router = new Router(ROUTES, fakeHash("/tokens"), "/status", admin);
     expect(router.current.view).toBe("tokens");
   });
 
   it("sends an unknown address to the status screen", () => {
     for (const unknown of ["", "/", "/nope", "/status/extra"]) {
       const hash = fakeHash(unknown);
-      const router = new Router(ROUTES, hash, "/status");
+      const router = new Router(ROUTES, hash, "/status", admin);
       expect(router.current.view).toBe("status");
       expect(hash.replaced).toEqual(["/status"]);
     }
@@ -48,7 +50,7 @@ describe("Router", () => {
 
   it("follows the address while started, and not after", () => {
     const hash = fakeHash("/status");
-    const router = new Router(ROUTES, hash, "/status");
+    const router = new Router(ROUTES, hash, "/status", admin);
     router.start();
     hash.go("/tokens");
     expect(router.current.view).toBe("tokens");
@@ -60,7 +62,7 @@ describe("Router", () => {
   });
 
   it("offers each role only the routes it may open", () => {
-    const router = new Router(ROUTES, fakeHash("/status"), "/status");
+    const router = new Router(ROUTES, fakeHash("/status"), "/status", admin);
     expect(router.visibleTo("operator").map((route) => route.path)).toEqual([
       "/status",
       "/tokens",
@@ -70,6 +72,18 @@ describe("Router", () => {
   });
 
   it("refuses a table without the fallback route", () => {
-    expect(() => new Router(ROUTES, fakeHash(""), "/home")).toThrow("/home");
+    expect(() => new Router(ROUTES, fakeHash(""), "/home", admin)).toThrow("/home");
+  });
+
+  it("will not open a screen above the signed-in role", () => {
+    const hash = fakeHash("/purge");
+    const router = new Router(ROUTES, hash, "/status", () => "operator");
+    expect(router.current.view).toBe("status");
+    expect(hash.replaced).toEqual(["/status"]);
+    router.start();
+    hash.go("/purge");
+    expect(router.current.view).toBe("status");
+    hash.go("/tokens");
+    expect(router.current.view).toBe("tokens");
   });
 });
