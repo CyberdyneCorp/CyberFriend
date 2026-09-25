@@ -497,6 +497,18 @@ async def test_facts_reach_the_prompt_fenced_and_contact_details_only_in_a_dm(
     assert current_facts() is None
 
 
+async def test_the_preferred_currency_reaches_the_prompt_with_what_to_do_with_it() -> None:
+    """The model is told the code and to show both figures, never to convert."""
+    service, store, answers = build()
+    await store.set_fact(LEO, PersonalFact(FactKind.PREFERRED_CURRENCY, "reais"))
+
+    await reply(service, in_channel("what was decided about the deploy?"))
+
+    system, user = answers.prompts[0]
+    assert "never convert a figure yourself" in system
+    assert _asker_block(user)["preferred_currency"] == "BRL"
+
+
 async def test_another_persons_facts_never_reach_the_askers_prompt() -> None:
     service, store, answers = build()
     await store.set_fact(JOAO, PersonalFact(FactKind.PREFERRED_NAME, "Jo"))

@@ -581,7 +581,9 @@ async def test_the_address_sent_is_the_cleared_one_not_the_models_argument(
     """The arguments are model output; the clearance is the asker's question."""
     looked_up: list[str] = []
 
-    async def report(self: PositionsProvider, tool: str, address: str) -> str:
+    async def report(
+        self: PositionsProvider, tool: str, address: str, question: str = ""
+    ) -> str:
         looked_up.append(address)
         return "ok"
 
@@ -615,7 +617,9 @@ async def test_pools_then_loans_about_one_wallet_are_two_questions(
     """Budget per (tool, address): asking for loans after pools must not be
     refused as the same question asked twice."""
 
-    async def report(self: PositionsProvider, tool: str, address: str) -> str:
+    async def report(
+        self: PositionsProvider, tool: str, address: str, question: str = ""
+    ) -> str:
         return f"{tool} for {address}"
 
     monkeypatch.setattr(PositionsProvider, "report", report)

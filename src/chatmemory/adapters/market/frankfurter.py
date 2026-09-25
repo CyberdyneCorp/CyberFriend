@@ -18,6 +18,7 @@ answers with a 301, and redirects are not followed.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
@@ -166,6 +167,24 @@ class FrankfurterProvider(MarketProvider):
             timing=Timing.REFERENCE_DATE,
             as_of=_published(payload.get("date")),
         )
+
+    async def reference_rate(self, source: str, target: str) -> Decimal:
+        """The daily reference rate of `source` in `target`, for a second figure.
+
+        Not through `call_tool`, so not through the egress guard: nobody asked
+        for a conversion, the asker's stored preference did. What leaves is the
+        same request a tool call sends -- two codes, no amount -- and both are
+        members of `domain.currency.SUPPORTED_CODES`, checked by the caller.
+        Shares this provider's cache and client. Raises `ProviderUnavailable`
+        or `UnsupportedBySource` when there is no rate.
+        """
+        lookup = Lookup(terms=(source, target))
+        cached = self._cache.get(lookup.terms)
+        if cached is None:
+            async with asyncio.timeout(self._timeout):
+                cached = await self._fetch_with_client(lookup)
+            self._cache.put(lookup.terms, cached)
+        return cached.value
 
     def describe(self, quote: Quote, lookup: Lookup) -> str:
         source, target = lookup.terms

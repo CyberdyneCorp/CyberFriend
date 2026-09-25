@@ -51,6 +51,7 @@ from chatmemory.adapters.market.google_finance import (
     GoogleFinanceProvider,
 )
 from chatmemory.adapters.market.provider import DEFAULT_TIMEOUT, MarketProvider
+from chatmemory.adapters.market.usd_rates import UsdReferenceRates
 from chatmemory.adapters.mcp_client.client import SessionFactory
 from chatmemory.adapters.mcp_client.config import (
     AllowedTool,
@@ -106,6 +107,9 @@ class MarketTools:
     servers: tuple[ServerConfig, ...] = ()
     allowlist: tuple[AllowedTool, ...] = ()
     providers: Mapping[str, MarketProvider] = field(default_factory=dict)
+    #: The FX provider's USD rates, for the second figure in a preferred
+    #: currency; the chain tools use the same one.
+    rates: UsdReferenceRates | None = None
 
     @property
     def server_names(self) -> tuple[str, ...]:
@@ -153,6 +157,8 @@ def build_market_tools(
     """Assemble whichever market providers this deployment can run."""
     settings = config or MarketToolsConfig()
     budget = CallBudget(settings.max_calls_per_run)
+    fx = _frankfurter(settings, budget, client)
+    rates = UsdReferenceRates(fx)
     providers: list[tuple[MarketProvider, str]] = [
         (
             CoinGeckoProvider(
@@ -163,21 +169,11 @@ def build_market_tools(
                 timeout_seconds=settings.timeout_seconds,
                 client=client,
                 transport=settings.transport,
+                rates=rates,
             ),
             settings.coingecko_endpoint,
         ),
-        (
-            FrankfurterProvider(
-                budget,
-                endpoint=settings.frankfurter_endpoint,
-                ttl_seconds=settings.fx_ttl_seconds,
-                limiter=RateLimiter(settings.min_interval_seconds),
-                timeout_seconds=settings.timeout_seconds,
-                client=client,
-                transport=settings.transport,
-            ),
-            settings.frankfurter_endpoint,
-        ),
+        (fx, settings.frankfurter_endpoint),
     ]
     key = (settings.serpapi_key or "").strip()
     if key:
@@ -199,6 +195,34 @@ def build_market_tools(
         servers=tuple(_server(p.server, target, settings) for p, target in providers),
         allowlist=tuple(_entry(p.server, p.tool.name) for p, _ in providers),
         providers={p.server: p for p, _ in providers},
+        rates=rates,
+    )
+
+
+def build_usd_rates(config: MarketToolsConfig | None = None) -> UsdReferenceRates:
+    """USD rates for a deployment whose market tools are off.
+
+    The same Frankfurter provider class, endpoint and request the conversion
+    tool uses, so the chain tools' second figure reaches no other host; it is
+    never registered as a tool, so nothing can call it but the rate lookup.
+    """
+    settings = config or MarketToolsConfig()
+    return UsdReferenceRates(
+        _frankfurter(settings, CallBudget(settings.max_calls_per_run), None)
+    )
+
+
+def _frankfurter(
+    settings: MarketToolsConfig, budget: CallBudget, client: httpx.AsyncClient | None
+) -> FrankfurterProvider:
+    return FrankfurterProvider(
+        budget,
+        endpoint=settings.frankfurter_endpoint,
+        ttl_seconds=settings.fx_ttl_seconds,
+        limiter=RateLimiter(settings.min_interval_seconds),
+        timeout_seconds=settings.timeout_seconds,
+        client=client,
+        transport=settings.transport,
     )
 
 

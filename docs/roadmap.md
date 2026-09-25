@@ -68,6 +68,9 @@ Last reviewed 2026-09-25.
   price; created by asking in words and pressing Confirm; `/alert list`,
   `/alert delete` (#59, #60, #65).
 - **Market data** — BTC, ETH, the S&P 500 and currency conversion (#28, #30).
+- **Preferred currency** — a personal fact; every dollar figure (prices,
+  balances, pools, Aave, portfolio, activity, alerts) is also shown in the
+  asker's currency at the daily ECB rate (#82).
 
 ### Voice
 
@@ -91,8 +94,8 @@ Last reviewed 2026-09-25.
 
 ## In progress
 
-- **Preferred currency** — a personal fact that shows dollar figures in the
-  asker's own currency beside USD. PR pending; not on `main`.
+- **A complete "what can you do?" answer** — every enabled feature, in English
+  and Portuguese, guarded by a test.
 
 ## Planned
 

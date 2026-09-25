@@ -43,6 +43,7 @@ from chatmemory.adapters.chain.tokens import tokens_for
 from chatmemory.adapters.mcp_client.session import DiscoveredTool, ToolResult, ToolSession
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
 from chatmemory.app.authorization import ToolEffect
+from chatmemory.app.currency import Conversion, UsdRates, asker_conversion, beside, rate_lines
 from chatmemory.app.egress import CHAIN_BALANCES_PROVIDER
 
 log = structlog.get_logger()
@@ -109,6 +110,7 @@ class WalletProvider:
         budget: CallBudget,
         limiter: RateLimiter | None = None,
         prices: PriceLookup | None = None,
+        rates: UsdRates | None = None,
     ) -> None:
         if not readers:
             raise ValueError("a wallet provider needs at least one chain to read")
@@ -116,6 +118,8 @@ class WalletProvider:
         self._budget = budget
         self._limiter = limiter or RateLimiter()
         self._prices = prices
+        #: Where the asker's preferred currency is priced from; None adds nothing.
+        self._rates = rates
 
     @asynccontextmanager
     async def opened(self) -> AsyncIterator[ToolSession]:
@@ -148,11 +152,17 @@ class WalletProvider:
         results = await asyncio.gather(
             *(r.balances(address, tokens_for(r.chain)) for r in self._readers)
         )
-        return ToolResult(text=await self._render(address, results))
+        conversion = await asker_conversion(self._rates, cleared.question)
+        return ToolResult(text=await self._render(address, results, conversion))
 
     # --- presentation --------------------------------------------------
 
-    async def _render(self, address: str, results: Sequence[ChainBalances]) -> str:
+    async def _render(
+        self,
+        address: str,
+        results: Sequence[ChainBalances],
+        conversion: Conversion | None = None,
+    ) -> str:
         lines = [f"Balances for `{address}`"]
         for result in results:
             lines.append("")
@@ -165,12 +175,12 @@ class WalletProvider:
             lines.append(f"**{result.chain.name}**")
             native = result.native or Decimal(0)
             lines.append(f"- {native:.6f} {result.chain.native_symbol}"
-                         + await self._usd(result.chain.price_symbol, native))
+                         + await self._usd(result.chain.price_symbol, native, conversion))
             for holding in result.tokens:
                 value = (
-                    f" (~${holding.amount:,.2f})"
+                    f" (~${holding.amount:,.2f}{beside(conversion, holding.amount, wrap=' · {}')})"
                     if holding.dollar_pegged
-                    else await self._usd(holding.symbol, holding.amount)
+                    else await self._usd(holding.symbol, holding.amount, conversion)
                 )
                 lines.append(f"- {holding.amount:,.6f} {holding.symbol}{value}")
             if not result.tokens:
@@ -180,15 +190,19 @@ class WalletProvider:
             "Token balances cover a named set (USDC, USDT, DAI, WETH); anything "
             "else held is not visible to this lookup rather than absent."
         )
-        return "\n".join(lines)
+        return "\n".join([*lines, *rate_lines(conversion)])
 
-    async def _usd(self, symbol: str, amount: Decimal) -> str:
+    async def _usd(
+        self, symbol: str, amount: Decimal, conversion: Conversion | None = None
+    ) -> str:
         if self._prices is None or not symbol or amount <= 0:
             return ""
         priced = await self._prices.usd_price(symbol)
         if priced is None:
             return ""
-        return f" (~${amount * priced.usd:,.2f} at {priced.as_of})"
+        value = amount * priced.usd
+        second = beside(conversion, value, wrap=" · {}")
+        return f" (~${value:,.2f}{second} at {priced.as_of})"
 
     def _refuse(self, tool: str, reason: str) -> ToolResult:
         return refusal(self.server, tool, reason)

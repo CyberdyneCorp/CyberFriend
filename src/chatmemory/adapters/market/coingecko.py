@@ -37,6 +37,7 @@ from chatmemory.adapters.market.provider import (
 from chatmemory.adapters.market.quotes import Quote, Timing
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
 from chatmemory.adapters.web.results import as_mapping
+from chatmemory.app.currency import UsdRates, asker_conversion, rate_note
 from chatmemory.app.egress import CRYPTO_ASSETS, MARKET_CRYPTO_PROVIDER
 
 COINGECKO_ENDPOINT = "https://api.coingecko.com/api/v3/simple/price"
@@ -94,7 +95,10 @@ class CoinGeckoProvider(MarketProvider):
         timeout_seconds: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        rates: UsdRates | None = None,
     ) -> None:
+        #: Where the asker's preferred currency is priced from; None adds nothing.
+        self._rates = rates
         super().__init__(
             server=MARKET_CRYPTO_PROVIDER,
             label=COINGECKO_LABEL,
@@ -110,6 +114,17 @@ class CoinGeckoProvider(MarketProvider):
 
     def check_arguments(self, arguments: Mapping[str, object]) -> ArgumentCheck:
         return single_member(arguments, ARG_ASSET, CRYPTO_ASSETS)
+
+    async def annotate(self, line: str, quote: Quote, question: str) -> str:
+        """The dollar price, then the same price in the asker's preferred currency.
+
+        The rate's own line says what it is: a daily reference rate, which the
+        converted figure is only as current as.
+        """
+        conversion = await asker_conversion(self._rates, question)
+        if conversion is None:
+            return line
+        return f"{line} ({conversion.shown(quote.value)})\n{rate_note(conversion)}"
 
     async def latest(self) -> Mapping[str, Quote]:
         """Every supported coin's fresh quote, by ticker, for the alert sweep.
