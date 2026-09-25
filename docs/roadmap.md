@@ -82,7 +82,8 @@ Last reviewed 2026-09-25.
 
 - **Scheduled questions** — `/schedule create`, `list`, `delete`; a DM only when
   there is an answer (#45, #46).
-- **Feature requests** — `/suggest` and `/suggestions`; no contact details,
+- **Feature requests** — `/suggest` and `/suggestions`, and six explicit
+  suggestion forms in a message, confirmed with a button; no contact details,
   idempotent, five a day, purged on opt-out.
 - **Admin console** — federation, channels, retention, opt-outs and tokens (#22,
   #23, #24).

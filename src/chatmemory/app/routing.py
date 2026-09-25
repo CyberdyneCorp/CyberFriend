@@ -669,10 +669,13 @@ _PORTFOLIO_BARE = re.compile(
     r"|what(?:'s|\s+is)\s+my\s+total\s+(?:balance|value|holdings)"
     r"|what(?:'s|\s+is)\s+my\s+(?:crypto\s+|defi\s+|on[\s-]?chain\s+)?"
     r"(?:portfolio|net\s+worth)(?:\s+worth)?(?:\s+on[\s-]?chain)?"
+    r"|(?:show|give)\s+(?:me\s+)?my\s+(?:crypto\s+|defi\s+|on[\s-]?chain\s+)?portfolio"
+    r"|(?:me\s+)?(?:mostr[ae]|mostrar)\s+(?:o\s+)?meu\s+portf[oó]lio"
     r")[\s?!.,]*\Z",
     re.IGNORECASE,
 )
-"""The short forms, whole question only. "quanto eu tenho no total?" is also
+"""The short forms, whole question only, and "show my portfolio" among them:
+it asks for the total without a value word. "quanto eu tenho no total?" is also
 how somebody asks about their vacation days, so a longer question with these
 words is not one of these (see `_TOTAL_PHRASE` for what it then needs)."""
 

@@ -417,7 +417,10 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
             self.events.append(("response", payload))
             data = payload.get("data") or {}
             if data.get("content"):
-                self._record("response", channel_id, data)
+                # An update (type 7) rewrites the message that was pressed,
+                # which keeps its id: a view it carries is pressed there next.
+                updated = self._wire.pressed_message(token) if payload.get("type") == 7 else 0
+                self._record("response", channel_id, data, updated)
             return {"interaction": {"id": str(route.webhook_id), "type": 2}}
         if route.method == "DELETE":
             # `delete_original_response`: the deferred "thinking" message.
@@ -460,6 +463,8 @@ class FakeDiscord:
         self._users: dict[int, dict[str, Any]] = {BOT_ID: self.bot_user}
         self._dm_channels: dict[int, int] = {}
         self._interactions: dict[str, int] = {}
+        # A button press's token, and the message its buttons are on.
+        self._pressed: dict[str, int] = {}
         self.http: FakeHTTP
         self.webhooks = FakeWebhookAdapter(self)
         self.guild: discord.Guild
@@ -667,6 +672,10 @@ class FakeDiscord:
     def interaction_channel(self, token: str) -> int:
         return self._interactions[token]
 
+    def pressed_message(self, token: str) -> int:
+        """The message a press was on, or 0 for a command's interaction."""
+        return self._pressed.get(token, 0)
+
     def interaction(
         self,
         member: discord.Member,
@@ -713,11 +722,25 @@ class FakeDiscord:
             **self.bot_message(sent.channel_id, sent.content),
             "id": str(sent.message_id),
         }
+        self._pressed[str(payload["token"])] = sent.message_id
         interaction = discord.Interaction(data=payload, state=self.state)  # type: ignore[arg-type]
         item = self.state._view_store._views.get(sent.message_id, {}).get((2, custom_id))
         if item is None or item.view is None:
             return
         await item.view._scheduled_task(item, interaction)
+
+    async def expire(self, sent: Sent) -> None:
+        """The view on the message `sent` times out, as discord.py would time it out.
+
+        Every button of one view shares it, so the first live one is enough.
+        A view that has already stopped is not in the store, and nothing runs.
+        """
+        items = self.state._view_store._views.get(sent.message_id, {})
+        view = next((item.view for item in items.values() if item.view is not None), None)
+        if view is None:
+            return
+        view.stop()
+        await view.on_timeout()
 
     def _interaction_payload(
         self,

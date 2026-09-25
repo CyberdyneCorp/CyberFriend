@@ -101,6 +101,12 @@ from chatmemory.app.facts import (
 from chatmemory.app.limits import LimitDecision, RateLimiter
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
 from chatmemory.app.said_by import SAID_BY, SaidByService
+from chatmemory.app.suggestion_intent import (
+    SuggestionProposal,
+    proposal_text,
+    route_claiming,
+    suggestion_intent,
+)
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.chain import is_address, named_by_suffix, suffixes_named
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
@@ -269,6 +275,9 @@ class AskOutcome:
     #: The surface shows it with Confirm and Cancel, answerable by the asker
     #: alone. None for every other reply.
     alert: AlertProposal | None = None
+    #: A suggestion to record if the asker confirms, shown with [Record
+    #: suggestion] and [No, answer it]; `scoped` holds the proposal's text.
+    suggestion: SuggestionProposal | None = None
 
     @property
     def answered(self) -> bool:
@@ -354,6 +363,7 @@ class AskService:
         confirm: ConfirmationSurface | None = None,
         *,
         metered: bool = True,
+        suggest: bool = False,
     ) -> AskOutcome:
         """Answer one question.
 
@@ -362,12 +372,35 @@ class AskService:
         assistant by typing; a scheduled task is bounded by its own interval
         instead, and spending the same allowance would let somebody's tasks
         refuse their own next question.
+
+        `suggest` lets a message that starts with an explicit suggestion form
+        be answered with a proposal to record it (`AskOutcome.suggestion`),
+        when nothing else would answer it. Only a surface that can show the
+        proposal's buttons passes it.
         """
         if metered:
             decision = self._limiter.check(request.asker)
             if not decision.allowed:
                 return AskOutcome(None, True, decision.retry_after_seconds)
+        return await self._ask(request, confirm, metered=metered, suggest=suggest)
 
+    async def answer_without_suggestion(
+        self, request: AskRequest, confirm: ConfirmationSurface | None = None
+    ) -> AskOutcome:
+        """The answer a suggestion proposal set aside, once it is declined or expires.
+
+        Not metered again: the allowance was spent when the message was asked.
+        """
+        return await self._ask(request, confirm, metered=True, suggest=False)
+
+    async def _ask(
+        self,
+        request: AskRequest,
+        confirm: ConfirmationSurface | None,
+        *,
+        metered: bool,
+        suggest: bool,
+    ) -> AskOutcome:
         intent = fact_intent(request.text)
         if intent is not None:
             # Before indexing, recall and retrieval: the text is the asker's own
@@ -439,6 +472,13 @@ class AskService:
         )
         if alert is not None:
             return await self._alert_turn(request, alert, facts, values)
+        if suggest:
+            # Last, just before the answer itself: every route that can do
+            # something with the message wins over proposing to record it.
+            earlier = tuple(turn.question for turn in memory.turns)
+            suggested = await self._suggestion_turn(request, confirm, earlier, metered)
+            if suggested is not None:
+                return suggested
         # The confirmation channel is opened around the whole of answer
         # production, and closed the moment it ends: a confirmation cannot be
         # collected for a run that is already over, and the next asker gets
@@ -566,6 +606,36 @@ class AskService:
         )
         answer = Answer(text=proposed.text, consulted_channels=frozenset())
         return AskOutcome(ScopedAnswer(answer, frozenset()), alert=proposed.proposal)
+
+    async def _suggestion_turn(
+        self,
+        request: AskRequest,
+        confirm: ConfirmationSurface | None,
+        previous: tuple[str, ...],
+        metered: bool,
+    ) -> AskOutcome | None:
+        """A proposal to record the suggestion, the answer to what follows its
+        form when another route claims that, or None to answer as usual.
+
+        "it would be nice if you could show my portfolio" is a portfolio
+        question once "show my portfolio" is read on its own, so it is asked
+        again as those words, with every step the pipeline has.
+        """
+        intent = suggestion_intent(request.text)
+        if intent is None or route_claiming(request.text, previous) is not None:
+            return None
+        route = route_claiming(intent.remainder, previous)
+        if route is not None:
+            log.info("ask.suggestion_deferred", asker=str(request.asker), route=route)
+            return await self._ask(
+                replace(request, text=intent.remainder), confirm, metered=metered, suggest=False
+            )
+        log.info("ask.suggestion_proposed", asker=str(request.asker), form=intent.form.name)
+        proposal = SuggestionProposal(
+            request.asker, intent.text, intent.language, intent.form.name
+        )
+        answer = Answer(text=proposal_text(intent.text, intent.language))
+        return AskOutcome(ScopedAnswer(answer, frozenset()), suggestion=proposal)
 
     async def forget(self, request: ForgetRequest) -> MemoryPurge | None:
         """Erase the requester's own conversation, here or everywhere.

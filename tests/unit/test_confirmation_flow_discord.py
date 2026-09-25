@@ -377,7 +377,7 @@ class RecordingAskService:
 
     calls: list[tuple[AskRequest, object]] = field(default_factory=list)
 
-    async def ask(self, request: AskRequest, confirm: object = None) -> object:
+    async def ask(self, request: AskRequest, confirm: object = None, **_: object) -> object:
         self.calls.append((request, confirm))
         return SimpleOutcome()
 
@@ -388,6 +388,7 @@ class SimpleOutcome:
     retry_after_seconds: float = 0.0
     scoped: Any = None
     alert: Any = None
+    suggestion: Any = None
 
     def __post_init__(self) -> None:
         from chatmemory.app.disclosure import ScopedAnswer

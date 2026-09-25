@@ -71,6 +71,7 @@ from chatmemory.adapters.discord.schedule_replies import (
 from chatmemory.adapters.discord.schedule_replies import text as schedule_text
 from chatmemory.adapters.discord.suggestions import (
     NotifyChoiceView,
+    SuggestionProposalView,
     submitted_message,
     suggestion_listing,
 )
@@ -1675,17 +1676,21 @@ class CyberFriendClient(discord.Client):
     async def _answer(self, message: discord.Message, text: str, *, heard: str = "") -> None:
         """Answer `text` as a question. `heard` quotes a voice question above it."""
         destination = ChannelRef(PLATFORM, message.channel.id) if message.guild else None
+        request = AskRequest(
+            asker=_person(message.author),
+            text=self.link_channel_names(text),
+            destination=destination,
+            location_id=message.channel.id,
+        )
         asking = self._asks.ask(
-            AskRequest(
-                asker=_person(message.author),
-                text=self.link_channel_names(text),
-                destination=destination,
-                location_id=message.channel.id,
-            ),
+            request,
             # A DM even when the question was asked in a channel: the
             # answer's destination is not the prompt's, because a prompt
             # in the channel would ask the room to decide for the asker.
             DirectMessageConfirmation(message.author),
+            # Only with somewhere to store it: without, the message is
+            # answered as it always was.
+            suggest=self._suggestions is not None,
         )
         outcome = await self._with_progress(message, text, asking)
 
@@ -1703,9 +1708,63 @@ class CyberFriendClient(discord.Client):
                 await self._reply_parts(message, [heard])
             await reply_with_confirmation(message, outcome.alert, self._confirm_alerts)
             return
+        if outcome.suggestion is not None:
+            if heard:
+                await self._reply_parts(message, [heard])
+            await self._propose_suggestion(message, request, outcome)
+            return
+        await self._deliver(message, outcome, heard)
+
+    async def _deliver(self, message: discord.Message, outcome: AskOutcome, heard: str) -> None:
+        """An answer, as replies to the message it answers."""
         assert outcome.scoped is not None
         await self._reply_parts(message, split_message(_with_heard(heard, _render(outcome.scoped))))
         await self._notify_if_withheld(outcome.scoped, message.author, message.channel)
+
+    async def _propose_suggestion(
+        self, message: discord.Message, request: AskRequest, outcome: AskOutcome
+    ) -> None:
+        """The proposal, with [Record suggestion] and [No, answer it].
+
+        Recording stores what `/suggest` would, from where the message was
+        written. Declining it, or not answering, answers the message as it
+        would have been without the proposal.
+        """
+        suggestions, person = self._suggestions, _person(message.author)
+        proposal = outcome.suggestion
+        assert suggestions is not None and proposal is not None and outcome.scoped is not None
+
+        async def record() -> SubmitResult:
+            return await suggestions.submit(
+                person,
+                proposal.text,
+                _message_source(message),
+                display_name=message.author.display_name,
+                language=proposal.language,
+            )
+
+        async def set_notify(request_id: int, notify: bool) -> bool:
+            return await suggestions.set_notify(person, request_id, notify)
+
+        async def answer() -> None:
+            answered = await self._asks.answer_without_suggestion(
+                request, DirectMessageConfirmation(message.author)
+            )
+            if answered.alert is not None:
+                await reply_with_confirmation(message, answered.alert, self._confirm_alerts)
+                return
+            await self._deliver(message, answered, "")
+
+        view = SuggestionProposalView(
+            message.author.id, proposal.language, record, answer, set_notify
+        )
+        sent = await message.reply(
+            outcome.scoped.answer.text,
+            view=view,
+            mention_author=False,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.sent_as(sent)
 
     async def _reply_parts(self, message: discord.Message, parts: Sequence[str]) -> None:
         for index, part in enumerate(parts):
@@ -1821,6 +1880,18 @@ def _suggestion_source(interaction: discord.Interaction) -> SuggestionSource:
         platform=PLATFORM,
         guild_id=interaction.guild_id if in_guild else None,
         channel_id=interaction.channel_id if in_guild else None,
+    )
+
+
+def _message_source(message: discord.Message) -> SuggestionSource:
+    """Where a suggestion was written: the channel's ids, or none for a DM."""
+    if message.guild is None:
+        return SuggestionSource(kind=SourceKind.DM, platform=PLATFORM)
+    return SuggestionSource(
+        kind=SourceKind.CHANNEL,
+        platform=PLATFORM,
+        guild_id=message.guild.id,
+        channel_id=message.channel.id,
     )
 
 
