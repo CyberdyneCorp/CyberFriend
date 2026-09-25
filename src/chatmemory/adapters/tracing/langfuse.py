@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -228,7 +228,7 @@ class LangfuseTraceDeleter:
 
 
 class LangfuseTraceFinder:
-    """Implements `TraceFinder` over `GET /api/public/traces`.
+    """Implements `TraceFinder` and `ExpiredTraceFinder` over `GET /api/public/traces`.
 
     Filtered twice: the query asks for our environment, and every row is
     checked for our environment and one of our trace names before its id is
@@ -254,44 +254,67 @@ class LangfuseTraceFinder:
         self._transport = transport
 
     async def find_traces_by_user(self, platform_user_id: int) -> Sequence[str] | None:
+        query = {"userId": str(platform_user_id)}
+        return await self._search([query], self._is_ours)
+
+    async def find_traces_before(self, cutoff: datetime) -> Sequence[str] | None:
+        """Our traces older than `cutoff`: tagged ones, then untagged legacy names.
+
+        Every row is also checked against the cutoff, for the same reason
+        every row is checked against the environment.
+        """
+        bound = {"toTimestamp": cutoff.astimezone(UTC).isoformat().replace("+00:00", "Z")}
+        queries = [{**bound, "tags": APP_TAG}] + [
+            {**bound, "name": name} for name in sorted(LEGACY_TRACE_NAMES)
+        ]
+        return await self._search(
+            queries, lambda row: self._is_ours(row) and _before(row, cutoff)
+        )
+
+    async def _search(
+        self,
+        queries: Sequence[dict[str, str]],
+        keep: Callable[[dict[str, Any]], bool],
+    ) -> list[str] | None:
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout, transport=self._transport
             ) as client:
-                return await self._all_pages(client, platform_user_id)
+                found: dict[str, None] = {}
+                for query in queries:
+                    rows = await self._all_pages(client, query)
+                    found.update((str(r["id"]), None) for r in rows if r.get("id") and keep(r))
+                return list(found)
         except Exception as exc:  # noqa: BLE001 - the search retries, never raises
             log.warning("tracing.search_failed", error=str(exc))
             return None
 
     async def _all_pages(
-        self, client: httpx.AsyncClient, platform_user_id: int
-    ) -> list[str]:
-        found: list[str] = []
+        self, client: httpx.AsyncClient, query: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
         page = 1
         while True:
             response = await client.get(
-                self._url, auth=self._auth, params=self._query(platform_user_id, page)
+                self._url, auth=self._auth, params=self._params(query, page)
             )
             response.raise_for_status()
             body = response.json()
-            rows = body.get("data") or []
-            found.extend(self._ours(rows))
+            data = body.get("data") or []
+            rows.extend(data)
             total_pages = int((body.get("meta") or {}).get("totalPages") or 0)
-            if not rows or page >= total_pages:
-                return found
+            if not data or page >= total_pages:
+                return rows
             page += 1
 
-    def _query(self, platform_user_id: int, page: int) -> dict[str, str | int]:
+    def _params(self, query: dict[str, str], page: int) -> dict[str, str | int]:
         return {
-            "userId": str(platform_user_id),
+            **query,
             "environment": self._environment,
             "fields": "core",
             "limit": SEARCH_PAGE_SIZE,
             "page": page,
         }
-
-    def _ours(self, rows: Sequence[dict[str, Any]]) -> list[str]:
-        return [str(row["id"]) for row in rows if row.get("id") and self._is_ours(row)]
 
     def _is_ours(self, row: dict[str, Any]) -> bool:
         if row.get("environment") != self._environment:
@@ -300,6 +323,17 @@ class LangfuseTraceFinder:
         if name in LEGACY_TRACE_NAMES:
             return True
         return name in FEATURES and APP_TAG in (row.get("tags") or ())
+
+
+def _before(row: dict[str, Any], cutoff: datetime) -> bool:
+    """Whether the row's timestamp is before `cutoff`; a row without one is not."""
+    try:
+        stamp = datetime.fromisoformat(str(row["timestamp"]))
+    except (KeyError, ValueError):
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp < cutoff
 
 
 SUPPORTED_MAJOR = 3

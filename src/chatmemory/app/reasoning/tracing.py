@@ -9,7 +9,8 @@ layer's decision.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -22,7 +23,12 @@ from chatmemory.app.reasoning.contract import (
     RunTracer,
 )
 from chatmemory.ports.answers import Answer, Question
-from chatmemory.ports.tracing import TraceDeleter, TraceFinder, TraceIndex
+from chatmemory.ports.tracing import (
+    ExpiredTraceFinder,
+    TraceDeleter,
+    TraceFinder,
+    TraceIndex,
+)
 
 log = structlog.get_logger()
 
@@ -179,3 +185,44 @@ class TraceWithdrawal:
         await self._index.confirm_deleted(trace_ids)
         log.info("tracing.withdrawn", count=len(trace_ids))
         return True
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionSweep:
+    """What one retention pass marked; None for `found` when Langfuse was unreadable."""
+
+    expired: int
+    found: int | None
+
+
+class TraceRetention:
+    """Marks this application's traces older than the retention period for deletion.
+
+    Two sources, because either alone misses traces. The index holds every
+    trace exported since it existed; Langfuse also holds traces whose index row
+    was never written (the write swallows failures) or that predate the index.
+    Deleting is left to `TraceWithdrawal.retry_pending`, so a sweep and a
+    deletion fail and retry independently, as the asker search does.
+    """
+
+    def __init__(
+        self, index: TraceIndex, finder: ExpiredTraceFinder, retention: timedelta
+    ) -> None:
+        self._index = index
+        self._finder = finder
+        self._retention = retention
+
+    async def sweep(self, now: datetime) -> RetentionSweep:
+        cutoff = now - self._retention
+        expired = await self._index.request_deletion_before(cutoff)
+        found = await self._finder.find_traces_before(cutoff)
+        if found is None:
+            log.warning("tracing.retention_search_deferred")
+        else:
+            await self._index.record_expired_traces(found)
+        log.info(
+            "tracing.retention_swept",
+            expired=len(expired),
+            found=None if found is None else len(found),
+        )
+        return RetentionSweep(len(expired), None if found is None else len(found))

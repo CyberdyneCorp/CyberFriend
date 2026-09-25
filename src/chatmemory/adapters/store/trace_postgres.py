@@ -130,6 +130,26 @@ WHERE platform_user_id = :platform_user_id AND completed_at IS NULL
   AND requested_at <= :started
 """)
 
+#: Retention: every live trace exported before the cutoff. Rows already marked
+#: are left out so that what is returned is what this sweep newly expired.
+REQUEST_DELETION_BEFORE = text("""
+UPDATE trace_export SET deletion_requested_at = :now
+WHERE deleted_at IS NULL AND deletion_requested_at IS NULL AND created_at < :cutoff
+RETURNING trace_id
+""")
+
+#: A trace the destination still holds past retention. Unlike
+#: `RECORD_FOUND_TRACE` the asker is unknown, and one already confirmed deleted
+#: is left alone for the same reason: Langfuse may still list it.
+RECORD_EXPIRED_TRACE = text("""
+INSERT INTO trace_export (trace_id, created_at, deletion_requested_at)
+VALUES (:trace_id, :now, :now)
+ON CONFLICT (trace_id) DO UPDATE
+SET deletion_requested_at =
+        COALESCE(trace_export.deletion_requested_at, EXCLUDED.deletion_requested_at)
+WHERE trace_export.deleted_at IS NULL
+""")
+
 CONFIRM_DELETED = text("""
 UPDATE trace_export SET deleted_at = :now
 WHERE trace_id = ANY(:trace_ids) AND deleted_at IS NULL
@@ -247,6 +267,23 @@ class PostgresTraceIndex:
             await conn.execute(
                 COMPLETE_ASKER_SEARCH,
                 {"platform_user_id": platform_user_id, "now": now, "started": started},
+            )
+
+    async def request_deletion_before(self, cutoff: datetime) -> Sequence[str]:
+        async with self._engine.begin() as conn:
+            rows = await conn.execute(
+                REQUEST_DELETION_BEFORE, {"cutoff": cutoff, "now": datetime.now(UTC)}
+            )
+            return [str(r[0]) for r in rows]
+
+    async def record_expired_traces(self, trace_ids: Sequence[str]) -> None:
+        if not trace_ids:
+            return
+        now = datetime.now(UTC)
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                RECORD_EXPIRED_TRACE,
+                [{"trace_id": t, "now": now} for t in sorted(set(trace_ids))],
             )
 
     async def confirm_deleted(self, trace_ids: Sequence[str]) -> None:

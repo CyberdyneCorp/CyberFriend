@@ -474,6 +474,7 @@ lists the common ones. The settings worth knowing:
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 | `LANGFUSE_ENVIRONMENT` | Langfuse environment to export to and search on opt-out (`production`) |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept; `ingest` deletes this app's older traces daily (default 90) |
 
 Anything that reaches outside the server is off by default. A deployment should
 acquire an outbound boundary because somebody chose it.

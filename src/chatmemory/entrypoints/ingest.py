@@ -83,7 +83,7 @@ from chatmemory.app.asks.worker import (
 from chatmemory.app.conversation import MemoryRetention
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
 from chatmemory.app.notifications import ObligationNotifier
-from chatmemory.app.reasoning.tracing import TraceWithdrawal
+from chatmemory.app.reasoning.tracing import TraceRetention, TraceWithdrawal
 from chatmemory.app.scope import LiveScope, ScopeChange, ScopeProvider
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import (
@@ -92,6 +92,7 @@ from chatmemory.composition import (
     build_decision_store,
     build_memory_retention,
     build_obligation_notifier,
+    build_trace_retention,
     build_trace_withdrawal,
 )
 from chatmemory.config import Settings, get_settings
@@ -113,6 +114,8 @@ RECONCILE_LOOKBACK = timedelta(hours=24)
 WINDOW_BATCH = 500
 # How often unconfirmed trace deletions are re-attempted.
 TRACE_WITHDRAWAL_INTERVAL_SECONDS = 300.0
+# How often traces past `TRACE_RETENTION_DAYS` are marked for deletion.
+TRACE_RETENTION_INTERVAL_SECONDS = 86400.0
 IDLE_SECONDS = 5.0
 # How often open asks are re-examined against what has since been observed.
 # Minutes rather than seconds: every transition comes from a reply or a
@@ -535,6 +538,39 @@ async def trace_withdrawal_pass(withdrawal: TraceWithdrawal, state: HealthState)
         }
 
 
+async def trace_retention_loop(
+    retention: TraceRetention,
+    state: HealthState,
+    interval: float = TRACE_RETENTION_INTERVAL_SECONDS,
+) -> None:
+    """Mark this application's traces past retention; the withdrawal loop deletes them.
+
+    Self-hosted Langfuse keeps traces forever, so this is the only thing that
+    makes "kept for 90 days" true. Runs before its first sleep, so a deploy
+    that shortened the period takes effect at once, and a restart does not
+    postpone a sweep by a day.
+    """
+    while True:
+        try:
+            await trace_retention_pass(retention, state, datetime.now(UTC))
+        except Exception:
+            # Nothing was marked; the next pass computes the same cutoff or a later one.
+            log.exception("tracing.retention_failed")
+        await asyncio.sleep(interval)
+
+
+async def trace_retention_pass(
+    retention: TraceRetention, state: HealthState, now: datetime
+) -> None:
+    """One pass: mark what is past retention at `now`, and say so on /health."""
+    swept = await retention.sweep(now)
+    state.details["trace_retention"] = {
+        "expired": swept.expired,
+        "found": swept.found,
+        "last_run_at": time.time(),
+    }
+
+
 async def memory_retention_loop(
     retention: MemoryRetention,
     state: HealthState,
@@ -743,6 +779,9 @@ async def main() -> None:
         withdrawal = build_trace_withdrawal(settings, engine)
         if withdrawal is not None:
             tasks.create_task(trace_withdrawal_loop(withdrawal, state))
+        retention = build_trace_retention(settings, engine)
+        if retention is not None:
+            tasks.create_task(trace_retention_loop(retention, state))
 
         if asks is not None:
             # The point of the whole ask pipeline: without these tasks the

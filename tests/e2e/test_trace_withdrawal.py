@@ -14,12 +14,18 @@ An admin opt-out withdraws the traces of the person's own questions too: the
 console, built by its entrypoint, marks them, and one pass of ingest's
 withdrawal sweep searches Langfuse by the person's platform id for traces the
 index never recorded and deletes both, never another app's or environment's.
+
+The retention sweep marks what is older than `TRACE_RETENTION_DAYS` -- in the
+index and, through the same transport, in Langfuse -- and the withdrawal pass
+deletes it, again never another app's or environment's.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import pytest_asyncio
@@ -27,6 +33,7 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.tracing.langfuse import APP_TAG
 from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints import admin
 from tests.e2e.conftest import COFFEE, DEFAULT_CORPUS
@@ -47,7 +54,7 @@ class FakeLangfuse:
     """Accepts exports, lists `held` traces by user, answers DELETE with `delete_status`."""
 
     def __init__(self) -> None:
-        self.held: list[dict[str, str]] = []
+        self.held: list[dict[str, Any]] = []
         self.delete_status = 200
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -197,4 +204,54 @@ async def test_a_refused_deletion_stays_pending_until_langfuse_accepts(
     await bot.ingest.sweep_traces()
 
     assert sorted(_deleted(bot)[-1]) == sorted([asked, "legacy-bea"])
+    assert await _pending(bot.engine) == 0
+
+
+class RetainingLangfuse(FakeLangfuse):
+    """Also answers the retention search: filtered by environment, tag or name."""
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method != "GET" or "userId" in request.url.params:
+            return super().__call__(request)
+        params = request.url.params
+        rows = [
+            r for r in self.held
+            if r["environment"] == params["environment"]
+            and ("tags" not in params or params["tags"] in r.get("tags", []))
+            and ("name" not in params or params["name"] == r["name"])
+        ]
+        return httpx.Response(200, json={"data": rows, "meta": {"page": 1, "totalPages": 1}})
+
+
+async def test_traces_past_retention_are_deleted_and_foreign_ones_survive(
+    traced: E2EBot,
+) -> None:
+    """The daily sweep, 91 days on: the exported trace and an unindexed one of
+    ours are deleted; another environment's and another app's are not."""
+    bot = traced
+    langfuse = RetainingLangfuse()
+    bot.web.script(LANGFUSE, langfuse)
+    await bot.channel("general", bot.person("Bea")).say("when will the coffee maker be fixed?")
+    [export] = [r for r in bot.web.calls if r.method == "POST" and r.url.host == LANGFUSE]
+    [exported] = [
+        e["body"]["id"]
+        for e in json.loads(export.content)["batch"]
+        if e["type"] == "trace-create"
+    ]
+    later = datetime.now(UTC) + timedelta(days=91)
+    old = datetime.now(UTC).isoformat()
+    langfuse.held = [
+        {"id": "unindexed", "name": "time", "environment": "production",
+         "tags": [APP_TAG], "timestamp": old},
+        {"id": "staging-old", "name": "fixed", "environment": "staging",
+         "tags": [APP_TAG], "timestamp": old},
+        {"id": "other-app-old", "name": "checkout", "environment": "production",
+         "tags": [], "timestamp": old},
+    ]
+
+    await bot.ingest.expire_traces(later)
+    await bot.ingest.sweep_traces()
+
+    assert [sorted(ids) for ids in _deleted(bot)] == [sorted([exported, "unindexed"])]
+    assert bot.seal.refused == [], "the retention sweep went out over the real network"
     assert await _pending(bot.engine) == 0
