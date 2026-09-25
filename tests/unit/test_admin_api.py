@@ -219,6 +219,7 @@ async def build_console(
     channels: Sequence[ChannelEvidence] = (),
     optouts: Sequence[OptOutEntry] = (),
     status: StatusSnapshot | None = None,
+    oidc_configured: bool = False,
 ) -> Console:
     tokens = InMemoryOperatorTokens()
     issued = await tokens.issue(ANA, "laptop")
@@ -242,7 +243,7 @@ async def build_console(
         mcp_tokens=ReviewAndRevokeOnly(mcp_tokens),
         probe=probe,
     )
-    app = build_app(services, tokens)
+    app = build_app(services, tokens, oidc_configured=oidc_configured)
     return Console(
         client=TestClient(app),
         services=services,

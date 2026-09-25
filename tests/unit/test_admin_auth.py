@@ -20,6 +20,7 @@ from starlette.testclient import TestClient
 
 import chatmemory
 from chatmemory.admin import auth as auth_module
+from chatmemory.admin.access import Access, RouteAccess
 from chatmemory.admin.auth import (
     AdminAuthenticator,
     AdminAuthMiddleware,
@@ -53,7 +54,16 @@ def build_console(tokens: InMemoryOperatorTokens) -> Starlette:
             Route("/health", health),
         ]
     )
-    app.add_middleware(AdminAuthMiddleware, authenticator=AdminAuthenticator(tokens))
+    table = {
+        ("GET", "/api/whoami"): Access.OPERATOR,
+        ("POST", "/api/whoami"): Access.ADMIN,
+        ("GET", "/health"): Access.PUBLIC,
+    }
+    app.add_middleware(
+        AdminAuthMiddleware,
+        authenticator=AdminAuthenticator(tokens),
+        access=RouteAccess(table, app.router.routes),
+    )
     return app
 
 
@@ -312,7 +322,7 @@ def test_the_authenticator_offers_no_way_to_ask_for_an_operator_by_name() -> Non
         for name, value in vars(AdminAuthenticator).items()
         if not name.startswith("__") and callable(value)
     }
-    assert methods == {"operator_for_token"}
+    assert methods == {"principal_for_token"}
 
 
 # --- revocation is per operator ----------------------------------------

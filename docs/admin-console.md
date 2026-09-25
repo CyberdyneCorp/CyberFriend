@@ -355,3 +355,39 @@ A 401 signs the operator out and says one sentence, the same one for all four
 causes. The API deliberately makes missing, malformed, unknown and revoked
 indistinguishable; a client that guessed which one it was and said so would
 rebuild the oracle the server refuses to be.
+
+## Roles, and which route needs which
+
+The API has two console roles. **Operator** is read-only: status, settings,
+federation, channels, opt-outs, tokens and the audit, and nothing that changes
+them. **Admin** implies operator and is required for every write — a setting,
+a federated server or tool, a channel, an opt-out (which purges), an MCP token
+revocation.
+
+Which role a route needs is decided in one place, `ROUTE_ACCESS` in
+`src/chatmemory/admin/server.py`, with one explicit row per mounted
+`(method, path)`: `public` (probes and the static bundle), `user` (the user
+area, later), `operator`, `admin`, or `admin_oidc` (personal content: admin
+and signed in as a person, never a token). There is no default by method; HEAD
+is looked up under its route's GET row. The middleware resolves each request
+against the router's own route list, so:
+
+- a route with no row is refused with 403 `{"error":"forbidden"}` before its
+  handler runs;
+- a principal below the route's role gets 403 `{"error":"requires admin"}`;
+- an unauthenticated request still gets the one byte-identical 401, whatever
+  the route's role.
+
+`tests/unit/test_admin_roles.py` walks every mounted route and fails on a
+route without a row, a row without a route, a write below admin, or anything
+under `/api` marked public. Adding a route means adding its row in the same
+diff.
+
+### What a `cfa_` token is
+
+While `ADMIN_OIDC_ISSUER` is unset, a `cfa_` token is admin, exactly as before
+roles existed. Once it is set, every `cfa_` token is **operator only**: admin
+rights then come only from the CyberdyneAuth role. Until CyberdyneAuth sign-in
+ships (the rest of `add-console-cyberdyneauth-login`), setting the issuer
+leaves nobody with admin rights, so leave it unset. Unsetting it again is the
+break-glass rollback: tokens are admin again on the next start.

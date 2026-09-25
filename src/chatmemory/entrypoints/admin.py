@@ -80,6 +80,12 @@ not of the corpus.
 CONSOLE_DIR_VAR = "ADMIN_CONSOLE_DIR"
 PORT_VAR = "ADMIN_PORT"
 DATABASE_URL_VAR = "DATABASE_URL"
+OIDC_ISSUER_VAR = "ADMIN_OIDC_ISSUER"
+"""The CyberdyneAuth issuer. Unset: `cfa_` tokens are admin, as before roles.
+
+Set: tokens are operator (read-only) and admin rights come only from the
+identity provider's role. Unsetting it again is the break-glass rollback.
+"""
 
 FORBIDDEN_CREDENTIALS = ("DISCORD_TOKEN", "LLM_API_KEY", "SERPAPI_KEY")
 """Credentials this service must not be given.
@@ -140,6 +146,10 @@ def console_dir(environ: Mapping[str, str]) -> Path | None:
 def port(environ: Mapping[str, str]) -> int:
     raw = environ.get(PORT_VAR, "").strip()
     return int(raw) if raw.isdigit() else DEFAULT_PORT
+
+
+def oidc_issuer(environ: Mapping[str, str]) -> str | None:
+    return environ.get(OIDC_ISSUER_VAR, "").strip() or None
 
 
 def database_url(environ: Mapping[str, str]) -> str:
@@ -214,7 +224,12 @@ def build(environ: Mapping[str, str]) -> ConsoleProcess:
         probe=make_probe(),
     )
     return ConsoleProcess(
-        app=build_app(services, PostgresOperatorTokens(engine), console_dir(environ)),
+        app=build_app(
+            services,
+            PostgresOperatorTokens(engine),
+            console_dir(environ),
+            oidc_configured=oidc_issuer(environ) is not None,
+        ),
         services=services,
         configuration=configuration,
         engine=engine,
@@ -230,6 +245,7 @@ async def main() -> None:
         port=built.port,
         console=str(console_dir(os.environ) or "not configured"),
         settings=len(SETTINGS),
+        token_role="operator" if oidc_issuer(os.environ) else "admin",
     )
     config = uvicorn.Config(
         built.app, host="0.0.0.0", port=built.port, log_level="warning"
