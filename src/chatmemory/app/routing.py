@@ -36,6 +36,7 @@ from enum import StrEnum
 from chatmemory.app.language import Language
 from chatmemory.app.timespan import Span, cut_span, cut_topic, fold
 from chatmemory.domain.chain import find_addresses
+from chatmemory.domain.currency import CURRENCY_NAMES, CURRENCY_NAMES_OR_CODES
 from chatmemory.ports.facts import FactKind
 
 
@@ -1400,6 +1401,20 @@ _BIRTH_DATE_WORD = (
     r"(?:birth\s*date|date\s+of\s+birth|birthday|data\s+de\s+nascimento|"
     r"anivers[aá]rio)"
 )
+_CURRENCY_WORD = r"(?:(?:preferred\s+)?currency|moeda(?:\s+preferida)?)"
+# The loose ways of stating a currency are statements only when a currency is
+# named: "uso reais" is a preference, "uso o Discord" is not. "Prefer to see
+# in" is only ever about money, so a code in capitals will do ("prefiro ver em
+# BRL"); "use" is not, so it takes a spoken name: "I use PHP" is a language.
+_A_CURRENCY = rf"(?P<value>{CURRENCY_NAMES})"
+_A_CURRENCY_OR_CODE = rf"(?P<value>{CURRENCY_NAMES_OR_CODES})"
+_PREFER_IN = (
+    r"(?:(?:eu\s+)?(?:prefiro|quero)(?:\s+(?:ver|receber))?"
+    r"(?:\s+(?:os\s+)?(?:valores|pre[cç]os))?\s+em|"
+    r"i\s+(?:prefer|want)(?:\s+to\s+see)?(?:\s+(?:prices|values|amounts|figures))?\s+in|"
+    r"(?:show|give)\s+me\s+(?:prices|values|amounts|figures)\s+in)"
+)
+_I_USE = r"(?:(?:eu\s+)?uso|i\s+use)"
 
 
 def _is_or_shaped(shape: str) -> str:
@@ -1499,6 +1514,16 @@ _SET_PATTERNS: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
             r"\s+(?P<value>.+?)",
         ),
         (
+            FactKind.PREFERRED_CURRENCY,
+            rf"(?:{_MY}\s+{_CURRENCY_WORD}(?:\s*:?\s+{_IS}|\s*:)|"
+            r"(?:moeda\s+preferida|preferred\s+currency)(?:\s*:?\s+(?:[ée]|is)|\s*:)|"
+            r"(?:set|change|update)\s+my\s+(?:preferred\s+)?currency\s+to|"
+            r"(?:mude|muda|altere|atualize)\s+(?:a\s+)?minha\s+moeda(?:\s+preferida)?\s+para)"
+            r"\s+(?P<value>.+?)",
+        ),
+        (FactKind.PREFERRED_CURRENCY, rf"{_PREFER_IN}\s+{_A_CURRENCY_OR_CODE}"),
+        (FactKind.PREFERRED_CURRENCY, rf"{_I_USE}\s+{_A_CURRENCY}"),
+        (
             FactKind.BIRTH_DATE,
             rf"(?:{_MY}\s+{_BIRTH_DATE_WORD}\s+{_IS}|"
             # A date, as for "born": "nasci em São Paulo" is a birthplace.
@@ -1517,6 +1542,7 @@ _MAX_NAME_WORDS = 4
 _MAX_FULL_NAME_WORDS = 8
 _MAX_LANGUAGE_WORDS = 3
 _MAX_ADDRESS_WORDS = 30
+_MAX_CURRENCY_WORDS = 4
 _NOT_A_NAME_START = frozenset({
     "when", "if", "after", "before", "back", "later", "tomorrow", "today",
     "tonight", "at", "on", "in", "about", "once", "whenever", "as", "by", "and",
@@ -1555,6 +1581,7 @@ _FORGET_ONE: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
         (FactKind.PHONE, _PHONE_WORD),
         (FactKind.HOME_ADDRESS, _HOME_ADDRESS_WORD),
         (FactKind.BIRTH_DATE, _BIRTH_DATE_WORD),
+        (FactKind.PREFERRED_CURRENCY, _CURRENCY_WORD),
         # A wallet may be named by its address, or by its last characters
         # (resolved against the saved ones), to forget that one of several.
         (FactKind.BTC_WALLET, _BTC_WALLET_WORD + _wallet_named(_BTC_SHAPE)),
@@ -1605,6 +1632,7 @@ _SHOW_ONE: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
         # the answer path has both in a DM prompt.
         (FactKind.HOME_ADDRESS, _HOME_ADDRESS_ASKED),
         (FactKind.BIRTH_DATE, _BIRTH_DATE_WORD),
+        (FactKind.PREFERRED_CURRENCY, _CURRENCY_WORD),
         (FactKind.BTC_WALLET, _BTC_WALLET_WORD + r"(?:\s+address)?"),
         # Last: "wallet" alone is the Ethereum one, and "my btc wallet" also
         # ends in "wallet".
@@ -1731,6 +1759,8 @@ def _plausible(kind: FactKind, value: str) -> bool:
         return len(words) <= _MAX_FULL_NAME_WORDS and words[0].lower() not in _NOT_A_NAME_START
     if kind is FactKind.PREFERRED_LANGUAGE:
         return len(words) <= _MAX_LANGUAGE_WORDS
+    if kind is FactKind.PREFERRED_CURRENCY:
+        return len(words) <= _MAX_CURRENCY_WORDS
     if kind is FactKind.HOME_ADDRESS:
         # "my address is 0x..." is a wallet said loosely, not where they live.
         return len(words) <= _MAX_ADDRESS_WORDS and not _HEX_ADDRESS.match(value)
@@ -1763,7 +1793,8 @@ _SHAPED_PREFIX = {
 
 def _cut(kind: FactKind, value: str) -> str:
     """The value alone, without what the person went on to say after it."""
-    if kind in (FactKind.PREFERRED_NAME, FactKind.FULL_NAME):
+    if kind in (FactKind.PREFERRED_NAME, FactKind.FULL_NAME, FactKind.PREFERRED_CURRENCY):
+        # A currency is cut like a name: "o real, e sou dev" is the real.
         value = _NAME_END.split(value, maxsplit=1)[0]
         connector = _FULL_NAME_CONNECTOR if kind is FactKind.FULL_NAME else _NAME_CONNECTOR
         return connector.split(value, maxsplit=1)[0].strip()
@@ -1863,7 +1894,11 @@ _CLAUSE_START = re.compile(
     r"resido|i\s+live|"
     r"sou\s+de|i'?m\s+from|i\s+am\s+from|"
     r"(?:eu\s+)?tenho(?=\s+\d)|i'?m(?=\s+\d)|i\s+am(?=\s+\d)|"
-    r"(?:eu\s+)?nasci|nascid[oa]|i\s+was\s+born|born\s+on)\b",
+    r"(?:eu\s+)?nasci|nascid[oa]|i\s+was\s+born|born\s+on|"
+    # A currency preference, only where a currency follows: "uso reais" and
+    # "prefiro ver em euros", not "uso o Discord" or "prefiro café".
+    r"moeda\s+preferida|preferred\s+currency|"
+    rf"{_PREFER_IN}(?=\s+{CURRENCY_NAMES_OR_CODES}\b)|{_I_USE}(?=\s+{CURRENCY_NAMES}\b))\b",
     re.IGNORECASE,
 )
 """Where a fact starts in a longer message. A clause runs to the next one, so
@@ -1905,6 +1940,27 @@ def _clauses(text: str) -> list[str]:
     return [_CLAUSE_TAIL.sub("", text[a:b]).strip() for a, b in bounds]
 
 
+# Inside an introduction, a loose currency clause may run on past the currency:
+# "uso reais no dia a dia" and "uso reais. Qual o preço do bitcoin?" state
+# reais all the same. On its own such a message is a question unless the
+# currency ends it, so this is only tried on a clause.
+_CURRENCY_CLAUSE = tuple(
+    re.compile(rf"^{verb}\s+{named}\b", re.IGNORECASE)
+    for verb, named in ((_PREFER_IN, _A_CURRENCY_OR_CODE), (_I_USE, _A_CURRENCY))
+)
+
+
+def _clause_intent(clause: str) -> FactIntent | None:
+    found = _set_intent(clause)
+    if found is not None:
+        return found
+    for pattern in _CURRENCY_CLAUSE:
+        match = pattern.match(clause)
+        if match is not None:
+            return FactIntent(FactAction.SET, FactKind.PREFERRED_CURRENCY, match.group("value"))
+    return None
+
+
 def _introduction(text: str) -> FactIntent | None:
     """Several facts stated in one message, or None.
 
@@ -1915,7 +1971,7 @@ def _introduction(text: str) -> FactIntent | None:
     sets: list[tuple[FactKind, str]] = []
     not_kept: list[str] = []
     for clause in _clauses(text):
-        found = _set_intent(clause)
+        found = _clause_intent(clause)
         if found is not None and found.kind is not None and found.value is not None:
             sets.append((found.kind, found.value))
             continue

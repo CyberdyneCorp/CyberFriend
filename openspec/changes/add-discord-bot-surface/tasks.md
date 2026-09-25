@@ -41,7 +41,7 @@
 
 ## 6. Corpus hygiene
 
-- [ ] 6.1 Exclude the bot's own messages from ingestion
+- [x] 6.1 Exclude the bot's own messages from ingestion
 - [ ] 6.2 Test: an answer posted into an indexed channel is not citable in a later answer
 
 ## 7. Verification

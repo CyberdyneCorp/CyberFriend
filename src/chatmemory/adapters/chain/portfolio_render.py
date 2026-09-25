@@ -28,6 +28,7 @@ from chatmemory.adapters.chain.portfolio import (
     total,
 )
 from chatmemory.adapters.chain.positions_render import DUST_USD, amount
+from chatmemory.app.currency import Conversion, beside, rate_lines
 from chatmemory.app.language import Language, detect
 
 MAX_LISTED = 4
@@ -127,8 +128,10 @@ def portfolio_language(question: str) -> Language:
 class _Words:
     """The phrasing and number format of one language."""
 
-    def __init__(self, language: Language) -> None:
+    def __init__(self, language: Language, conversion: Conversion | None = None) -> None:
         self.language = language
+        #: The asker's preferred currency, added beside every dollar figure.
+        self.conversion = conversion
         self.pt = language is Language.PORTUGUESE
         self.text = PT if self.pt else EN
         self.sections = SECTIONS[Language.PORTUGUESE if self.pt else Language.ENGLISH]
@@ -138,7 +141,8 @@ class _Words:
 
     def usd(self, value: Decimal) -> str:
         figure = f"{value:,.2f}"
-        return f"US$ {_swap(figure)}" if self.pt else f"${figure}"
+        second = beside(self.conversion, value)
+        return f"US$ {_swap(figure)}{second}" if self.pt else f"${figure}{second}"
 
     def number(self, value: Decimal) -> str:
         figure = amount(value)
@@ -159,8 +163,12 @@ def _swap(figure: str) -> str:
 # --- the answer ---------------------------------------------------------------
 
 
-def render_portfolio(wallets: Sequence[WalletPortfolio], language: Language) -> str:
-    words = _Words(language)
+def render_portfolio(
+    wallets: Sequence[WalletPortfolio],
+    language: Language,
+    conversion: Conversion | None = None,
+) -> str:
+    words = _Words(language, conversion)
     # The header is dropped from the body but quoted by the citation footer,
     # which is posted too: it names wallets the same way the body does.
     who = ", ".join(f"…{w.address[-4:]}" for w in wallets)
@@ -290,4 +298,5 @@ def _footer(wallets: Sequence[WalletPortfolio], words: _Words) -> list[str]:
     lines.append(words("prices", fallback=words("fallback") if fallback else ""))
     if any(c.liquidity.positions or not c.lending.empty for c in chains):
         lines.append(words("details"))
+    lines.extend(rate_lines(words.conversion))
     return lines

@@ -748,6 +748,7 @@ class AskService:
             preferred_name=stored.get(FactKind.PREFERRED_NAME),
             full_name=stored.get(FactKind.FULL_NAME),
             preferred_language=stored.get(FactKind.PREFERRED_LANGUAGE),
+            preferred_currency=stored.get(FactKind.PREFERRED_CURRENCY),
             email=stored.get(FactKind.EMAIL),
             phone=stored.get(FactKind.PHONE),
             home_address=stored.get(FactKind.HOME_ADDRESS),

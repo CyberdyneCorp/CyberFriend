@@ -53,6 +53,7 @@ from chatmemory.adapters.mcp_client.session import DiscoveredTool, ToolResult, T
 from chatmemory.adapters.web.limits import CallBudget, RateLimiter
 from chatmemory.app.authorization import ToolEffect
 from chatmemory.app.clock import Clock, utc_now
+from chatmemory.app.currency import UsdRates, asker_conversion, rate_lines
 from chatmemory.app.egress import DEFI_POSITIONS_PROVIDER
 from chatmemory.app.wallet_activity import activity_window
 
@@ -195,6 +196,7 @@ class PositionsProvider:
         transport: httpx.AsyncBaseTransport | None = None,
         prices: PriceLookup | None = None,
         clock: Clock = utc_now,
+        rates: UsdRates | None = None,
     ) -> None:
         if not deployments:
             raise ValueError("a positions provider needs at least one chain to read")
@@ -212,6 +214,8 @@ class PositionsProvider:
         self._wrappers = WrapperCache()
         #: "This week" is resolved against this, for the activity tool only.
         self._clock = clock
+        #: Where the asker's preferred currency is priced from; None adds nothing.
+        self._rates = rates
 
     @asynccontextmanager
     async def opened(self) -> AsyncIterator[ToolSession]:
@@ -242,7 +246,7 @@ class PositionsProvider:
         )
         if isinstance(cleared, ToolResult):
             return cleared
-        return ToolResult(text=await self.report(name, cleared.address))
+        return ToolResult(text=await self.report(name, cleared.address, cleared.question))
 
     async def _portfolio_call(self) -> ToolResult:
         cleared = await clear_addresses(
@@ -262,15 +266,22 @@ class PositionsProvider:
 
     # --- reading -------------------------------------------------------
 
-    async def report(self, tool: str, address: str) -> str:
-        """The rendered answer. Assumes the address is already cleared."""
-        if self._client is not None:
-            return await self._report(tool, address, self._client)
-        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-            return await self._report(tool, address, client)
+    async def report(self, tool: str, address: str, question: str = "") -> str:
+        """The rendered answer. Assumes the address is already cleared.
 
-    async def _report(self, tool: str, address: str, client: httpx.AsyncClient) -> str:
+        `question` is the cleared question: what the second figure's notation
+        is taken from, when the asker has a preferred currency.
+        """
+        if self._client is not None:
+            return await self._report(tool, address, question, self._client)
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            return await self._report(tool, address, question, client)
+
+    async def _report(
+        self, tool: str, address: str, question: str, client: httpx.AsyncClient
+    ) -> str:
         chains = [ChainPositions(d, self._node(d, client), client) for d in self._deployments]
+        conversion = await asker_conversion(self._rates, question)
         parts: list[str] = []
         # One chain at a time, not concurrently. Concurrent reads of three
         # chains, with the v4 recent-block search, burst past Infura's
@@ -278,14 +289,15 @@ class PositionsProvider:
         # reached". A few seconds slower beats a chain reported unreadable.
         if tool in (LIQUIDITY_TOOL, ALL_POSITIONS_TOOL):
             liquidity = [await self._liquidity(c, address) for c in chains]
-            parts.append(render_liquidity(address, liquidity))
+            parts.append(render_liquidity(address, liquidity, conversion))
         if tool in (LENDING_TOOL, ALL_POSITIONS_TOOL):
             lending = [await self._lending(c, address) for c in chains]
-            text = render_lending(address, lending)
+            text = render_lending(address, lending, conversion)
             # One header for the whole answer: `verbatim_answer` drops the
             # first line, and a second header mid-answer would read as noise.
             parts.append(text if not parts else "\n".join(text.splitlines()[1:]))
-        return "\n".join(parts)
+        # The rate once, after both kinds, rather than once per kind.
+        return "\n".join([*parts, *rate_lines(conversion)])
 
     async def portfolio(self, cleared: Cleared) -> str:
         """Every cleared wallet, summed. Assumes the addresses are cleared."""
@@ -307,7 +319,9 @@ class PositionsProvider:
             redact=self._redact,
         )
         wallets = [await reader.read(address) for address in cleared.addresses]
-        return render_portfolio(wallets, portfolio_language(cleared.question))
+        language = portfolio_language(cleared.question)
+        conversion = await asker_conversion(self._rates, cleared.question, language)
+        return render_portfolio(wallets, language, conversion)
 
     async def activity(self, cleared: Cleared) -> str:
         """What the cleared wallet did. The span is the cleared question's."""
@@ -326,13 +340,15 @@ class PositionsProvider:
             chains, client, timeout_seconds=self._timeout, redact=self._redact
         )
         found, known = await reader.read(cleared.address, window)
+        language = activity_language(cleared.question)
         return render_activity(
             cleared.address,
             window,
             found,
             known,
-            activity_language(cleared.question),
+            language,
             private=cleared.private,
+            conversion=await asker_conversion(self._rates, cleared.question, language),
         )
 
     def _redact(self, text: str) -> str:

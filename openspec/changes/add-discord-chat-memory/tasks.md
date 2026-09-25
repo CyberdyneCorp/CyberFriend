@@ -38,7 +38,7 @@
 - [x] 4.5 Implement delete handling, writing tombstones to the message and its windows
 - [x] 4.6 Implement paginated backfill, newest-first, with per-channel watermarks
 - [x] 4.7 Handle 429s by honouring the platform's retry interval without losing backfill position
-- [ ] 4.8 Implement the periodic reconciliation pass that catches edits and deletes missed while offline
+- [x] 4.8 Implement the periodic reconciliation pass that catches edits and deletes missed while offline
 - [x] 4.9 Enforce indexing scope: skip non-indexed channels, and purge a channel's content when it leaves scope
 - [x] 4.10 Test: interrupt a backfill mid-channel, restart, assert no gaps and no duplicates
 - [x] 4.11 Test: delete a message, assert its content is unreachable through every retrieval path
@@ -66,11 +66,11 @@
 - [x] 7.3 Implement Reciprocal Rank Fusion over both result sets
 - [x] 7.4 Tag every score with the method that produced it (`relevance_source`); RRF's 0.016 means *first place*, and any consumer applying a threshold must check provenance first
 - [x] 7.5 Implement citation construction producing resolvable Discord message links
-- [ ] 7.6 Implement `thread_context` retrieval around a cited message, viewer-filtered
+- [x] 7.6 Implement `thread_context` retrieval around a cited message, viewer-filtered
 - [x] 7.7 **Test the core invariant at the repository layer**: a viewer who cannot read a channel gets zero rows from it even when the query terms match it exactly
 - [ ] 7.8 Test: a time-bounded query returns nothing rather than substituting out-of-range results
 - [x] 7.9 **Test under-return**: a viewer restricted to a small channel subset requesting N results receives N — assert the *count*, since a membership-only assertion passes while the system silently under-returns
-- [ ] 7.10 Build a golden set of ~20 questions over a seeded corpus and score recall@10 as the tuning harness for window size and RRF weights
+- [x] 7.10 Build a golden set of ~20 questions over a seeded corpus and score recall@10 as the tuning harness for window size and RRF weights
 
 ## 8. MCP server
 
@@ -87,11 +87,11 @@
 
 ## 9. Operations and governance
 
-- [ ] 9.1 Implement a retention policy that purges messages and windows older than a configured window
-- [ ] 9.2 Implement per-person opt-out that excludes their messages from ingestion and purges existing ones
-- [ ] 9.3 Add structured logging and a health check covering gateway connectivity, backfill lag, and embedding backlog
-- [ ] 9.4 Write the operator README: privileged-intent setup, indexing scope, retention, opt-out, and the DM limitation stated plainly
-- [ ] 9.5 Add CI running `openspec validate --all --strict`, `ruff`, `mypy`, and `pytest`
+- [x] 9.1 Implement a retention policy that purges messages and windows older than a configured window (scheduling it is still a known gap; see docs/operations.md)
+- [x] 9.2 Implement per-person opt-out that excludes their messages from ingestion and purges existing ones
+- [x] 9.3 Add structured logging and a health check covering gateway connectivity, backfill lag, and embedding backlog
+- [x] 9.4 Write the operator README: privileged-intent setup, indexing scope, retention, opt-out, and the DM limitation stated plainly
+- [x] 9.5 Add CI running `openspec validate --all --strict`, `ruff`, `mypy`, and `pytest`
 
 ## 10. Verification
 
@@ -103,15 +103,15 @@
 
 ## 11. Coolify deployment (Cyberdyne)
 
-- [ ] 11.1 Write the production `Dockerfile` (uv, Python 3.11-slim, non-root user, no build secrets baked in)
-- [ ] 11.2 Write `docker-compose.yml` for the Coolify `dockercompose` build pack with two services off one image: `ingest` (gateway + workers) and `mcp` (HTTP)
-- [ ] 11.3 **Pin `ingest` to exactly one replica.** Two containers on one bot token both identify to the gateway and double-ingest every message; Discord will not error, the corpus just silently doubles
-- [ ] 11.4 Add an HTTP health endpoint to *both* services — Coolify health checks are HTTP and the gateway process has no port of its own otherwise
-- [ ] 11.5 Report gateway connectivity, backfill lag, and embedding backlog through the health endpoint so a crash-looping or silently-disconnected bot is visible
-- [ ] 11.6 Run migrations as a deterministic pre-start step, idempotent across restarts and safe when two containers start together
+- [x] 11.1 Write the production `Dockerfile` (uv, Python 3.11-slim, non-root user, no build secrets baked in)
+- [x] 11.2 Write `docker-compose.yml` for the Coolify `dockercompose` build pack with two services off one image: `ingest` (gateway + workers) and `mcp` (HTTP) (now five services: `migrate`, `ingest`, `bot`, `mcp`, `admin`)
+- [x] 11.3 **Pin `ingest` to exactly one replica.** Two containers on one bot token both identify to the gateway and double-ingest every message; Discord will not error, the corpus just silently doubles
+- [x] 11.4 Add an HTTP health endpoint to *both* services — Coolify health checks are HTTP and the gateway process has no port of its own otherwise
+- [x] 11.5 Report gateway connectivity, backfill lag, and embedding backlog through the health endpoint so a crash-looping or silently-disconnected bot is visible
+- [x] 11.6 Run migrations as a deterministic pre-start step, idempotent across restarts and safe when two containers start together
 - [ ] 11.7 Provision the Coolify-managed **pgvector** Postgres (not the stock `postgres:16` image, which lacks the extension) and enable scheduled backups
 - [ ] 11.8 Set runtime env vars in Coolify: Discord token, database URL, OpenAI key, MCP bearer tokens — runtime scope, never build scope
-- [ ] 11.9 Expose only the `mcp` service via FQDN; `ingest` gets no domain
+- [x] 11.9 Expose only the `mcp` service via FQDN; `ingest` gets no domain (`admin` later got its own domain too)
 - [ ] 11.10 Confirm the Cyberdyne box reaches `api.openai.com` before first deploy
 - [ ] 11.11 Verify after deploy: gateway connected, a message posted in a scratch channel appears in the corpus, and an MCP query over HTTPS returns it with a working citation link
 - [ ] 11.12 Verify a second `ingest` replica is genuinely prevented, not merely un-configured

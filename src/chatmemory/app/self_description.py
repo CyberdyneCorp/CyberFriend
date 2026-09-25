@@ -206,8 +206,9 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "facts_heading": "About you",
         "facts": (
             "Tell me your name or what to call you, your full name, email, "
-            "phone, home address, birth date, preferred language, or your ETH "
-            "and BTC wallets (several of each), and I'll remember it",
+            "phone, home address, birth date, preferred language, a currency to "
+            "see amounts in besides US dollars, or your ETH and BTC wallets "
+            "(several of each), and I'll remember it",
             "Several in one message: `call me Leo, my email is leo@example.com`",
             "`what do you know about me?` shows them; `forget my phone` deletes one",
         ),
@@ -228,8 +229,9 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "market_ask": "`what's the BTC price?`",
         "market_note": (
             "Live sources only, never a price somebody mentioned in a channel. "
-            "Each figure says how current it is; I don't recommend buying, "
-            "selling or holding anything."
+            "Each figure says how current it is, and is also shown in your "
+            "preferred currency when you have told me one (`my currency is "
+            "euro`). I don't recommend buying, selling or holding anything."
         ),
         "alerts_heading": "Alerts",
         "alerts": (
@@ -274,7 +276,8 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "facts": (
             "Me diga seu nome ou como quer ser chamado, seu nome completo, "
             "e-mail, telefone, endereço, data de nascimento, idioma preferido, "
-            "ou suas carteiras ETH e BTC (várias de cada), e eu guardo",
+            "uma moeda para ver os valores além do dólar, ou suas carteiras ETH "
+            "e BTC (várias de cada), e eu guardo",
             "Várias de uma vez: `pode me chamar de Leo, meu email é leo@exemplo.com`",
             "`o que você sabe sobre mim?` mostra tudo; `esqueça meu telefone` apaga um",
         ),
@@ -297,8 +300,9 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "market_ask": "`qual o preço do BTC?`",
         "market_note": (
             "Só fontes ao vivo, nunca um preço que alguém mencionou num canal. "
-            "Cada número diz o quão atual ele é; não recomendo comprar, vender "
-            "nem manter nada."
+            "Cada número diz o quão atual ele é, e aparece também na sua moeda "
+            "preferida se você me disser uma (`prefiro ver em reais`). Não "
+            "recomendo comprar, vender nem manter nada."
         ),
         "alerts_heading": "Alertas",
         "alerts": (

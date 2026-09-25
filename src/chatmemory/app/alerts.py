@@ -52,6 +52,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from chatmemory.app.currency import Conversion, PreferredCurrencies, beside
+from chatmemory.app.language import Language
 from chatmemory.domain.chain import is_address, normalise
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.alerts import (
@@ -538,7 +540,12 @@ def _render_lp(firing: Firing, reading: LpObservation) -> str:
     )
 
 
-def _render_health(firing: Firing, reading: HealthObservation, minutes: int) -> str:
+def _render_health(
+    firing: Firing,
+    reading: HealthObservation,
+    minutes: int,
+    conversion: Conversion | None = None,
+) -> str:
     alert, lang = firing.alert, firing.alert.language
     templates = _HEALTH[lang]
     key: str = firing.kind
@@ -548,13 +555,17 @@ def _render_health(firing: Firing, reading: HealthObservation, minutes: int) -> 
         chain=alert.chain_name,
         health=number(reading.health_factor or Decimal(0), lang),
         limit=number(alert.threshold or Decimal(0), lang),
-        collateral=dollars(reading.collateral_usd, lang),
-        debt=dollars(reading.debt_usd, lang),
+        collateral=dollars(reading.collateral_usd, lang) + beside(
+            conversion, reading.collateral_usd
+        ),
+        debt=dollars(reading.debt_usd, lang) + beside(conversion, reading.debt_usd),
         minutes=minutes,
     )
 
 
-def _render_price(firing: Firing, reading: PriceObservation) -> str:
+def _render_price(
+    firing: Firing, reading: PriceObservation, conversion: Conversion | None = None
+) -> str:
     alert, lang = firing.alert, firing.alert.language
     target = alert.price
     if target is None:  # pragma: no cover - a price firing is made from a price alert
@@ -562,25 +573,31 @@ def _render_price(firing: Firing, reading: PriceObservation) -> str:
     return _PRICE[lang][target.direction].format(
         asset=target.asset,
         level=level(target.level, lang),
-        price=dollars(reading.price, lang),
+        price=dollars(reading.price, lang) + beside(conversion, reading.price),
         source=reading.source,
         time=quoted_at(reading.as_of),
     )
 
 
-def render_alert(firing: Firing, sweep_seconds: float = DEFAULT_SWEEP_SECONDS) -> str:
+def render_alert(
+    firing: Firing,
+    sweep_seconds: float = DEFAULT_SWEEP_SECONDS,
+    conversion: Conversion | None = None,
+) -> str:
     """The direct message, in the language fixed when the alert was made.
 
     The last line names the commands that list and stop it, with this alert's
-    number, so the way out is in the message that might prompt it.
+    number, so the way out is in the message that might prompt it. With a
+    `conversion`, every dollar figure read now is followed by the same figure
+    in the owner's preferred currency; the level they set stays as they set it.
     """
     reading = firing.observation
     if isinstance(reading, LpObservation):
         body = _render_lp(firing, reading)
     elif isinstance(reading, PriceObservation):
-        body = _render_price(firing, reading)
+        body = _render_price(firing, reading, conversion)
     else:
-        body = _render_health(firing, reading, max(1, round(sweep_seconds / 60)))
+        body = _render_health(firing, reading, max(1, round(sweep_seconds / 60)), conversion)
     commands = f"-# `/alert list` · `/alert delete {firing.alert.id}`"
     return f"{PREFIX[firing.alert.language]} — {body}\n{commands}"
 
@@ -605,10 +622,13 @@ class AlertRunner:
         prices: PositionObserver | None = None,
         sweep_seconds: float = DEFAULT_SWEEP_SECONDS,
         batch: int = DEFAULT_BATCH,
+        currencies: PreferredCurrencies | None = None,
     ) -> None:
         self._store = store
         self._observer = observer
         self._prices = prices
+        #: The owner's preferred currency, beside the dollar figures; None adds nothing.
+        self._currencies = currencies
         self._messenger = messenger
         self._sweep = sweep_seconds
         self._batch = batch
@@ -648,7 +668,8 @@ class AlertRunner:
         if evaluation.firing is None:
             await self._store.record(alert.id, evaluation.update, now)
             return False
-        text = render_alert(evaluation.firing, self._sweep)
+        conversion = await self._conversion(evaluation.firing)
+        text = render_alert(evaluation.firing, self._sweep, conversion)
         result = await self._messenger.deliver(alert.person, alert.id, text)
         if result is DeliveryResult.SENT:
             await self._store.record(alert.id, evaluation.update, now)
@@ -669,6 +690,18 @@ class AlertRunner:
         closed.add(alert.person)
         log.info("alerts.disabled", person=str(alert.person), alerts=stopped)
         return False
+
+    async def _conversion(self, firing: Firing) -> Conversion | None:
+        """Only for a firing with dollar figures: a range alert has none."""
+        if self._currencies is None or isinstance(firing.observation, LpObservation):
+            return None
+        alert = firing.alert
+        language = (
+            Language.PORTUGUESE
+            if alert.language is AlertLanguage.PORTUGUESE
+            else Language.ENGLISH
+        )
+        return await self._currencies.conversion_for(alert.person, language)
 
 
 async def _observe(
