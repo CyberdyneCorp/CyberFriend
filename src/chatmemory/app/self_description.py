@@ -146,7 +146,7 @@ SCHEDULE_CREATE = Command(
 SCHEDULE_LIST = Command(
     "schedule list",
     "Show the questions I ask for you, and when each last ran",
-    "Mostrar as perguntas que eu faço por você, e quando cada uma rodou",
+    "Mostrar as perguntas que eu faço por você, e quando cada uma rodou pela última vez",
 )
 SCHEDULE_DELETE = Command(
     "schedule delete",
@@ -212,7 +212,8 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "`what do you know about me?` shows them; `forget my phone` deletes one",
         ),
         "facts_note": (
-            "Your contact details and wallets are only shown to you, in a direct message."
+            "Your contact details, address, birth date and wallets are only shown "
+            "to you, in a direct message."
         ),
         "crypto_heading": "Crypto",
         "balances": "Balances on Ethereum, Base and Arbitrum: `what's in 0x…?`",
@@ -253,10 +254,8 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "anything from outside this server is labelled as such."
         ),
         "commands_heading": "Commands",
-        "audience": (
-            "In a channel, I only cite what everyone there can read. Ask me in "
-            "a direct message for your full view."
-        ),
+        "audience": "In a channel, I only cite what everyone there can read.",
+        "audience_dm_hint": "Ask me in a direct message for your full view.",
     },
     Language.PORTUGUESE: {
         "intro": (
@@ -271,11 +270,6 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "O que alguém disse: `o que o João disse sobre o preço ontem?`",
             "Decisões: `o que decidimos sobre o deploy?`",
         ),
-        "obligations_heading": "O que pediram a você",
-        "obligations": (
-            "`o que eu preciso fazer?`",
-            "`o que me pediram hoje?`",
-        ),
         "facts_heading": "Sobre você",
         "facts": (
             "Me diga seu nome ou como quer ser chamado, seu nome completo, "
@@ -285,7 +279,8 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "`o que você sabe sobre mim?` mostra tudo; `esqueça meu telefone` apaga um",
         ),
         "facts_note": (
-            "Seus contatos e carteiras só são mostrados para você, numa mensagem direta."
+            "Seus contatos, endereço, data de nascimento e carteiras só são "
+            "mostrados para você, numa mensagem direta."
         ),
         "crypto_heading": "Cripto",
         "balances": "Saldos na Ethereum, Base e Arbitrum: `quanto tem em 0x…?`",
@@ -329,15 +324,20 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "de fora deste servidor é marcado como tal."
         ),
         "commands_heading": "Comandos",
-        "audience": (
-            "Num canal, eu só cito o que todos ali podem ler. Me pergunte numa "
-            "mensagem direta para ver tudo o que você pode."
+        "audience": "Num canal, eu só cito o que todos ali podem ler.",
+        "audience_dm_hint": (
+            "Me pergunte numa mensagem direta para buscar em tudo o que você pode ler."
         ),
     },
 }
-"""Every sentence the description can say, per language. The alert, fact,
-catch-up and decision examples are sent to their routes by a test, so the reply
-does not suggest a question the bot then handles some other way."""
+"""Every sentence the description can say, per language. Every quoted example
+is sent to its route by a test, so the reply does not suggest a question the
+bot then handles some other way.
+
+Portuguese has no obligations section: the obligation route only recognises
+English questions, and answers in English, so "o que eu preciso fazer?" is
+answered by retrieval rather than from the asks. Offering it would promise a
+route the question never reaches."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,7 +389,11 @@ class Capabilities:
             _section(words["conversations_heading"], words["conversations"]),
         ]
         parts += [s for build in _SECTIONS if (s := build(shown, words, key))]
-        parts.append(words["audience"])
+        # Telling somebody already in a DM to ask in a DM is noise.
+        audience = words["audience"]
+        if not direct_message:
+            audience += " " + words["audience_dm_hint"]
+        parts.append(audience)
         return "\n\n".join(parts)
 
 
@@ -404,7 +408,7 @@ Words = dict[str, Any]
 
 
 def _obligations(caps: Capabilities, words: Words, _: Language) -> str:
-    if not caps.obligations:
+    if not caps.obligations or "obligations" not in words:
         return ""
     return _section(words["obligations_heading"], words["obligations"])
 

@@ -72,7 +72,15 @@ health factor, the portfolio total and wallet activity (where the wallet tools
 are registered), market prices (per registered market source), alerts and
 `/alert list|delete` (where alerts are available), scheduled questions (where
 they are on), voice questions in a direct message (where they are on), web and
-other external lookups (where registered), and the audience rule.
+other external lookups (where registered), and the audience rule. Every
+example question SHALL reach the route that answers it; a feature whose route
+does not recognise the reply's language SHALL NOT be offered in that language.
+
+#### Scenario: A route that only understands English
+- WHEN ask extraction is on and someone asks in Portuguese what the assistant
+  can do
+- THEN the reply SHALL NOT offer Portuguese questions about what was asked of
+  them, because the obligation route only recognises English
 
 #### Scenario: Everything on, asked in Portuguese
 - WHEN a deployment with wallet tools, alerts and voice on is asked "o que você
@@ -89,6 +97,11 @@ other external lookups (where registered), and the audience rule.
 - WHEN someone mentions the assistant with no question
 - THEN the reply SHALL be the same description, in the person's saved
   language, from the same configuration
+
+#### Scenario: Asked in a direct message
+- WHEN the question is asked in a direct message
+- THEN the reply SHALL state the audience rule without telling the person to
+  ask in a direct message
 
 ### Requirement: The reply fits Discord
 

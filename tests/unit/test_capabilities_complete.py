@@ -34,6 +34,7 @@ from chatmemory.app.routing import (
 from chatmemory.app.self_description import _TEXT, Capabilities
 from chatmemory.composition import build_federation, deployment_capabilities
 from chatmemory.config import Settings
+from tests.unit.test_federation_support import FakeSession, read_tool, session_factory
 
 EN, PT = Language.ENGLISH, Language.PORTUGUESE
 
@@ -57,7 +58,16 @@ EVERYTHING: dict[str, object] = {
     "ask_extraction_enabled": True,
     "voice_questions_enabled": True,
     "media_api_key": "media",
+    # A remote MCP server, reached through the fake session below.
+    "federation_servers": "context7=https://mcp.context7.com/mcp",
+    "federation_tool_allowlist": "context7:query-docs:ro",
 }
+
+NO_REMOTE: dict[str, object] = {"federation_servers": "", "federation_tool_allowlist": ""}
+
+REMOTE = session_factory(
+    {"context7": FakeSession(tools=(read_tool("query-docs", "library documentation"),))}
+)
 
 
 @dataclass(frozen=True)
@@ -67,7 +77,8 @@ class Row:
     feature: str
     off: dict[str, object]
     english: str
-    portuguese: str
+    portuguese: str | None
+    """None where the feature is not offered in Portuguese at all."""
 
 
 ROWS = (
@@ -102,6 +113,12 @@ ROWS = (
         "o que minha carteira fez essa semana?",
     ),
     Row(
+        "crypto note",
+        {"wallet_tools_enabled": False},
+        "Ask about an address you type, or about your saved wallets.",
+        "Pergunte sobre um endereço que você digitar, ou sobre suas carteiras salvas.",
+    ),
+    Row(
         "no infura key, no wallet tools",
         {"infura_key": None, "alerts_enabled": False},
         "Balances on Ethereum",
@@ -124,6 +141,18 @@ ROWS = (
         {"market_tools_enabled": False},
         "currency conversion",
         "conversão de moedas",
+    ),
+    Row(
+        "market note: live sources only",
+        {"market_tools_enabled": False},
+        "Live sources only, never a price somebody mentioned in a channel.",
+        "Só fontes ao vivo, nunca um preço que alguém mencionou num canal.",
+    ),
+    Row(
+        "market note: no advice",
+        {"market_tools_enabled": False},
+        "I don't recommend buying, selling or holding anything.",
+        "não recomendo comprar, vender nem manter nada.",
     ),
     Row(
         "web",
@@ -162,6 +191,13 @@ ROWS = (
         "avisa quando o BTC passar de 100k",
     ),
     Row(
+        "alerts note",
+        {"alerts_enabled": False},
+        "Ask in words and press Confirm; I send you a direct message when one fires.",
+        "Peça com palavras e aperte Confirmar; eu te mando uma mensagem direta "
+        "quando um disparar.",
+    ),
+    Row(
         "alert commands",
         {"alerts_enabled": False},
         "`/alert list`",
@@ -172,6 +208,18 @@ ROWS = (
         {"scheduled_tasks_enabled": False},
         "`/schedule create`",
         "`/schedule create`",
+    ),
+    Row(
+        "when each scheduled question last ran",
+        {"scheduled_tasks_enabled": False},
+        "when each last ran",
+        "quando cada uma rodou pela última vez",
+    ),
+    Row(
+        "remote documentation lookup",
+        NO_REMOTE,
+        "library documentation (Context7)",
+        "documentação de bibliotecas (Context7)",
     ),
     Row(
         "voice",
@@ -185,17 +233,19 @@ ROWS = (
         "`/notifications`",
         "`/notifications`",
     ),
+    # English only: the obligation route does not recognise Portuguese, so
+    # the Portuguese reply does not offer it (see `test_every_example_...`).
     Row(
         "obligations",
         {"ask_extraction_enabled": False},
         "what do I need to do?",
-        "o que eu preciso fazer?",
+        None,
     ),
     Row(
         "asked today",
         {"ask_extraction_enabled": False},
         "what did people ask me today?",
-        "o que me pediram hoje?",
+        None,
     ),
 )
 
@@ -212,10 +262,22 @@ FACTS = (
     ("Several in one message", "Várias de uma vez"),
     ("what do you know about me?", "o que você sabe sobre mim?"),
     ("forget my phone", "esqueça meu telefone"),
+    (
+        # Every direct-only kind is named in the privacy note.
+        "Your contact details, address, birth date and wallets are only shown "
+        "to you, in a direct message.",
+        "Seus contatos, endereço, data de nascimento e carteiras só são "
+        "mostrados para você, numa mensagem direta.",
+    ),
 )
 
 ALWAYS = (
-    # Features with no switch in this process: always described.
+    # Features with no switch in this process: always described. Decisions
+    # are recorded only while ask extraction is on, but are still offered
+    # without it: decisions already logged are still read, and a question
+    # the log has nothing for falls back to retrieval, so it is answered
+    # either way -- unlike "what do I need to do?", which would only ever get
+    # "nothing outstanding".
     ("I cite the messages I used", "cito as mensagens que usei"),
     ("what did I miss in #infra?", "o que eu perdi no #general?"),
     ("what did Ana say about pricing yesterday?", "o que o João disse sobre o preço ontem?"),
@@ -231,7 +293,7 @@ def settings(**overrides: object) -> Settings:
 async def capabilities(*, personal_facts: bool = True, **overrides: object) -> Capabilities:
     """What the process would describe: settings -> registered tools -> reply."""
     configured = settings(**overrides)
-    federation = await build_federation(configured)
+    federation = await build_federation(configured, REMOTE)
     try:
         tools = sorted(federation.federation.permits) if federation else []
         return deployment_capabilities(configured, tools, personal_facts=personal_facts)
@@ -240,7 +302,7 @@ async def capabilities(*, personal_facts: bool = True, **overrides: object) -> C
             await federation.federation.aclose()
 
 
-def phrase(row: Row | tuple[str, str], language: Language) -> str:
+def phrase(row: Row | tuple[str, str], language: Language) -> str | None:
     if isinstance(row, Row):
         return row.english if language is EN else row.portuguese
     return row[0] if language is EN else row[1]
@@ -253,14 +315,24 @@ LANGUAGES = pytest.mark.parametrize("language", [EN, PT], ids=["en", "pt"])
 async def test_everything_on_describes_every_feature(language: Language) -> None:
     described = (await capabilities()).describe(language, direct_message=True)
     for row in (*ROWS, *FACTS, *ALWAYS):
-        assert phrase(row, language) in described, f"{language}: missing {row}"
+        expected = phrase(row, language)
+        if expected is not None:
+            assert expected in described, f"{language}: missing {row}"
 
 
-@LANGUAGES
-@pytest.mark.parametrize("row", ROWS, ids=[r.feature for r in ROWS])
+def _switched(rows: tuple[Row, ...]) -> Iterator[Any]:
+    for row in rows:
+        for language in (EN, PT):
+            if phrase(row, language) is not None:
+                yield pytest.param(row, language, id=f"{row.feature}-{language.value}")
+
+
+@pytest.mark.parametrize(("row", "language"), list(_switched(ROWS)))
 async def test_a_feature_switched_off_is_not_described(row: Row, language: Language) -> None:
     described = (await capabilities(**row.off)).describe(language, direct_message=True)
-    assert phrase(row, language) not in described
+    expected = phrase(row, language)
+    assert expected is not None
+    assert expected not in described
 
 
 @LANGUAGES
@@ -273,11 +345,14 @@ async def test_personal_facts_are_offered_only_where_they_are_kept(language: Lan
 @LANGUAGES
 async def test_nothing_switched_on_still_describes_the_conversations(language: Language) -> None:
     off = {key: False for key, value in EVERYTHING.items() if value is True}
-    described = (await capabilities(personal_facts=False, **off)).describe(language)
+    described = (
+        await capabilities(personal_facts=False, **off, **NO_REMOTE)
+    ).describe(language)
     for row in ALWAYS:
         assert phrase(row, language) in described
     for row in ROWS:
-        assert phrase(row, language) not in described
+        if (expected := phrase(row, language)) is not None:
+            assert expected not in described
 
 
 def _bodies() -> Iterator[tuple[Language, bool]]:
@@ -308,6 +383,10 @@ def _quoted(key: str, language: Language) -> list[str]:
     return [q for line in lines for q in re.findall(r"`([^`]+)`", line)]
 
 
+def _quoted_if_any(key: str, language: Language) -> list[str]:
+    return _quoted(key, language) if key in _TEXT[language] else []
+
+
 @LANGUAGES
 def test_every_alert_example_makes_an_alert(language: Language) -> None:
     examples = _quoted("alerts", language)
@@ -333,9 +412,34 @@ def test_the_conversation_examples_reach_their_routes(language: Language) -> Non
     assert decision_question(decision, now, ZoneInfo("UTC")) is not None
 
 
-def test_the_english_obligation_examples_reach_the_obligation_route() -> None:
-    for example in _quoted("obligations", EN):
+@LANGUAGES
+def test_every_obligation_example_reaches_the_obligation_route(language: Language) -> None:
+    """Portuguese has none, because the route does not recognise it yet.
+
+    If a Portuguese obligation section is added, its examples land here and
+    must route, so the section cannot come back ahead of the routing.
+    """
+    examples = _quoted_if_any("obligations", language)
+    assert examples or language is PT
+    for example in examples:
         assert obligation_question(example) is not None, example
+
+
+async def test_portuguese_does_not_offer_the_obligation_questions() -> None:
+    described = (await capabilities()).describe(PT, direct_message=True)
+    assert "O que pediram a você" not in described
+    # The route the section would have promised: still English only.
+    assert obligation_question("o que eu preciso fazer?") is None
+
+
+@LANGUAGES
+async def test_a_direct_message_is_not_told_to_ask_in_a_direct_message(
+    language: Language,
+) -> None:
+    caps = await capabilities()
+    hint = _TEXT[language]["audience_dm_hint"]
+    assert hint not in caps.describe(language, direct_message=True)
+    assert caps.describe(language, direct_message=False).endswith(hint)
 
 
 @pytest.mark.parametrize("text", ["o que você pode fazer?", "what can you do?"])
