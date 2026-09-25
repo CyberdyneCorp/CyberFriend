@@ -25,5 +25,6 @@
 
 - [x] 7.1 `just decisions-backfill --since`, resetting the watermark only for live marker-bearing messages in indexing scope; markers matched in Python with the filter's own pattern
 - [x] 7.2 docs/operations.md, including that asks on those messages are re-extracted (keys, statuses and corrections kept)
-- [x] 7.3 Unit, integration (window, scope, tombstone, markers; ask keys, statuses and corrections survive re-extraction) and e2e (pre-feature history yields a cited decision after backfill and a drain)
+- [x] 7.3 Unit, integration (window, scope, tombstone, markers; ask keys, statuses and corrections survive re-extraction; a reclassified ask comes back open) and e2e (pre-feature history yields a cited decision after backfill and a drain)
+- [x] 7.3a `--until` to stop the window where decision extraction began; the command's own stored-scope read and its refusal tested through `run()`; the e2e drain built over `ScopedExtractionLedger` as ingest builds it
 - [ ] 7.4 Archive this change once PR 7 is merged

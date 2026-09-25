@@ -192,6 +192,7 @@ class PostgresDecisionBackfill:
     async def live_messages_since(
         self,
         since: datetime,
+        until: datetime | None,
         channel_ids: frozenset[int],
         after_id: int,
         limit: int,
@@ -201,6 +202,7 @@ class PostgresDecisionBackfill:
                 decisions_sql.BACKFILL_SCAN,
                 {
                     "since": since,
+                    "until": until,
                     "indexed_channel_ids": sorted(channel_ids),
                     "after_id": after_id,
                     "limit": limit,

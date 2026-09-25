@@ -8,21 +8,29 @@ from datetime import UTC, date, datetime
 import pytest
 
 from chatmemory.app.decisions.backfill import BackfillReport, DecisionBackfill, ScannedMessage
-from chatmemory.entrypoints.decisions_backfill import _parser, describe, start_of
+from chatmemory.entrypoints.decisions_backfill import _arguments, _parser, describe, start_of
 
 SINCE = datetime(2026, 6, 1, tzinfo=UTC)
+UNTIL = datetime(2026, 9, 1, tzinfo=UTC)
 
 
 class FakeLedger:
     def __init__(self, messages: Sequence[ScannedMessage]) -> None:
         self.messages = list(messages)
         self.scans: list[tuple[frozenset[int], int, int]] = []
+        self.windows: list[tuple[datetime, datetime | None]] = []
         self.resets: list[list[int]] = []
 
     async def live_messages_since(
-        self, since: datetime, channel_ids: frozenset[int], after_id: int, limit: int
+        self,
+        since: datetime,
+        until: datetime | None,
+        channel_ids: frozenset[int],
+        after_id: int,
+        limit: int,
     ) -> Sequence[ScannedMessage]:
         self.scans.append((channel_ids, after_id, limit))
+        self.windows.append((since, until))
         later = [m for m in self.messages if m.platform_message_id > after_id]
         return later[:limit]
 
@@ -76,6 +84,30 @@ async def test_an_empty_scope_reads_nothing() -> None:
     assert report == BackfillReport()
 
 
+@pytest.mark.asyncio
+async def test_every_page_is_read_over_the_same_window() -> None:
+    ledger = FakeLedger(scanned("combinado", "fechado", "decidimos"))
+
+    await DecisionBackfill(ledger, page=2).run(SINCE, frozenset({10}), UNTIL)
+    await DecisionBackfill(ledger).run(SINCE, frozenset({10}))
+
+    assert ledger.windows == [(SINCE, UNTIL)] * 3 + [(SINCE, None)] * 2
+
+
+def test_until_is_optional_and_starts_at_midnight_utc() -> None:
+    assert _arguments(["--since", "2026-06-01"]).until is None
+    args = _arguments(["--since", "2026-06-01", "--until", "2026-09-01"])
+
+    assert start_of(args.until) == UNTIL
+
+
+def test_until_must_come_after_since() -> None:
+    with pytest.raises(SystemExit):
+        _arguments(["--since", "2026-06-01", "--until", "2026-06-01"])
+    with pytest.raises(SystemExit):
+        _arguments(["--since", "2026-06-01", "--until", "2026-05-01"])
+
+
 def test_since_is_a_date_and_starts_at_midnight_utc() -> None:
     args = _parser().parse_args(["--since", "2026-06-01"])
 
@@ -94,3 +126,9 @@ def test_the_summary_says_how_many_were_reset() -> None:
 
     assert line.startswith("reset 3 message(s) since 2026-06-01")
     assert "5 carry a decision marker, 2 were already pending; 40 scanned" in line
+
+
+def test_the_summary_names_the_end_of_the_window_when_there_is_one() -> None:
+    line = describe(BackfillReport(reset=1), date(2026, 6, 1), date(2026, 9, 1))
+
+    assert line.startswith("reset 1 message(s) since 2026-06-01, before 2026-09-01, for")

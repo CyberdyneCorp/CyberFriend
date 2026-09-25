@@ -130,6 +130,7 @@ SELECT m.id, m.content
 FROM message m
 WHERE m.deleted_at IS NULL
   AND m.created_at >= :since
+  AND (CAST(:until AS timestamptz) IS NULL OR m.created_at < CAST(:until AS timestamptz))
   AND m.channel_id = ANY(CAST(:indexed_channel_ids AS bigint[]))
   AND m.id > :after_id
 ORDER BY m.id

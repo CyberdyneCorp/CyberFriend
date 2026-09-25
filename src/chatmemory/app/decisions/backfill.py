@@ -6,7 +6,9 @@ unanswerable. Resetting the whole watermark would fix that by re-paying the
 entire ask history, one model call per candidate message. This resets it only
 for the messages that could hold a decision: live, inside the window the
 operator names, in a channel in indexing scope, and carrying one of the
-candidate filter's `DECISION_MARKERS`.
+candidate filter's `DECISION_MARKERS`. The window's end is optional; without
+it everything already extracted up to now is reset, including what the pass
+has read for decisions since the decision log shipped.
 
 The matching is done here, in Python, with the filter's own compiled pattern
 rather than a Postgres regex built from it. The two dialects disagree on `\\b`
@@ -45,11 +47,15 @@ class BackfillLedger(Protocol):
     async def live_messages_since(
         self,
         since: datetime,
+        until: datetime | None,
         channel_ids: frozenset[int],
         after_id: int,
         limit: int,
     ) -> Sequence[ScannedMessage]:
-        """Live messages in `channel_ids` said at or after `since`, by id, after `after_id`."""
+        """Live messages in `channel_ids` said in `[since, until)`, by id, after `after_id`.
+
+        `until` None leaves the window open to now.
+        """
         ...
 
     async def reset_extraction(self, message_ids: Sequence[int]) -> int:
@@ -85,7 +91,9 @@ class DecisionBackfill:
         self._markers = markers
         self._page = page
 
-    async def run(self, since: datetime, channel_ids: frozenset[int]) -> BackfillReport:
+    async def run(
+        self, since: datetime, channel_ids: frozenset[int], until: datetime | None = None
+    ) -> BackfillReport:
         """Scan the window page by page and reset each page's matches.
 
         An empty scope resets nothing, rather than everything: indexing is
@@ -96,7 +104,7 @@ class DecisionBackfill:
             return report
         after = 0
         while page := await self._ledger.live_messages_since(
-            since, channel_ids, after, self._page
+            since, until, channel_ids, after, self._page
         ):
             matched = [m.platform_message_id for m in page if self._markers.search(m.content)]
             reset = await self._ledger.reset_extraction(matched) if matched else 0

@@ -26,6 +26,7 @@ import discord
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.discord.source import DiscordChatSource, RawMessage, to_message
+from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.model import AskCandidate, Extraction
 from chatmemory.app.asks.prompt import (
@@ -37,13 +38,14 @@ from chatmemory.app.asks.prompt import (
 from chatmemory.app.asks.worker import BacklogExtractionWorker
 from chatmemory.app.decisions.backfill import BackfillReport
 from chatmemory.app.ingest import IngestService
+from chatmemory.app.scope import LiveScope
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import build_ask_pipeline
 from chatmemory.config import Settings
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.domain.messages import Message
-from chatmemory.entrypoints.decisions_backfill import backfill
-from chatmemory.entrypoints.ingest import channels_in, live_loop
+from chatmemory.entrypoints.decisions_backfill import backfill, indexing_scope
+from chatmemory.entrypoints.ingest import ScopedExtractionLedger, live_loop
 from chatmemory.health import HealthState
 from chatmemory.ports.sources import ChatSource
 from tests.e2e.harness.model import ASK_EXTRACTION, HashEmbeddings, ScriptedChat
@@ -88,6 +90,7 @@ class Ingest:
         self._engine = engine
         self._store = store
         self._settings = settings
+        self._configuration = PostgresConfigurationStore(engine)
         self.asks = build_ask_pipeline(
             settings, engine, extractor=ChatAskExtractor(chat), embeddings=embeddings
         )
@@ -128,15 +131,18 @@ class Ingest:
         return await self.asks.worker.flush_all()
 
     async def backfill_decisions(self, since: date) -> BackfillReport:
-        """`just decisions-backfill --since`, over the configured indexing scope."""
-        return await backfill(self._engine, since, self._settings.indexed_channel_ids)
+        """`just decisions-backfill --since`, over the scope the command itself reads."""
+        channels = await indexing_scope(self._configuration, self._settings, {})
+        return await backfill(self._engine, since, channels)
 
     async def drain_backlog(self) -> int:
-        """One pass of the backlog worker, built as the ingest entrypoint builds it."""
+        """One pass of the backlog worker, built as the ingest entrypoint builds it:
+        over the ledger narrowed to the scope stored configuration puts in force."""
+        scope = LiveScope.from_settings(self._configuration, self._settings, {})
+        await scope.refresh()
         worker = BacklogExtractionWorker(
             self.asks.worker,
-            self._store,
-            channels=channels_in(self._settings.indexed_channel_ids),
+            ScopedExtractionLedger(self._store, scope),
             batch_messages=self._settings.ask_extraction_window_messages,
         )
         return await worker.run_once()

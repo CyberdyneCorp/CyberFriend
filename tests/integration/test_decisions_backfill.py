@@ -17,20 +17,27 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
+from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app.asks.extraction import ExtractionService
 from chatmemory.app.asks.model import AskCandidate, AskKind, ExtractedAsk, Extraction
 from chatmemory.app.asks.resolution import ObservedDirectory
 from chatmemory.app.asks.worker import BacklogExtractionWorker, ExtractionWorker
+from chatmemory.app.configuration import ConfigurationEditor
 from chatmemory.app.decisions.model import ExtractedDecision
+from chatmemory.config import Settings
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
+from chatmemory.entrypoints import decisions_backfill
 from chatmemory.entrypoints.decisions_backfill import backfill
+from chatmemory.ports.configuration import StoredSetting
+from tests.integration.conftest import DB_URL
 
 pytestmark = pytest.mark.asyncio
 
@@ -79,16 +86,19 @@ class FixedEmbeddings:
 class Extractor:
     """Before the feature: asks only. After it: decisions too, and the model
     no longer reads an ask into CORRECTED -- a pass that disagrees with the
-    first one, which is the case a correction has to survive."""
+    first one, which is the case a correction has to survive. `second_kind`
+    is what the second pass calls every ask, for the pass that reclassifies."""
 
     def __init__(self) -> None:
         self.decisions = False
+        self.second_kind = AskKind.REQUEST
         self.calls: list[str] = []
 
     async def extract(self, candidate: AskCandidate) -> Extraction:
         content = candidate.message.content
         self.calls.append(content)
-        asks = (ExtractedAsk(kind=AskKind.REQUEST, text=content, confidence=0.9),)
+        kind = self.second_kind if self.decisions else AskKind.REQUEST
+        asks = (ExtractedAsk(kind=kind, text=content, confidence=0.9),)
         if not self.decisions:
             return Extraction(asks=asks)
         decisions = (ExtractedDecision(f"decided: {content}", "release", 0.9),)
@@ -236,3 +246,99 @@ async def test_re_extraction_keeps_ask_keys_statuses_and_corrections(clean: Asyn
             text("SELECT source_message_id FROM decision ORDER BY source_message_id")
         )
         assert [int(r[0]) for r in decided] == [1, 2]
+
+
+async def test_the_window_can_end_where_decision_extraction_began(clean: AsyncEngine) -> None:
+    """What the pass read after the decision log shipped is not paid for again."""
+    await extracted_before_the_feature(clean)
+
+    report = await backfill(
+        clean, date(2026, 5, 1), frozenset({INDEXED.platform_channel_id}), date(2026, 6, 1)
+    )
+
+    assert (report.matched, report.reset) == (1, 1)
+    pending = await PostgresStore(clean).messages_pending_extraction(100, [INDEXED])
+    assert [e.message.platform_message_id for e in pending] == [4]
+
+
+async def test_a_reclassified_ask_comes_back_open_under_a_new_key(clean: AsyncEngine) -> None:
+    """The limit docs/operations.md states: status is kept per key, and the key
+    carries the kind, so an uncorrected ask the new pass calls something else
+    is replaced -- answered or not -- by an open one."""
+    extractor = await extracted_before_the_feature(clean)
+    await answer_and_correct(clean)
+    answered = await key_of(clean, 1)
+    extractor.decisions = True
+    extractor.second_kind = AskKind.QUESTION
+
+    await backfill(clean, SINCE, frozenset({INDEXED.platform_channel_id}))
+    await worker(clean, extractor).run_once()
+
+    after = await asks(clean)
+    assert answered not in after
+    [(key, (_, status))] = [(k, v) for k, v in after.items() if v[0] == 1]
+    assert key != answered
+    assert status == "open"
+
+
+# --- the command itself: its scope, and its refusal -------------------------
+
+ENV_SCOPE = f"{INDEXED.platform_channel_id} {UNINDEXED.platform_channel_id}"
+
+
+class UnreadableConfiguration(PostgresConfigurationStore):
+    async def load(self) -> Sequence[StoredSetting]:
+        raise ConnectionError("configuration table unreachable")
+
+
+def command_settings() -> Settings:
+    """What `get_settings` returns in the container: the environment lists
+    both channels, so only stored configuration can narrow the scope."""
+    return Settings(
+        discord_token=SecretStr("zzz-token-zzz"),
+        discord_guild_id=1,
+        database_url=SecretStr(DB_URL),
+        llm_api_key=SecretStr("k"),
+        indexed_channel_ids=ENV_SCOPE,  # type: ignore[arg-type]
+    )
+
+
+@pytest.fixture
+def command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(decisions_backfill, "get_settings", command_settings)
+    monkeypatch.setenv("INDEXED_CHANNEL_IDS", ENV_SCOPE)
+
+
+@pytest.mark.usefixtures("command")
+async def test_the_command_resets_only_the_stored_scope(clean: AsyncEngine) -> None:
+    await extracted_before_the_feature(clean)
+    await ConfigurationEditor(PostgresConfigurationStore(clean)).set(
+        "indexed_channel_ids", str(INDEXED.platform_channel_id), "ana"
+    )
+
+    report = await decisions_backfill.run(["--since", SINCE.isoformat()])
+
+    # The environment's scope would have reset OUT_OF_SCOPE (5) too.
+    assert report.reset == 3
+    pending = await PostgresStore(clean).messages_pending_extraction(
+        100, [INDEXED, UNINDEXED]
+    )
+    assert sorted(e.message.platform_message_id for e in pending) == [1, 2, 6]
+
+
+@pytest.mark.usefixtures("command")
+async def test_the_command_refuses_when_stored_scope_cannot_be_read(
+    clean: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await extracted_before_the_feature(clean)
+    monkeypatch.setattr(
+        decisions_backfill, "PostgresConfigurationStore", UnreadableConfiguration
+    )
+
+    with pytest.raises(SystemExit, match="nothing was reset"):
+        await decisions_backfill.run(["--since", SINCE.isoformat()])
+
+    assert (
+        await PostgresStore(clean).pending_extraction_count(channels=[INDEXED, UNINDEXED])
+        == 0
+    )
