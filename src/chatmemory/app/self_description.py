@@ -7,19 +7,25 @@ the bot replied that it calculates cryptocurrency prices, because a colleague
 had described a project that did.
 
 So a self-description is assembled from what this deployment is actually
-running. It names the external tools only when they are registered, which
-keeps it honest in the other direction too -- a capability list that promises
-web search on a deployment without it is the same mistake inverted.
+running. Every section is shown only where its feature is on -- crypto where
+the wallet tools are registered, alerts where `/alert` is, voice where voice
+is heard -- which keeps it honest in the other direction too: a capability
+list that promises web search on a deployment without it is the same mistake
+inverted.
 
 Written in the language the question was asked in. A person who writes a whole
 sentence of Portuguese and is answered in English has been told, accurately,
 that the assistant was not really listening.
+
+Laid out as short sections separated by blank lines, because the Discord
+adapter splits a long reply at paragraph boundaries: each section stays whole
+in one message, and none comes near the 2000-character limit on its own.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from chatmemory.app.egress import (
@@ -60,25 +66,10 @@ Grouped rather than listed separately because "the web (Wikipedia, Google)"
 is how a person thinks of them, and because a deployment with neither must not
 claim the web at all."""
 
+CRYPTO_SERVERS = frozenset({CHAIN_BALANCES_PROVIDER, DEFI_POSITIONS_PROVIDER})
+"""Servers described in the crypto section rather than as a lookup."""
+
 LOOKUP_DESCRIPTIONS = {
-    CHAIN_BALANCES_PROVIDER: {
-        Language.ENGLISH: "wallet balances on Ethereum, Base and Arbitrum",
-        Language.PORTUGUESE: "saldos de carteiras na Ethereum, Base e Arbitrum",
-    },
-    DEFI_POSITIONS_PROVIDER: {
-        Language.ENGLISH: (
-            "Uniswap v3/v4 liquidity positions and Aave supplies and borrows "
-            "for a wallet on Ethereum, Base and Arbitrum, what your wallets "
-            "are worth in total, and what a wallet did recently (swaps, pools, "
-            "Aave, transfers and gas, up to 30 days)"
-        ),
-        Language.PORTUGUESE: (
-            "posições de liquidez na Uniswap v3/v4 e depósitos e empréstimos "
-            "no Aave de uma carteira na Ethereum, Base e Arbitrum, quanto "
-            "suas carteiras valem no total, e o que uma carteira fez "
-            "recentemente (trocas, pools, Aave, transferências e gas, até 30 dias)"
-        ),
-    },
     "context7": {
         Language.ENGLISH: "library documentation (Context7)",
         Language.PORTUGUESE: "documentação de bibliotecas (Context7)",
@@ -198,42 +189,70 @@ _TEXT: dict[Language, dict[str, Any]] = {
         "intro": (
             "I'm CyberFriend. I answer questions about what has been said in "
             "the channels you're allowed to read, and I cite the messages I "
-            "used."
+            "used. Mention me, use `/ask`, or send me a direct message."
         ),
-        "ask_heading": "Things you can ask me:",
-        "asks": (
-            "what did people ask me to do today?",
-            "what did we decide about the deploy last week?",
-            "what did Ana say about pricing yesterday?",
-            "summarise the discussion in #general yesterday",
+        "conversations_heading": "Conversations",
+        "conversations": (
+            "Ask about a channel: `what's the status of the release?`",
+            "Catch up: `what did I miss in #infra?`",
+            "What someone said: `what did Ana say about pricing yesterday?`",
+            "Decisions: `what did we decide about the deploy?`",
         ),
-        "lookup_heading": (
-            "When the conversations don't have the answer, I can also look it up:"
+        "obligations_heading": "What's asked of you",
+        "obligations": (
+            "`what do I need to do?`",
+            "`what did people ask me today?`",
         ),
+        "facts_heading": "About you",
+        "facts": (
+            "Tell me your name or what to call you, your full name, email, "
+            "phone, home address, birth date, preferred language, or your ETH "
+            "and BTC wallets (several of each), and I'll remember it",
+            "Several in one message: `call me Leo, my email is leo@example.com`",
+            "`what do you know about me?` shows them; `forget my phone` deletes one",
+        ),
+        "facts_note": (
+            "Your contact details and wallets are only shown to you, in a direct message."
+        ),
+        "crypto_heading": "Crypto",
+        "balances": "Balances on Ethereum, Base and Arbitrum: `what's in 0x…?`",
+        "defi": (
+            "Uniswap v3/v4 liquidity positions: `show my Uniswap positions`",
+            "Aave supplies, borrows and health factor: `what's my Aave health factor?`",
+            "Everything together: `how much do I have in total?`",
+            "What a wallet did, up to 30 days: `what did my wallet do this week?`",
+        ),
+        "crypto_note": "Ask about an address you type, or about your saved wallets.",
+        "market_heading": "Markets",
+        "market_ask": "`what's the BTC price?`",
+        "market_note": (
+            "Live sources only, never a price somebody mentioned in a channel. "
+            "Each figure says how current it is; I don't recommend buying, "
+            "selling or holding anything."
+        ),
+        "alerts_heading": "Alerts",
+        "alerts": (
+            "`tell me when my LP goes out of range`",
+            "`warn me when my LP is within 10% of the range edge`",
+            "`alert me if my health factor drops below 1.3`",
+            "`tell me when BTC goes above 100k`",
+        ),
+        "alerts_note": (
+            "Ask in words and press Confirm; I send you a direct message when one fires."
+        ),
+        "scheduled_heading": "Scheduled questions",
+        "voice_heading": "Voice",
+        "voice": (
+            "In a direct message, send me a voice message instead of typing; "
+            "I show what I understood above the answer.",
+        ),
+        "lookup_heading": "Looking things up",
         "web": "the web",
         "lookup_note": (
-            "Answers from outside this server are labelled as such, so you can "
-            "always tell what your colleagues said from what I looked up."
+            "When the conversations don't have the answer I can look it up; "
+            "anything from outside this server is labelled as such."
         ),
-        "market_heading": (
-            "Current market data, from live sources and never from a price "
-            "somebody mentioned in a channel: "
-        ),
-        "market_note": (
-            "Each figure says how current it is. I report figures; I don't "
-            "recommend buying, selling or holding anything."
-        ),
-        "commands_heading": "Commands:",
-        "facts": (
-            "Tell me what to call you (`call me Leo`), your email address, or "
-            "the language you'd like answers in, and I'll remember it. Ask "
-            "`what do you know about me?` to see it; I only show your email to "
-            "you, in a direct message."
-        ),
-        "voice": (
-            "In a direct message you can also send me a voice message instead "
-            "of typing; I show what I understood above the answer."
-        ),
+        "commands_heading": "Commands",
         "audience": (
             "In a channel, I only cite what everyone there can read. Ask me in "
             "a direct message for your full view."
@@ -242,48 +261,238 @@ _TEXT: dict[Language, dict[str, Any]] = {
     Language.PORTUGUESE: {
         "intro": (
             "Eu sou o CyberFriend. Respondo perguntas sobre o que foi dito nos "
-            "canais que você pode ler, e cito as mensagens que usei."
+            "canais que você pode ler, e cito as mensagens que usei. Me "
+            "mencione, use `/ask` ou me mande uma mensagem direta."
         ),
-        "ask_heading": "Coisas que você pode me perguntar:",
-        "asks": (
-            "o que me pediram para fazer hoje?",
-            "o que decidimos sobre o deploy na semana passada?",
-            "o que o João disse sobre o preço ontem?",
-            "resuma a conversa no #general ontem",
+        "conversations_heading": "Conversas",
+        "conversations": (
+            "Sobre um canal: `qual o status do release?`",
+            "Pôr o papo em dia: `o que eu perdi no #general?`",
+            "O que alguém disse: `o que o João disse sobre o preço ontem?`",
+            "Decisões: `o que decidimos sobre o deploy?`",
         ),
-        "lookup_heading": (
-            "Quando as conversas não têm a resposta, eu também posso buscar:"
+        "obligations_heading": "O que pediram a você",
+        "obligations": (
+            "`o que eu preciso fazer?`",
+            "`o que me pediram hoje?`",
         ),
+        "facts_heading": "Sobre você",
+        "facts": (
+            "Me diga seu nome ou como quer ser chamado, seu nome completo, "
+            "e-mail, telefone, endereço, data de nascimento, idioma preferido, "
+            "ou suas carteiras ETH e BTC (várias de cada), e eu guardo",
+            "Várias de uma vez: `pode me chamar de Leo, meu email é leo@exemplo.com`",
+            "`o que você sabe sobre mim?` mostra tudo; `esqueça meu telefone` apaga um",
+        ),
+        "facts_note": (
+            "Seus contatos e carteiras só são mostrados para você, numa mensagem direta."
+        ),
+        "crypto_heading": "Cripto",
+        "balances": "Saldos na Ethereum, Base e Arbitrum: `quanto tem em 0x…?`",
+        "defi": (
+            "Posições de liquidez na Uniswap v3/v4: `mostre minhas posições na Uniswap`",
+            "Depósitos, empréstimos e health factor no Aave: `qual o meu health factor no Aave?`",
+            "Tudo junto: `quanto eu tenho no total?`",
+            "O que uma carteira fez, até 30 dias: `o que minha carteira fez essa semana?`",
+        ),
+        "crypto_note": (
+            "Pergunte sobre um endereço que você digitar, ou sobre suas carteiras salvas."
+        ),
+        "market_heading": "Mercado",
+        "market_ask": "`qual o preço do BTC?`",
+        "market_note": (
+            "Só fontes ao vivo, nunca um preço que alguém mencionou num canal. "
+            "Cada número diz o quão atual ele é; não recomendo comprar, vender "
+            "nem manter nada."
+        ),
+        "alerts_heading": "Alertas",
+        "alerts": (
+            "`me avisa quando meu LP ficar fora do range`",
+            "`me avisa quando meu LP estiver a 10% da borda do range`",
+            "`me avisa se o health factor cair abaixo de 1,3`",
+            "`avisa quando o BTC passar de 100k`",
+        ),
+        "alerts_note": (
+            "Peça com palavras e aperte Confirmar; eu te mando uma mensagem direta "
+            "quando um disparar."
+        ),
+        "scheduled_heading": "Perguntas agendadas",
+        "voice_heading": "Voz",
+        "voice": (
+            "Numa mensagem direta, me mande um áudio em vez de digitar; eu "
+            "mostro o que entendi acima da resposta.",
+        ),
+        "lookup_heading": "Buscas externas",
         "web": "a web",
         "lookup_note": (
-            "Respostas de fora deste servidor são marcadas como tal, então você "
-            "sempre sabe o que foi dito por colegas e o que eu fui buscar."
+            "Quando as conversas não têm a resposta eu posso buscar; o que vem "
+            "de fora deste servidor é marcado como tal."
         ),
-        "market_heading": (
-            "Dados de mercado atuais, de fontes ao vivo e nunca de um preço que "
-            "alguém mencionou num canal: "
-        ),
-        "market_note": (
-            "Cada número diz o quão atual ele é. Eu informo números; não "
-            "recomendo comprar, vender nem manter nada."
-        ),
-        "commands_heading": "Comandos:",
-        "facts": (
-            "Me diga como quer ser chamado (`me chame de Leo`), seu e-mail, ou "
-            "o idioma em que prefere as respostas, e eu vou lembrar. Pergunte "
-            "`o que você sabe sobre mim?` para ver; eu só mostro seu e-mail "
-            "para você, numa mensagem direta."
-        ),
-        "voice": (
-            "Numa mensagem direta você também pode me mandar um áudio em vez de "
-            "digitar; eu mostro o que entendi acima da resposta."
-        ),
+        "commands_heading": "Comandos",
         "audience": (
             "Num canal, eu só cito o que todos ali podem ler. Me pergunte numa "
             "mensagem direta para ver tudo o que você pode."
         ),
     },
 }
+"""Every sentence the description can say, per language. The alert, fact,
+catch-up and decision examples are sent to their routes by a test, so the reply
+does not suggest a question the bot then handles some other way."""
+
+
+@dataclass(frozen=True, slots=True)
+class Capabilities:
+    """What this deployment runs, as far as describing itself goes.
+
+    Built once from settings in composition and shared by the answer path and
+    the Discord surface, so "what can you do?" and a bare mention can never
+    disagree about what is on. Alerts and scheduled questions are read off
+    `commands`, the one place their switches already decide.
+    """
+
+    external_tools: tuple[str, ...] = ()
+    commands: tuple[Command, ...] = ALWAYS_AVAILABLE
+    personal_facts: bool = False
+    """Whether this process keeps personal facts ("call me Leo")."""
+    obligations: bool = True
+    """Whether asks are extracted, so "what do I need to do?" has rows."""
+    voice_questions: bool = False
+    servers: frozenset[str] = field(init=False)
+
+    def __post_init__(self) -> None:
+        servers = frozenset(t.split(":")[0] for t in self.external_tools)
+        object.__setattr__(self, "servers", servers)
+
+    def offered(self, *, direct_message: bool) -> Capabilities:
+        """The same capabilities with only the commands Discord lists there.
+
+        A DM menu has no guild commands, and telling somebody to pick
+        `/index` from a menu that does not have it is the same mistake as
+        listing a command whose feature is off.
+        """
+        if not direct_message:
+            return self
+        return Capabilities(
+            self.external_tools,
+            tuple(c for c in self.commands if not c.guild_only),
+            personal_facts=self.personal_facts,
+            obligations=self.obligations,
+            voice_questions=self.voice_questions,
+        )
+
+    def describe(self, language: Language, *, direct_message: bool = False) -> str:
+        key = language if language in _TEXT else Language.ENGLISH
+        shown = self.offered(direct_message=direct_message)
+        words = _TEXT[key]
+        parts = [
+            words["intro"],
+            _section(words["conversations_heading"], words["conversations"]),
+        ]
+        parts += [s for build in _SECTIONS if (s := build(shown, words, key))]
+        parts.append(words["audience"])
+        return "\n\n".join(parts)
+
+
+def _section(heading: str, bullets: Sequence[str], note: str = "") -> str:
+    lines = [f"**{heading}**", *(f"• {b}" for b in bullets)]
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
+
+Words = dict[str, Any]
+
+
+def _obligations(caps: Capabilities, words: Words, _: Language) -> str:
+    if not caps.obligations:
+        return ""
+    return _section(words["obligations_heading"], words["obligations"])
+
+
+def _facts(caps: Capabilities, words: Words, _: Language) -> str:
+    if not caps.personal_facts:
+        return ""
+    return _section(words["facts_heading"], words["facts"], words["facts_note"])
+
+
+def _crypto(caps: Capabilities, words: Words, _: Language) -> str:
+    bullets: list[str] = []
+    if CHAIN_BALANCES_PROVIDER in caps.servers:
+        bullets.append(words["balances"])
+    if DEFI_POSITIONS_PROVIDER in caps.servers:
+        bullets += words["defi"]
+    if not bullets:
+        return ""
+    return _section(words["crypto_heading"], bullets, words["crypto_note"])
+
+
+def _markets(caps: Capabilities, words: Words, language: Language) -> str:
+    offered = [
+        text[language] for server, text in MARKET_DESCRIPTIONS.items() if server in caps.servers
+    ]
+    if not offered:
+        return ""
+    listed = ", ".join(offered)
+    bullet = listed[0].upper() + listed[1:]
+    if MARKET_CRYPTO_PROVIDER in caps.servers:
+        # The example asks a price, so it is offered only where prices are.
+        bullet += ": " + words["market_ask"]
+    return _section(words["market_heading"], [bullet], words["market_note"])
+
+
+def _alerts(caps: Capabilities, words: Words, language: Language) -> str:
+    commands = [c.described(language) for c in ALERTS if c in caps.commands]
+    if not commands:
+        return ""
+    return _section(words["alerts_heading"], [*words["alerts"], *commands], words["alerts_note"])
+
+
+def _scheduled(caps: Capabilities, words: Words, language: Language) -> str:
+    commands = [c.described(language) for c in SCHEDULED if c in caps.commands]
+    return _section(words["scheduled_heading"], commands) if commands else ""
+
+
+def _voice(caps: Capabilities, words: Words, _: Language) -> str:
+    return _section(words["voice_heading"], words["voice"]) if caps.voice_questions else ""
+
+
+def _lookups(caps: Capabilities, words: Words, language: Language) -> str:
+    web = [name for server, name in WEB_SERVERS.items() if server in caps.servers]
+    bullets = [f"{words['web']} ({', '.join(web)})"] if web else []
+    bullets += [
+        LOOKUP_DESCRIPTIONS[server][language] if server in LOOKUP_DESCRIPTIONS else server
+        for server in sorted(caps.servers)
+        if server not in MARKET_DESCRIPTIONS
+        and server not in WEB_SERVERS
+        and server not in CRYPTO_SERVERS
+    ]
+    if not bullets:
+        return ""
+    return _section(words["lookup_heading"], bullets, words["lookup_note"])
+
+
+def _commands(caps: Capabilities, words: Words, language: Language) -> str:
+    # Alerts and schedules are listed in their own sections, beside how they
+    # are asked for, rather than twice.
+    general = [
+        c.described(language) for c in caps.commands if c not in ALERTS and c not in SCHEDULED
+    ]
+    return _section(words["commands_heading"], general) if general else ""
+
+
+_SECTIONS: tuple[Callable[[Capabilities, Words, Language], str], ...] = (
+    _obligations,
+    _facts,
+    _crypto,
+    _markets,
+    _alerts,
+    _scheduled,
+    _voice,
+    _lookups,
+    _commands,
+)
+"""The optional sections, in the order they are shown. Each is empty where
+its feature is off."""
 
 
 def describe_capabilities(
@@ -293,63 +502,23 @@ def describe_capabilities(
     commands: Sequence[Command] = ALWAYS_AVAILABLE,
     language: Language = Language.ENGLISH,
     voice_questions: bool = False,
+    obligations: bool = True,
 ) -> str:
-    key = language if language in _TEXT else Language.ENGLISH
-    words = _TEXT[key]
-    lines = [words["intro"], "", words["ask_heading"]]
-    lines += [f"• {a}" for a in words["asks"]]
-
-    servers = {t.split(":")[0] for t in external_tools}
-    market = [
-        text[key] for server, text in MARKET_DESCRIPTIONS.items() if server in servers
-    ]
-    web = [name for server, name in WEB_SERVERS.items() if server in servers]
-    lookups = [f"{words['web']} ({', '.join(web)})"] if web else []
-    lookups += [
-        LOOKUP_DESCRIPTIONS[server][key] if server in LOOKUP_DESCRIPTIONS else server
-        for server in sorted(servers)
-        if server not in MARKET_DESCRIPTIONS and server not in WEB_SERVERS
-    ]
-    if lookups:
-        lines += ["", words["lookup_heading"]]
-        lines += [f"• {text}" for text in lookups]
-        lines.append(words["lookup_note"])
-    if market:
-        lines += [
-            "",
-            words["market_heading"] + ", ".join(market) + ".",
-            words["market_note"],
-        ]
-    if commands:
-        lines += ["", words["commands_heading"]]
-        lines += [f"• {c.described(key)}" for c in commands]
-    if personal_facts:
-        lines += ["", words["facts"]]
-    if voice_questions:
-        lines += ["", words["voice"]]
-    lines += ["", words["audience"]]
-    return "\n".join(lines)
+    return Capabilities(
+        tuple(external_tools),
+        tuple(commands),
+        personal_facts=personal_facts,
+        obligations=obligations,
+        voice_questions=voice_questions,
+    ).describe(language)
 
 
 class SelfDescriptionAnswerService:
     """Answers questions about the assistant itself; delegates the rest."""
 
-    def __init__(
-        self,
-        fallback: AnswerService,
-        external_tools: Sequence[str] = (),
-        *,
-        personal_facts: bool = False,
-        commands: Sequence[Command] = ALWAYS_AVAILABLE,
-        voice_questions: bool = False,
-    ) -> None:
+    def __init__(self, fallback: AnswerService, capabilities: Capabilities | None = None) -> None:
         self._fallback = fallback
-        self._tools = tuple(external_tools)
-        self._personal_facts = personal_facts
-        self._commands = tuple(commands)
-        # Whether a voice message in a DM is heard, so the description only
-        # offers it where the switch is on.
-        self._voice_questions = voice_questions
+        self.capabilities = capabilities or Capabilities()
 
     async def answer(self, question: Question) -> Answer:
         if self_description_question(question.text):
@@ -360,29 +529,15 @@ class SelfDescriptionAnswerService:
             # and inventing a source for a description of configuration would
             # make it look retrieved.
             return Answer(
-                describe_capabilities(
-                    self._tools,
-                    personal_facts=self._personal_facts,
-                    commands=self._offered_where(question),
-                    language=language if language.known else Language.ENGLISH,
-                    voice_questions=self._voice_questions,
+                self.capabilities.describe(
+                    language if language.known else Language.ENGLISH,
+                    direct_message=question.audience.mode is DeliveryMode.DIRECT_MESSAGE,
                 ),
                 # An empty set, not None: it read no channel. None means
                 # "never established", and memory refuses to store that.
                 consulted_channels=frozenset(),
             )
         return await self._fallback.answer(question)
-
-    def _offered_where(self, question: Question) -> tuple[Command, ...]:
-        """The commands Discord lists where this answer is read.
-
-        A DM menu has no guild commands, and telling somebody to pick
-        `/index` from a menu that does not have it is the same mistake as
-        listing a command whose feature is off.
-        """
-        if question.audience.mode is DeliveryMode.DIRECT_MESSAGE:
-            return tuple(c for c in self._commands if not c.guild_only)
-        return self._commands
 
 
 _EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED, *ALERTS)

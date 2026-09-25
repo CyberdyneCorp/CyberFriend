@@ -23,8 +23,9 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from chatmemory.adapters.discord.bot import CAPABILITIES_PT
+from chatmemory.adapters.discord.formatting import split_message
 from chatmemory.app.catchup import NAME_THE_CHANNEL
+from chatmemory.app.language import Language
 from chatmemory.app.localise import PORTUGUESE
 from chatmemory.app.reasoning.contract import NOTHING_FOUND
 from chatmemory.app.reasoning.service import MCP_CHANGE_REFUSAL
@@ -65,7 +66,8 @@ async def test_a_bare_mention_from_a_portuguese_speaker(bot: E2EBot) -> None:
     turn = await bot.channel("general", ana).mention_only()
 
     precondition(bool(turn.sent) and not turn.searched, "a bare mention no longer replies")
-    assert turn.text.strip() == CAPABILITIES_PT.strip()
+    described = bot.process.stack.capabilities.describe(Language.PORTUGUESE)
+    assert turn.text == "\n".join(split_message(described))
     turn.assert_language("pt")
 
 

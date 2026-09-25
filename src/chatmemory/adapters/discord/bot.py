@@ -101,6 +101,7 @@ from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import ScheduleService
+from chatmemory.app.self_description import Capabilities
 from chatmemory.app.voice import (
     Heard,
     VoiceClip,
@@ -309,49 +310,6 @@ def _forgotten_note(turns: int, summaries: int, everywhere: bool) -> str:
     if not turns and not summaries:
         return "There was nothing to forget in this conversation."
     return "Done. I've forgotten what you asked me in this conversation."
-
-
-CAPABILITIES = (
-    "I answer questions about what's been said in the channels you can read.\n"
-    "Try: `what did people ask me today?`, `what happened in #infra this week?`\n"
-    "Mention me with a question, use `/ask`, or send me a direct message.\n"
-    "Use `/resolve` to close something I said was asked of you, or to tell me "
-    "it was never yours.\n"
-    "I remember our conversation so follow-ups make sense; `/forget` erases it.\n"
-    "If someone asks you for something in a channel you can read, I'll send "
-    "you one direct message about it; `/notifications off` stops that.\n"
-    "Tell me `call me Leo`, your email, or `reply to me in Portuguese` and I'll "
-    "remember it; your email is only ever shown to you, in a DM.\n\n"
-    "Answers posted in a channel only use sources everyone here can read. "
-    "Ask me in a DM to search everything *you* can read."
-)
-
-
-CAPABILITIES_PT = (
-    "Respondo perguntas sobre o que foi dito nos canais que você pode ler.\n"
-    "Experimente: `o que me pediram hoje?`, `o que aconteceu no #infra essa semana?`\n"
-    "Me mencione com uma pergunta, use `/ask` ou me mande uma mensagem direta.\n"
-    "Use `/resolve` para fechar algo que eu disse que te pediram, ou para dizer "
-    "que nunca foi seu.\n"
-    "Lembro da nossa conversa para as perguntas seguintes fazerem sentido; "
-    "`/forget` apaga.\n"
-    "Se alguém te pedir algo num canal que você pode ler, te mando uma mensagem "
-    "direta; `/notifications off` desliga isso.\n"
-    "Me diga `pode me chamar de Leo`, seu email ou `responda em português` e eu "
-    "guardo; seu email só é mostrado para você, em mensagem direta.\n\n"
-    "Respostas postadas num canal só usam fontes que todos ali podem ler. "
-    "Me pergunte numa mensagem direta para buscar tudo o que *você* pode ler."
-)
-"""`CAPABILITIES` for someone whose saved language is Portuguese. A bare
-mention has no words to detect a language from, so the saved preference is
-the only signal."""
-
-
-VOICE_CAPABILITY = "In a DM you can also send me a voice message instead of typing."
-VOICE_CAPABILITY_PT = (
-    "Numa mensagem direta você também pode me mandar um áudio em vez de digitar."
-)
-"""Added to the capabilities reply only where voice questions are switched on."""
 
 
 def heard_line(transcript: str) -> str:
@@ -1051,6 +1009,16 @@ class CyberFriendClient(discord.Client):
         self._schedules: ScheduleService | None = None
         self._alerts: AlertRequests | None = None
         self._voice: VoiceQuestions | None = None
+        self._described = Capabilities()
+
+    def attach_capabilities(self, capabilities: Capabilities) -> None:
+        """What a bare mention says this deployment can do.
+
+        The same value the answer path describes "what can you do?" from, so
+        the two replies cannot disagree. Without it a bare mention describes
+        only what every deployment has.
+        """
+        self._described = capabilities
 
     def attach_voice(self, voice: VoiceQuestions) -> None:
         """Hear voice messages sent in a DM.
@@ -1559,17 +1527,22 @@ class CyberFriendClient(discord.Client):
             await self._answer_voice(message)
             return
         if not text:
-            await message.reply(await self._capabilities(message.author), mention_author=False)
+            await self._reply_parts(message, await self._capabilities(message.author, is_dm))
             return
         await self._answer(message, text)
 
-    async def _capabilities(self, user: discord.User | discord.Member) -> str:
+    async def _capabilities(
+        self, user: discord.User | discord.Member, direct_message: bool
+    ) -> list[str]:
+        """The capabilities reply for a bare mention, as Discord messages.
+
+        In the saved language: a bare mention has no words to detect one from.
+        Split like an answer, at section boundaries, so no part passes
+        Discord's limit.
+        """
         language = await self._asks.reply_language(_person(user))
-        portuguese = language is Language.PORTUGUESE
-        reply = CAPABILITIES_PT if portuguese else CAPABILITIES
-        if self._voice is None:
-            return reply
-        return f"{reply}\n{VOICE_CAPABILITY_PT if portuguese else VOICE_CAPABILITY}"
+        described = self._described.describe(language, direct_message=direct_message)
+        return split_message(described)
 
     async def _answer_voice(self, message: discord.Message) -> None:
         """A voice question: heard, then answered exactly as typed text.

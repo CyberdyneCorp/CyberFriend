@@ -21,7 +21,7 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from chatmemory.adapters.discord.bot import CAPABILITIES
+from chatmemory.adapters.discord.formatting import split_message
 from chatmemory.app.language import Language
 from chatmemory.app.localise import PORTUGUESE
 from chatmemory.app.reasoning.contract import NOTHING_FOUND
@@ -195,7 +195,9 @@ async def test_a_voice_note_in_a_channel_is_not_heard(voice_bot: E2EBot) -> None
     turn = await bot.channel("general", bot.person("Ana")).say_voice(attachment_payload(CDN_URL))
 
     assert turn.hosts == frozenset()
-    assert turn.text.startswith(CAPABILITIES)
+    described = bot.process.stack.capabilities.describe(Language.ENGLISH)
+    assert turn.text == "\n".join(split_message(described))
+    assert "voice message" in turn.text
     assert await usage_seconds(bot) == 0
 
 

@@ -143,6 +143,7 @@ from chatmemory.app.notifications import NotificationDelivery
 from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import ScheduledTaskRunner
 from chatmemory.app.scope import LiveScope, ScopeProvider
+from chatmemory.app.self_description import Capabilities
 from chatmemory.app.voice import VoiceQuestions
 from chatmemory.composition import (
     AnswerStack,
@@ -254,6 +255,7 @@ def build_bot(
     alert_transport: httpx.AsyncBaseTransport | None = None,
     clock: Clock = utc_now,
     voice: VoiceQuestions | None = None,
+    capabilities: Capabilities | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -316,6 +318,10 @@ def build_bot(
         asks.attach_corrections(corrections)
     client = CyberFriendClient(asks, settings.discord_guild_id)
     attach_permission_listeners(client, caches)
+    if capabilities is not None:
+        # What a bare mention describes: the answer stack's own value, so it
+        # and "what can you do?" name the same features.
+        client.attach_capabilities(capabilities)
     if voice is not None:
         # Voice messages in a DM. Without it they are answered that voice is
         # not enabled here, and nothing is downloaded.
@@ -691,6 +697,9 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # same transport as every other outbound call, the month on the same
         # clock. None unless VOICE_QUESTIONS_ENABLED.
         voice=build_voice_questions(settings, stack.engine, edges.http_transport, edges.clock),
+        # What this deployment runs, for a bare mention. Without it the mention
+        # describes only what every deployment has.
+        capabilities=stack.capabilities,
     )
     return Process(
         graph=graph,

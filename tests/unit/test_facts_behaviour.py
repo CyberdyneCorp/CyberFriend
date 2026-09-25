@@ -587,7 +587,7 @@ def test_the_bot_process_builds_facts_and_hands_them_down() -> None:
     assert _calls_with_keyword(bot, "build_answer_stack", "personal_facts")
     composition = SRC / "composition.py"
     assert _calls_with_keyword(composition, "AskService", "facts")
-    assert _calls_with_keyword(composition, "SelfDescriptionAnswerService", "personal_facts")
+    assert _calls_with_keyword(composition, "deployment_capabilities", "personal_facts")
 
 
 BASE = {
