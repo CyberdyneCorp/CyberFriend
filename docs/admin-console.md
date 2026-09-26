@@ -1,6 +1,7 @@
 # The operator console
 
-A TypeScript single-page app that talks to the admin API and to nothing else.
+A Svelte 5 + TypeScript single-page app that talks to the admin API and to
+nothing else.
 It is static files: no server of its own, no credentials of its own, no build
 step at runtime. The admin API serves it from the same origin it serves `/api`
 from, which is what lets the bundle use a relative API root and hold the
@@ -13,10 +14,13 @@ Source is in `console/`. Build output is `console/dist/`, which is
 
 ```bash
 cd console
-npm install          # once
-npm run build        # type-checks, then emits console/dist/
-npm test             # unit tests, including the browser-storage guard (CI runs these)
+npm ci               # once
+npm run lint         # eslint, including sonarjs cognitive complexity <= 12 per function
+npm test             # domain, view-models, components, guards, and every screen end to end
+npm run build        # svelte-check, then emits console/dist/
 ```
+
+`just console-check` runs all three, as CI does.
 
 Development against a running admin API:
 
@@ -89,35 +93,17 @@ Two choices in the build exist to keep that list short:
   fails on *refresh* — days after the deploy that caused it, on somebody
   else's screen.
 
-### In the image — not yet wired
+### In the image
 
-`docker-compose.yml` already sets `ADMIN_CONSOLE_DIR=/app/console` for the
-`admin` service. **Nothing puts the bundle there.** The `Dockerfile` has no
-Node stage and copies no `console/dist`, so a deployed admin service finds no
-directory, logs `admin.console_bundle_missing`, and serves the page that says
-the interface is absent. The API works; the console is not there.
+The `Dockerfile` builds the bundle in a `node:22-slim` stage (`npm ci`, then
+`npm run build`, which runs `svelte-check` first so a type error fails the
+image) and copies `console/dist` to `/app/console`, which is where
+`docker-compose.yml` points `ADMIN_CONSOLE_DIR`. Node is needed at build time
+only; nothing in the running image depends on it. `.dockerignore` keeps the
+host's `console/node_modules` and `console/dist` out of the build context.
 
-Two stanzas in `Dockerfile` close it — a build stage, and one `COPY` into the
-existing image:
-
-```dockerfile
-FROM node:22-slim AS console
-WORKDIR /console
-# Manifests first, so application edits do not invalidate the install layer.
-COPY console/package.json console/package-lock.json ./
-RUN npm ci
-COPY console/ ./
-RUN npm run build          # type-checks, then emits /console/dist
-
-# …in the Python image, after the source is installed:
-COPY --from=console /console/dist /app/console
-```
-
-`ADMIN_CONSOLE_DIR=/app/console` then points at a real directory. Node is
-needed at build time only; nothing in the running image depends on it.
-
-That change belongs to whoever owns `Dockerfile`; this console was built and
-verified against a locally running service instead (below).
+The image's import smoke check includes `chatmemory.entrypoints.admin`, so an
+admin service that cannot import fails the build rather than the deployment.
 
 ### Verified, not assumed
 
@@ -155,7 +141,7 @@ credential issue as an escalation.
 
 ### The token is in memory, and nowhere else
 
-The operator's token lives in a module variable in `src/auth/session.ts`. Not
+The operator's token lives in a module variable in `src/services/session.ts`. Not
 `localStorage`, not `sessionStorage`, not a cookie. This console can add a
 federated server and enable a tool that changes state somewhere else, so its
 credential is a grant of new capability to the agent — and a credential in
@@ -167,19 +153,20 @@ so rather than leaving the operator to think it broke.
 
 `src/no-browser-storage.test.ts` fails the build if any source file reaches for
 browser storage, puts a token in a URL, or reads the token anywhere but the
-fetch client. It is a source scan rather than a behavioural test because the
+fetch client (`src/services/http.ts`). It is a source scan rather than a behavioural test because the
 failure it prevents is a "remember me" checkbox added in six months, which no
 test of today's code would notice.
 
-The scan covers every file type the console may be written in (`.ts`, `.tsx`,
-`.svelte`, `.svelte.ts`) and ignores comments, HTML comments included, so a
+The scan covers every file type the console is written in (`.ts`, `.svelte`,
+`.svelte.ts`) and ignores comments, HTML comments included, so a
 file can explain why it avoids `localStorage` without failing. It checks
 itself against the fixtures in `console/fixtures/storage-guard/`: a Svelte
 component and a `.svelte.ts` module that reach for storage must be caught, and
 a component that only mentions it in comments must not.
 
-CI runs the console's tests and build in a `console` job of its own, so a
-broken console test or a tripped guard fails the pull request.
+CI runs the console's lint, tests and build in a `console` job of its own, so
+a broken console test, a tripped guard or a function over the complexity limit
+fails the pull request.
 
 ### A tool that changes state never looks like one that does not
 
@@ -189,10 +176,18 @@ whose declared effect is a word nobody here recognises. An undeclared effect is
 the likely shape of a hostile or careless server, and a console that rendered
 it as harmless would be the thing an operator is looking at while deciding.
 
-`ToolEffectBadge` is the single component that renders that verdict, so the
+`views/components/ToolEffectBadge.svelte` is the single component that renders that verdict, so the
 distinction holds in the server's tool list, in the allowlist and inside the
 confirmation — and keeps holding when a fourth place to show a tool is added.
 The badge carries the word and a glyph, not just a colour.
+
+### Removing something takes a second click
+
+Removing a channel, a federated server, an allowlisted tool, an opt-out or a
+token arms the button first; the armed button names the consequence ("Stop
+indexing it", "Revoke this token") and only a second click sends the request.
+"Keep" disarms it. Not `window.confirm`, which is dismissed by muscle memory
+and says nothing about what is being removed.
 
 ### Enabling one requires typing its name
 
@@ -202,7 +197,10 @@ name, exactly, and nothing else enables the button. There is no "enable
 anyway", and it is not a dialog, because a dialog is a thing people click
 through.
 
-The console then sends `confirm_tool_name`, and the API refuses a mismatch on
+The gate is `TypedConfirmVM` in `src/viewmodels/federation.svelte.ts`;
+`FederationVM.confirm` re-checks it before sending, so a button that somehow
+got enabled still sends nothing. The console then sends `confirm_tool_name`,
+and the API refuses a mismatch on
 its own. This is the first of two gates saying the same thing, not the only
 one — if this screen were bypassed entirely, the API would still refuse.
 
@@ -217,7 +215,7 @@ still wins.
 
 Credentials are not settings and do not appear: the platform token, the model
 key and the database URL are environment-only, the API refuses to store them,
-and nothing in `src/api/types.ts` has a field that could carry one.
+and nothing in `src/domain/types.ts` has a field that could carry one.
 
 A refused value is never quoted back, either. `PUT /api/settings/{key}` with
 something that will not parse answers with what the setting accepts -- "expected
@@ -239,44 +237,31 @@ is different -- that name was already ours -- and a refusal about one does say
 which tool it was, which is what makes "somebody tried to enable this" worth
 reading a week later.
 
-## The Svelte rewrite, in `console-svelte/`
+## How the source is laid out
 
-The console is being ported to Svelte 5 (runes) + Vite, without SvelteKit
-(`openspec/changes/rewrite-console-svelte`). Until the swap, `console/` (React)
-is the bundle that is built into the image and served; `console-svelte/` is
-built, linted and tested in CI (the `console-svelte` job) and is listed in
-`.dockerignore`.
-
-```bash
-cd console-svelte
-npm ci
-npm run lint     # eslint, including sonarjs cognitive complexity <= 12 per function
-npm test         # domain, services, view-models, guards, and sign-in + Status end to end
-npm run build    # svelte-check, then dist/ (same base "./", sourcemaps, dev proxy)
-```
-
-The source is in four layers, and `src/architecture.test.ts` fails on an
-import that breaks the direction:
+Svelte 5 (runes) + Vite, without SvelteKit: the server serves static files and
+nothing else, and the sign-in flow lives on the Python side, so SSR, load
+functions and file-system routing would duplicate or fight it. The source is
+in four layers, and `src/architecture.test.ts` fails on an import that breaks
+the direction:
 
 | Layer | Holds | May import |
 | --- | --- | --- |
-| `domain/` | Pure rules and API types (`effect`, `settings`, `person`, `format`, `roles`) | nothing |
+| `domain/` | Pure rules and API types (`effect`, `settings`, `person`, `allowlist`, `format`, `roles`, `changed`) | nothing |
 | `services/` | `http.ts` (the only `fetch`, the bearer, the 401 rule), `adminApi.ts`, `session.ts`, `hashLocation.ts` | domain, types only |
-| `viewmodels/` | `*.svelte.ts` classes: `Resource`, `Action`, `SessionVM`, `Router`, `StatusVM`, `ConsoleVM` | services, domain |
-| `views/` | Screens and components, bound to a view-model | viewmodels, domain |
+| `viewmodels/` | `*.svelte.ts` classes: `Resource`, `Action`, `Confirmation`, `SessionVM`, `Router`, one VM per screen (`StatusVM`, `FederationVM` with `ServersVM`/`AllowlistVM`/`TypedConfirmVM`, `ChannelsVM`, `RetentionVM`, `SettingsVM`/`SettingEditor`, `TokensVM`, `AuditVM`), `ConsoleVM` | services, domain |
+| `views/` | `App`, `Shell`, `SignIn`, `screens/*Screen.svelte`, `components/` (badges, `ConfirmButton`, `TypedConfirm`, `ServerCard`, `SettingsTable`, `Loaded`, `Panel`, `ActionResult`) | viewmodels, domain |
 
 `main.ts` is the composition root: it builds a `ConsoleVM` from the real
-services and mounts `views/App.svelte`. A view asks the `ConsoleVM` for its
-screen's view-model, so no view names a service, and a test builds a
-view-model with fakes (`new StatusVM(fakeApi)`) and drives it without a DOM.
+services and mounts `views/App.svelte`. A screen asks the `ConsoleVM` for its
+view-model (`app.channels()`), loads it on mount and renders only what it
+holds, so no view names a service, and a test builds a view-model with fakes
+(`new ChannelsVM(fakeApi)`) and drives it without a DOM.
 
 The router is a hash router over a route table in `views/routes.ts`. Every
 route declares a `minRole` (`operator` or `admin`) with no default; the
 navigation shows the routes the session's role allows, and the server stays
 the authority. An address that names no screen is rewritten to `#/status`.
-
-Status and sign-in are ported and serve as the template for the other
-screens, which show a "Not ported yet" panel in this tree until they are.
 
 ## Tests
 
@@ -284,21 +269,37 @@ screens, which show a "Not ported yet" panel in this tree until they are.
 cd console && npm test
 ```
 
-- `domain/effect.test.ts` — the effect rule, including that an undeclared or
-  `undetermined` effect is state-changing.
-- `domain/settings.test.ts` — both spellings of every provenance, and that an
-  unrecognised one reads as unknown rather than as a guess.
-- `domain/person.test.ts` — reading `platform:id` back apart, and refusing
-  rather than guessing.
-- `api/client.test.ts` — the request carries the credential and nothing that
-  could name an operator; path segments from the API are escaped.
-- `no-browser-storage.test.ts` — a source scan; see above.
-- `components/format.test.ts` — the status screen's tolerance: which fields
-  become cards, and that a null reads as a dash rather than an empty card.
-- `components/TypedConfirm.test.tsx` — the enable button, in a DOM.
-- `console.e2e.test.tsx` — the whole app against a stub API it starts itself
-  (`src/test/fixtures.ts`), covering sign-in, a refused credential, the badge
-  distinction, allowlisting read-only, and the typed gate end to end.
+- `domain/*.test.ts` — the effect rule (an undeclared or `undetermined`
+  effect is state-changing), both spellings of every provenance, reading
+  `platform:id` back apart and refusing rather than guessing, the status
+  screen's tolerance (which fields become cards, a null reads as a dash), and
+  allowlist keys.
+- `services/*.test.ts` — the request carries the credential and nothing that
+  could name an operator; path segments from the API are escaped; `/api` is
+  resolved beside the page, so a prefixed mount works; a 401 signs out with one
+  sentence; there is no call that mints an MCP credential.
+- `viewmodels/*.test.ts` — every screen's behaviour without a DOM: the typed
+  gate and the read-only fast path, the note a save gives when the environment
+  still wins, the unreadable-channel note, opt-outs that cannot be parsed,
+  tokens without an id, the audit filter, the two-click `Confirmation`.
+- `views/components/TypedConfirm.test.ts` and `ConfirmButton.test.ts` — the
+  enable button and the two-click removal, in a DOM.
+- `views/Shell.test.ts` — the navigation leaves out a route the role may not
+  open.
+- `views/routes.test.ts` — every screen's `minRole` equals the access the
+  server's `ROUTE_ACCESS` asks for the reads that screen makes (it reads
+  `src/chatmemory/admin/server.py`, so a role change on either side fails it).
+- `architecture.test.ts` and `no-browser-storage.test.ts` — source scans; see
+  above. Each checks itself against the fixtures in `console/fixtures/`.
+- `console.e2e.test.ts` — the whole app against a stub API it starts itself
+  (`src/test/stubApi.ts`): sign-in refused and accepted, sign-out, an unknown
+  address, the badge distinction, allowlisting read-only, the typed gate end to
+  end, adding a server, two-click removal of one server (and no removal while
+  another change is in flight), revoking an allowlisted tool, channel
+  readability and adding an unreadable channel, settings provenance and a save
+  the environment overrides, the retention message, saving a retention setting
+  under its own key, adding an opt-out, two-click removals of a channel, an
+  opt-out and a token, and the audit's refusals and filter.
 
 The end-to-end test is here because of the bug it caught. Sign-in used to put
 the token in the session and verify it afterwards, so a refused credential
@@ -308,10 +309,6 @@ Every piece was individually correct and every unit test passed.
 
 ## Known gaps
 
-- **The image does not build this bundle yet.** `ADMIN_CONSOLE_DIR` is set in
-  compose and nothing satisfies it; see "In the image" above for the two
-  stanzas that fix it. Until then the console runs from a local build, not
-  from a deploy.
 - **The retention screen has nothing to edit.** The API exposes no retention
   setting — `SETTINGS` in `app/configuration.py` has no retention key, so
   `GET /api/settings` never returns one. The screen says so in those words
@@ -326,11 +323,15 @@ Every piece was individually correct and every unit test passed.
 
 ## Dependencies, and why each one is there
 
-Runtime: **react**, **react-dom**, **react-router-dom**. A framework and a
-router, which is the budget.
+Runtime: none. Svelte compiles to plain JavaScript; the bundle ships no
+framework runtime beyond what the compiler emits, and no router (the hash
+router is about thirty lines in `viewmodels/router.svelte.ts`).
 
-Build and test: **vite**, **@vitejs/plugin-react**, **typescript**,
-**vitest**, **jsdom**.
+Build and test: **svelte**, **vite**, **@sveltejs/vite-plugin-svelte**,
+**typescript**, **svelte-check**, **vitest**, **jsdom**,
+**@testing-library/svelte**, and **eslint** with **typescript-eslint**,
+**eslint-plugin-svelte** and **eslint-plugin-sonarjs** (for the
+cognitive-complexity limit).
 
 Nothing else. In particular:
 
@@ -338,28 +339,24 @@ Nothing else. In particular:
   would be a larger dependency than the application, and the one visual rule
   that matters here — a mutating tool looks different, everywhere — is easier
   to hold in one stylesheet than to enforce across someone else's components.
-- **No data-fetching library.** `fetch` plus a 40-line `useResource` hook. The
-  console makes one request per screen and reloads after a change.
-- **No state library.** React's `useSyncExternalStore` over the session module.
-- **No testing library.** The one test that needs a DOM renders the component
-  with React's own `createRoot` and `act` into jsdom, and reads
-  `button.disabled`. That is a dozen lines against a library that would be a
-  larger dependency than the thing under test.
+- **No data-fetching library.** `fetch` in one file plus the `Resource`
+  view-model. The console makes one request per list and reloads after a
+  change.
+- **No state library.** Runes (`$state`, `$derived`) in the view-model classes.
 
-Two dependencies beyond the framework and the router need a justification, and
-it is the same one. **vitest** and **jsdom** exist for the places where a quiet
-regression is a security hole rather than a cosmetic one: the rule that an
-undeclared effect is state-changing, the typed confirmation, the token never
-reaching browser storage, and the request never naming an operator. Each of
-those is pinned by a test that has been checked to fail when the rule is
-removed:
+The test dependencies exist for the places where a quiet regression is a
+security hole rather than a cosmetic one: the rule that an undeclared effect
+is state-changing, the typed confirmation, the token never reaching browser
+storage, and the request never naming an operator. Each of those is pinned by
+a test that fails when the rule is removed:
 
 | Remove | Test that goes red |
 | --- | --- |
-| `disabled={!matches \|\| busy}` on the enable button | `components/TypedConfirm.test.tsx` — 2 tests |
+| `disabled={!gate.canConfirm(busy)}` on the enable button | `views/components/TypedConfirm.test.ts` — 2 tests |
+| the name check in `FederationVM.confirm` | `viewmodels/federation.test.ts` |
 | the read-only spelling list, or the undeclared-is-mutating default | `domain/effect.test.ts` |
 | the ban on browser storage | `no-browser-storage.test.ts` |
-| the absence of a token-minting call | `api/client.test.ts` — 2 tests |
+| the absence of a token-minting call | `services/adminApi.test.ts` — 2 tests |
 
 ## The console cannot mint a credential for the corpus
 
@@ -397,8 +394,8 @@ Every request carries `Authorization: Bearer <token>` and nothing else that
 could be read as an identity. No operator field, no impersonation header, no
 name in a query string: the credential decides who is acting, and a request
 that could name an operator would make the audit trail an assertion rather than
-a fact. `src/api/client.test.ts` asserts that over the request the client
-actually builds.
+a fact. `src/services/adminApi.test.ts` asserts that over the request the
+client actually builds.
 
 A 401 signs the operator out and says one sentence, the same one for all four
 causes. The API deliberately makes missing, malformed, unknown and revoked

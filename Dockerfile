@@ -1,4 +1,4 @@
-# The operator console is TypeScript and has to be compiled before the Python
+# The operator console is Svelte + TypeScript and has to be compiled before the Python
 # image can serve it. Building it in its own stage keeps node out of the
 # runtime image entirely -- the service serves static files and has no reason
 # to carry a toolchain that can execute code.
@@ -9,7 +9,7 @@ WORKDIR /console
 COPY console/package.json console/package-lock.json ./
 RUN npm ci
 COPY console/ ./
-# `build` runs tsc --noEmit first, so a type error fails the image rather than
+# `build` runs svelte-check first, so a type error fails the image rather than
 # shipping a console that breaks in somebody's browser.
 RUN npm run build
 
@@ -51,7 +51,8 @@ RUN uv pip install --system --no-cache --no-deps --reinstall-package chatmemory 
 # happens in a container that then crash-loops with an error that reads like
 # an application fault.
 RUN python -c "import chatmemory.entrypoints.ingest, chatmemory.entrypoints.bot, \
-    chatmemory.entrypoints.mcp_server, chatmemory.entrypoints.migrate" \
+    chatmemory.entrypoints.mcp_server, chatmemory.entrypoints.migrate, \
+    chatmemory.entrypoints.admin" \
  && python -c "import chatmemory.composition, chatmemory.adapters.store.postgres"
 
 # No secrets are baked in; all configuration arrives as runtime environment.

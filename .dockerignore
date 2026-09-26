@@ -6,8 +6,6 @@
 # that wrote it -- which is the worst kind of difference to debug.
 console/node_modules
 console/dist
-# The Svelte rewrite is built and tested in CI and never copied into the image.
-console-svelte
 node_modules
 
 # Python build and test artefacts: large, machine-local, and never run in the
