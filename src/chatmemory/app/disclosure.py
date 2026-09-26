@@ -46,6 +46,10 @@ class ScopedAnswer:
 
     answer: Answer
     withheld_from_audience: frozenset[ChannelRef]
+    #: A fixed notice the surface shows after the answer and its sources, such
+    #: as the one-time tracing notice. Kept apart from the answer so it is
+    #: never remembered as part of it, truncated with it, or cited under.
+    notice: str = ""
 
     @property
     def should_notify_asker(self) -> bool:

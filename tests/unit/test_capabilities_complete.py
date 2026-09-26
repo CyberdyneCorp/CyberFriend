@@ -61,6 +61,11 @@ EVERYTHING: dict[str, object] = {
     # A remote MCP server, reached through the fake session below.
     "federation_servers": "context7=https://mcp.context7.com/mcp",
     "federation_tool_allowlist": "context7:query-docs:ro",
+    # Questions and answers exported to Langfuse, and said so.
+    "tracing_enabled": True,
+    "langfuse_host": "https://langfuse.example",
+    "langfuse_public_key": "pk",
+    "langfuse_secret_key": "sk",
 }
 
 NO_REMOTE: dict[str, object] = {"federation_servers": "", "federation_tool_allowlist": ""}
@@ -240,6 +245,15 @@ ROWS = (
         {"ask_extraction_enabled": False},
         "what do I need to do?",
         None,
+    ),
+    Row(
+        "recorded questions",
+        {"tracing_enabled": False},
+        "Your questions and my answers are recorded for up to 90 days, and "
+        "CyberFriend admins can read them. Use `/privacy` to see or delete them.",
+        "Suas perguntas e minhas respostas ficam registradas por até 90 dias, e "
+        "os administradores do CyberFriend podem lê-las. Use `/privacy` para "
+        "ver ou apagar.",
     ),
     Row(
         "asked today",

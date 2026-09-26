@@ -200,8 +200,19 @@ trace into FakeLangfuse and asserts neither appears in counts or text.
   or channel) and their `tracing_notice_version` is below the current version,
   the reply carries a short notice in their language (EN/PT): "Your questions
   and my answers are recorded for up to 90 days and CyberFriend admins can read
-  them. Use /privacy to see or delete them." The version and time are recorded
-  in the same transaction as the export, so the notice is shown once.
+  them. Use /privacy to see or delete them." The period is
+  `TRACE_RETENTION_DAYS`. The version and time are recorded right after the
+  traced answer, by one conditional UPDATE on the person row that also
+  refuses an opted-out person, so the notice is shown once even when two
+  replies race. It is not in the export's transaction: the export runs inside
+  the answer chain, and the notice is decided in the ask service, which is
+  where the reply is assembled. The question that earned the notice is
+  therefore traced just before `tracing_notice_at`, and is not shown as text
+  in the console, which is the conservative side.
+- Only replies that reach the answer path (and so are traced) carry it; a
+  scheduled run does not, because its delivery sends the answer alone. The
+  notice is shown after the answer and its sources, and is never part of the
+  remembered turn.
 - A new notice version (for example a changed retention period) shows it again
   once.
 - The capabilities reply states the same.

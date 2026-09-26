@@ -519,16 +519,16 @@ def _render(scoped: ScopedAnswer) -> str:
     below may carry a masked link.
     """
     answer = scoped.answer
-    body = sanitize_answer(answer.text[:MAX_ANSWER_CHARS])
-    if not answer.citations:
-        return body
-    lines = [body]
+    lines = [sanitize_answer(answer.text[:MAX_ANSWER_CHARS])]
     number = 1
     for source, group in _capped(_grouped(answer.citations), MAX_CITATIONS):
         lines.extend(["", SOURCE_HEADINGS.get(source, f"**From {source}:**")])
         for citation in group:
             lines.append(_citation_line(number, citation))
             number += 1
+    if scoped.notice:
+        # Last, after the sources: it is about the conversation, not the answer.
+        lines.extend(["", scoped.notice])
     return "\n".join(lines)
 
 

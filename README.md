@@ -43,7 +43,7 @@ internet said.
 | **Channel media (recording only)** | From `MEDIA_ENABLED_AT`, voice notes and images posted in indexed channels are recorded as pending rows: metadata and a CDN link, nothing downloaded and nothing searchable yet. Transcribing voice notes and reading images come later. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
-| **Tracing** | Each answer — question, answer, feature, references to the evidence behind it (never its text), per-call model token usage and federated tool calls (never their arguments) — exported to Langfuse for study. Off by default |
+| **Tracing** | Each answer — question, answer, feature, references to the evidence behind it (never its text), per-call model token usage and federated tool calls (never their arguments) — exported to Langfuse for study. Off by default. When on, each person's first traced reply carries a one-time notice (EN/PT) that questions and answers are recorded for up to `TRACE_RETENTION_DAYS` days, admins can read them, and `/privacy` shows and deletes them; "what can you do?" says the same |
 
 ### Every feature at a glance
 
@@ -478,7 +478,7 @@ lists the common ones. The settings worth knowing:
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 | `LANGFUSE_ENVIRONMENT` | Langfuse environment to export to and search on opt-out (`production`) |
-| `TRACE_RETENTION_DAYS` | Days an exported trace is kept; `ingest` deletes this app's older traces daily (default 90). `/privacy` states the same period |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept; `ingest` deletes this app's older traces daily (default 90). `/privacy`, the one-time tracing notice and the capabilities reply state the same period |
 | `BACKUP_RETENTION_DAYS` | Days a database backup is kept, as configured where backups run. Only stated, by `/privacy`; unset (the default) says no backups are kept, so set it when backups are turned on |
 
 Anything that reaches outside the server is off by default. A deployment should
@@ -517,7 +517,8 @@ references only (window, channel, source, score), never its text, but an answer
 can still paraphrase what it drew on. Deleting a message does follow — the
 tombstone deletes the traces built from it, and a failed deletion is retried —
 but Langfuse logins are limited to the console admins and the destination has
-to be protected the way the database is. It is off by default for this reason.
+to be protected the way the database is. It is off by default for this reason,
+and when it is on each person is told once, on their first traced reply.
 
 **No bot can read direct messages between people, on any platform.** Questions
 like "what did people ask me today" cover indexed channels and DMs sent to the

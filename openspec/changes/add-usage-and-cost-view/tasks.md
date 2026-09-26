@@ -23,10 +23,10 @@
 
 ## 4. Disclosure notice (after /privacy delete-everything ships)
 
-- [ ] 4.1 Migration: `person.tracing_notice_version`, `person.tracing_notice_at`
-- [ ] 4.2 One-time EN/PT notice appended to the first reply (DM or channel) per person and version; recorded with the export
-- [ ] 4.3 Capabilities reply states recording of questions and answers, 90 days, admin visibility, `/privacy`
-- [ ] 4.4 Tests: notice shown once per version; not shown to opted-out people or when tracing is off; PT and EN texts; capabilities snapshot
+- [x] 4.1 Migration: `person.tracing_notice_version`, `person.tracing_notice_at`
+- [x] 4.2 One-time EN/PT notice appended to the first reply (DM or channel) per person and version; recorded with the export (claimed right after the traced answer by a conditional UPDATE that refuses opted-out people, rather than in the export's own transaction; see design)
+- [x] 4.3 Capabilities reply states recording of questions and answers, 90 days, admin visibility, `/privacy`
+- [x] 4.4 Tests: notice shown once per version; not shown to opted-out people or when tracing is off; PT and EN texts; capabilities snapshot
 
 ## 5. Admin API (live Langfuse reads)
 

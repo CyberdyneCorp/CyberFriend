@@ -333,7 +333,7 @@ project is never touched.
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
 | `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
-| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, and by `bot`, which states it in `/privacy` |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, and by `bot`, which states it in `/privacy`, the one-time tracing notice and the capabilities reply |
 
 Turning it on with a host but no keys is refused at startup rather than
 silently disabled. A deployment that believes it is recording and is not finds
@@ -377,6 +377,21 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   sweep's backlog never holds an opt-out or a deleted message behind it. `/health` reports the last
   pass under `trace_retention`; a pass that could not read Langfuse shows
   `found: null` and is retried the next day.
+- **People are told, once.** With tracing on, a person's first traced reply
+  (a question answered in a DM or a channel; not a slash command, a fact, an
+  alert proposal or a scheduled run) ends with a notice in their language:
+  their questions and the bot's answers are recorded for up to
+  `TRACE_RETENTION_DAYS` days, CyberFriend admins can read them, and
+  `/privacy` shows and deletes them. `person.tracing_notice_version` and
+  `tracing_notice_at` (migration 0033) record which notice they got and when;
+  the claim is one conditional UPDATE, so two racing replies show it once. It
+  is never shown to an opted-out person or with tracing off, and the
+  capabilities reply ("what can you do?") states the same under **Privacy**.
+  The notice has a version (`NOTICE_VERSION` in `app/tracing_notice.py`):
+  raise it when the statement changes in substance, such as a different
+  `TRACE_RETENTION_DAYS`, and everybody is told again, once. The question
+  that earned the notice was traced before it was shown, so it predates
+  `tracing_notice_at`.
 - **An opt-out stops new exports.** Nothing is exported for a person who has
   opted out of indexing. If the opt-out registry cannot be read, the run is
   withheld rather than exported.

@@ -149,6 +149,7 @@ from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import ScheduledTaskRunner
 from chatmemory.app.scope import LiveScope, ScopeProvider
 from chatmemory.app.self_description import Capabilities
+from chatmemory.app.tracing_notice import TracingNotice
 from chatmemory.app.voice import VoiceQuestions
 from chatmemory.composition import (
     AnswerStack,
@@ -170,6 +171,7 @@ from chatmemory.composition import (
     build_said_by,
     build_schedules,
     build_task_runner,
+    build_tracing_notice,
     build_voice_questions,
 )
 from chatmemory.config import Settings, get_settings
@@ -259,6 +261,7 @@ def build_bot(
     catchup: CatchUpService | None = None,
     said_by: SaidByService | None = None,
     tracer: RunTracer | None = None,
+    tracing_notice: TracingNotice | None = None,
     notifications: AsyncEngine | None = None,
     alert_transport: httpx.AsyncBaseTransport | None = None,
     clock: Clock = utc_now,
@@ -320,6 +323,8 @@ def build_bot(
         # The tracer the answer stack exports through. Catch-up and said-by
         # answer before that stack, so without it neither is ever traced.
         tracer=tracer,
+        # The one-time "your questions are recorded" notice on a traced reply.
+        tracing_notice=tracing_notice,
         alerts=alert_requests,
     )
     if corrections is not None:
@@ -706,6 +711,9 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # The tracer `stack.answers` exports through, so catch-up and said-by
         # answers are traced like every other answer.
         tracer=stack.tracer,
+        # Told once, on their first traced reply, that questions and answers
+        # are recorded. None where tracing is off.
+        tracing_notice=build_tracing_notice(settings, stack.engine, edges.clock),
         # The other end of the queue the ingest process fills. Omitted, the
         # notification tables are written by one process and read by none:
         # `/notifications` says it is unavailable, and nobody is ever told

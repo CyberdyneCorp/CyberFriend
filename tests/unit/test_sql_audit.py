@@ -45,6 +45,7 @@ SQL_MODULES = (
     "feature_requests_sql",
     "privacy_sql",
     "erasure_sql",
+    "tracing_notice_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -585,6 +586,11 @@ UNSCOPED: dict[str, str] = {
     "erasure_sql.OPEN_REQUESTS": (
         "ingest maintenance; open requests with the person's id and one "
         "platform id, to resume. Numbers and ids only, never content"
+    ),
+    # --- tracing_notice_sql: the person's own notice record ---------------
+    "tracing_notice_sql.CLAIM_NOTICE": (
+        "write; a notice version and time on the asker's own person row, "
+        "refused for an opted-out person. No content"
     ),
 }
 

@@ -123,6 +123,7 @@ from chatmemory.adapters.store.privacy_postgres import PostgresPrivacyStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
+from chatmemory.adapters.store.tracing_notice_postgres import PostgresTracingNoticeStore
 from chatmemory.adapters.tracing.langfuse import (
     LangfuseTraceDeleter,
     LangfuseTraceFinder,
@@ -226,6 +227,7 @@ from chatmemory.app.self_description import (
     Command,
     SelfDescriptionAnswerService,
 )
+from chatmemory.app.tracing_notice import TracingNotice
 from chatmemory.app.voice import VoiceLimits, VoiceQuestions
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
@@ -1032,6 +1034,11 @@ def deployment_capabilities(
         obligations=settings.ask_extraction_enabled,
         # Whether a voice message in a DM is heard.
         voice_questions=settings.voice_questions_enabled,
+        # Whether questions and answers are recorded, and for how long: the
+        # same switch `build_tracer` exports on.
+        trace_retention_days=(
+            settings.trace_retention_days if settings.tracing_enabled else None
+        ),
     )
 
 
@@ -1279,6 +1286,22 @@ def build_tracer(
             transport=transport,
         ),
         PostgresRetentionStore(engine),
+    )
+
+
+def build_tracing_notice(
+    settings: Settings, engine: AsyncEngine, clock: Clock = utc_now
+) -> TracingNotice | None:
+    """The one-time tracing notice, or None when nothing is traced.
+
+    Keyed on the switch `build_tracer` exports on: a process with it on either
+    has a tracer or refused to start, so the notice exists exactly where
+    questions are exported. The same switch decides the capabilities line.
+    """
+    if not settings.tracing_enabled:
+        return None
+    return TracingNotice(
+        PostgresTracingNoticeStore(engine), settings.trace_retention_days, clock
     )
 
 
@@ -1945,6 +1968,7 @@ def build_ask_service(
     alerts: AlertRequests | None = None,
     said_by: SaidByService | None = None,
     tracer: RunTracer | None = None,
+    tracing_notice: TracingNotice | None = None,
 ) -> AskService:
     """The Discord-facing use case, over whichever answer service it is given.
 
@@ -1986,6 +2010,9 @@ def build_ask_service(
         # before `answers` and its tracer seam, so without it neither is ever
         # traced.
         tracer=tracer,
+        # The one-time "your questions are recorded" notice. None where
+        # tracing is off, which is where it would be untrue.
+        tracing_notice=tracing_notice,
         # Without this the withheld-evidence notice is built, tested, and
         # structurally unable to fire: retrieval is pre-scoped to
         # asker INTERSECT audience, so nothing is ever dropped later for the

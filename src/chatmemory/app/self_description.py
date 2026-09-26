@@ -44,6 +44,7 @@ from chatmemory.app.reasoning.contract import (
     run_of,
 )
 from chatmemory.app.routing import self_description_question
+from chatmemory.app.tracing_notice import recording_statement
 from chatmemory.domain.audience import DeliveryMode
 from chatmemory.ports.answers import Answer, AnswerService, Question
 
@@ -281,6 +282,7 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "When the conversations don't have the answer I can look it up; "
             "anything from outside this server is labelled as such."
         ),
+        "privacy_heading": "Privacy",
         "commands_heading": "Commands",
         "audience": "In a channel, I only cite what everyone there can read.",
         "audience_dm_hint": "Ask me in a direct message for your full view.",
@@ -353,6 +355,7 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "Quando as conversas não têm a resposta eu posso buscar; o que vem "
             "de fora deste servidor é marcado como tal."
         ),
+        "privacy_heading": "Privacidade",
         "commands_heading": "Comandos",
         "audience": "Num canal, eu só cito o que todos ali podem ler.",
         "audience_dm_hint": (
@@ -387,6 +390,8 @@ class Capabilities:
     obligations: bool = True
     """Whether asks are extracted, so "what do I need to do?" has rows."""
     voice_questions: bool = False
+    trace_retention_days: int | None = None
+    """How long questions and answers are recorded; None where nothing is traced."""
     servers: frozenset[str] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -408,6 +413,7 @@ class Capabilities:
             personal_facts=self.personal_facts,
             obligations=self.obligations,
             voice_questions=self.voice_questions,
+            trace_retention_days=self.trace_retention_days,
         )
 
     def describe(self, language: Language, *, direct_message: bool = False) -> str:
@@ -505,6 +511,16 @@ def _lookups(caps: Capabilities, words: Words, language: Language) -> str:
     return _section(words["lookup_heading"], bullets, words["lookup_note"])
 
 
+def _privacy(caps: Capabilities, words: Words, language: Language) -> str:
+    # Only where runs are exported: saying questions are recorded on a
+    # deployment that records nothing is the same mistake as a missing tool.
+    if caps.trace_retention_days is None:
+        return ""
+    return _section(
+        words["privacy_heading"], [recording_statement(language, caps.trace_retention_days)]
+    )
+
+
 def _commands(caps: Capabilities, words: Words, language: Language) -> str:
     # Alerts and schedules are listed in their own sections, beside how they
     # are asked for, rather than twice.
@@ -523,6 +539,7 @@ _SECTIONS: tuple[Callable[[Capabilities, Words, Language], str], ...] = (
     _scheduled,
     _voice,
     _lookups,
+    _privacy,
     _commands,
 )
 """The optional sections, in the order they are shown. Each is empty where
@@ -537,6 +554,7 @@ def describe_capabilities(
     language: Language = Language.ENGLISH,
     voice_questions: bool = False,
     obligations: bool = True,
+    trace_retention_days: int | None = None,
 ) -> str:
     return Capabilities(
         tuple(external_tools),
@@ -544,6 +562,7 @@ def describe_capabilities(
         personal_facts=personal_facts,
         obligations=obligations,
         voice_questions=voice_questions,
+        trace_retention_days=trace_retention_days,
     ).describe(language)
 
 
