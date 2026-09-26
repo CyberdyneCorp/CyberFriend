@@ -15,17 +15,25 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from chatmemory.adapters.discord.privacy import confirm_word, erasure_reply
+from chatmemory.adapters.discord.privacy import (
+    _TEXT,
+    ErasureChoiceView,
+    confirm_word,
+    erasure_reply,
+)
 from chatmemory.app.erasure import IDLE_BEFORE_RESUME, OPT_OUT_REASON, ErasureService
 from chatmemory.app.language import Language
 from chatmemory.app.optout import OptOutService, PersonPurge
 from chatmemory.domain.identity import PersonRef
+from chatmemory.entrypoints.ingest import erasure_sweep_pass
+from chatmemory.health import HealthState
 from chatmemory.ports.privacy import (
     ErasureCounts,
     ErasureMode,
     ErasureRequest,
     ErasureStep,
 )
+from tests.unit.test_memory_integration import SRC, _function_calls
 
 ALICE = PersonRef("discord", 42)
 NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
@@ -176,6 +184,26 @@ async def test_one_failing_request_does_not_stop_the_sweep() -> None:
     assert not store.request.complete
 
 
+async def test_the_sweep_pass_says_on_health_what_it_finished() -> None:
+    log: list[str] = []
+    service, store = _service(log)
+    state = HealthState()
+
+    await erasure_sweep_pass(service, state)
+    assert store.request.complete
+    assert state.details["erasure"]["finished"] == 1  # type: ignore[index]
+
+    idle = HealthState()
+    await erasure_sweep_pass(service, idle)
+    assert "erasure" not in idle.details, "nothing to resume, nothing reported"
+
+
+def test_the_ingest_process_runs_the_erasure_sweep() -> None:
+    """The crash-resume guarantee rests on this one line of wiring."""
+    ingest = SRC / "entrypoints" / "ingest.py"
+    assert {"erasure_sweep_loop", "build_erasure"} <= _function_calls(ingest, "main")
+
+
 # --- the reply ---------------------------------------------------------------------
 
 DONE = ErasureRequest(
@@ -223,3 +251,40 @@ def test_the_reply_and_the_word_are_in_portuguese_for_a_portuguese_caller() -> N
     assert reply.startswith("Pronto. Eu apaguei:")
     assert "agendadas para exclusão" in reply
     assert confirm_word(PT) == "APAGAR" and confirm_word(EN) == "DELETE"
+
+
+def test_a_person_already_opted_out_is_told_they_stay_out() -> None:
+    """Erasing never lifts an admin's opt-out, so the reply must not promise
+    that new messages are archived."""
+    reply = erasure_reply(DONE, EN, archiving=False)
+
+    assert "You stay opted out" in reply
+    assert "archived as usual" not in reply
+    assert "Você continua fora" in erasure_reply(DONE, PT, archiving=False)
+
+
+async def test_a_person_already_opted_out_gets_one_button() -> None:
+    async def erase(mode: ErasureMode) -> ErasureRequest:
+        raise AssertionError("not pressed")
+
+    both = ErasureChoiceView(1, EN, erase)
+    one = ErasureChoiceView(1, EN, erase, archiving=False)
+
+    assert [getattr(b, "label", None) for b in both.children] == [
+        "Delete everything",
+        "Delete everything and stop archiving me",
+    ]
+    assert [getattr(b, "label", None) for b in one.children] == ["Delete everything"]
+
+
+def test_every_privacy_string_is_used() -> None:
+    """A key nothing reads is a case the code claims to handle and does not
+    (`erase_unavailable` was one: the button is hidden instead)."""
+    table = SRC / "adapters" / "discord" / "privacy.py"
+    own = table.read_text()
+    other = "\n".join(p.read_text() for p in SRC.rglob("*.py") if p != table)
+
+    def uses(key: str) -> int:
+        return sum(text.count(f"{q}{key}{q}") for q in "\"'" for text in (own, other))
+
+    assert [key for key in _TEXT if uses(key) < 2] == []

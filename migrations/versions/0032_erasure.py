@@ -23,6 +23,12 @@ from the schema:
     once a person's `media_usage` rows are deleted: erasure folds their seconds
     in here, and the ceiling sums both tables. No person, no message, no text.
 
+*   A trace whose Langfuse deletion was confirmed keeps only its id and
+    `deleted_at`; the asker and the quoted-message links are cleared, and a
+    finished asker search is deleted. Existing rows are scrubbed here, and
+    the trace index does the same from now on, so an erasure leaves no record
+    of when the person asked.
+
 Revision ID: 0032
 Revises: 0031
 """
@@ -167,6 +173,21 @@ $$ LANGUAGE plpgsql
 """
 
 
+#: A trace whose deletion Langfuse confirmed keeps its id and `deleted_at`
+#: only (`CONFIRM_DELETED` does this from now on); rows confirmed before this
+#: revision still name the asker and the quoted messages. Not undone on
+#: downgrade: nothing reads them once the trace is gone.
+SCRUB_CONFIRMED_TRACES = (
+    "UPDATE trace_export SET asker_platform_user_id = NULL "
+    "WHERE deleted_at IS NOT NULL AND asker_platform_user_id IS NOT NULL",
+    "DELETE FROM trace_export_message tm USING trace_export t "
+    "WHERE t.trace_id = tm.trace_id AND t.deleted_at IS NOT NULL",
+)
+
+#: A finished asker search is deleted rather than closed from now on.
+SCRUB_FINISHED_SEARCHES = "DELETE FROM trace_asker_search WHERE completed_at IS NOT NULL"
+
+
 def _purge_function(statements: tuple[str, ...]) -> str:
     return (
         "CREATE OR REPLACE FUNCTION purge_person_derived(p_person_id bigint) "
@@ -250,6 +271,9 @@ def upgrade() -> None:
         "FOR EACH ROW EXECUTE FUNCTION reject_erased_mention()"
     )
     op.execute(_purge_function(PURGES))
+    for statement in SCRUB_CONFIRMED_TRACES:
+        op.execute(statement)
+    op.execute(SCRUB_FINISHED_SEARCHES)
 
 
 def downgrade() -> None:

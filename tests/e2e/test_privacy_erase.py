@@ -22,6 +22,9 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
+from chatmemory.app.optout import OptOutService
+from chatmemory.domain.identity import PersonRef
 from tests.e2e.conftest import DEFAULT_CORPUS
 from tests.e2e.harness.conversation import Conversation, E2EBot, Turn
 from tests.e2e.harness.discord_wire import Sent
@@ -226,6 +229,31 @@ async def test_delete_everything_and_stop_archiving(traced: E2EBot) -> None:
     await bot.ingest.sweep_traces()
     assert asked in _deleted(bot)
 
+    await bot.chatter("general", leo, "not archived", at=datetime.now(UTC) + timedelta(minutes=1))
+    assert (await _left(bot.engine, leo.id))["message"] == 0
+
+
+async def test_a_person_an_admin_opted_out_is_not_promised_archiving(traced: E2EBot) -> None:
+    """Erasing never lifts an opt-out, so the choice offers one button and the
+    reply says they stay out, not that new messages are archived."""
+    bot = traced
+    here = await _leo_with_history(bot)
+    leo = here.who
+    await OptOutService(PostgresRetentionStore(bot.engine)).opt_out(
+        PersonRef("discord", leo.id), "console:e2e"
+    )
+
+    choice = await _choice(here)
+
+    assert [label for label, _ in choice.buttons] == ["Delete everything"]
+    assert "You're already opted out" in choice.text
+    assert "archived as usual" not in choice.text
+
+    done = await _confirm(here, choice, "Delete everything", "DELETE")
+
+    assert "You stay opted out" in done.text
+    assert "archived as usual" not in done.text
+    assert await _opted_out(bot.engine, leo.id)
     await bot.chatter("general", leo, "not archived", at=datetime.now(UTC) + timedelta(minutes=1))
     assert (await _left(bot.engine, leo.id))["message"] == 0
 

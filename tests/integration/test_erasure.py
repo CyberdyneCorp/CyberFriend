@@ -14,6 +14,7 @@ Run against a database at head (`alembic upgrade head`).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -32,6 +33,7 @@ from chatmemory.app.erasure import IDLE_BEFORE_RESUME, ErasureService
 from chatmemory.app.language import Language
 from chatmemory.app.optout import OptOutService
 from chatmemory.app.privacy import RetentionFacts
+from chatmemory.app.reasoning.tracing import TraceWithdrawal
 from chatmemory.composition import build_erasure
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.domain.messages import Message
@@ -270,6 +272,100 @@ async def test_erasure_leaves_a_tombstone_and_nothing_else(
     assert "quotes-bob" not in await _pending(clean)
     assert f"t1-{BOB.platform_user_id}" not in await _pending(clean)
     assert await PostgresTraceIndex(clean).open_asker_searches(10) == [ALICE.platform_user_id]
+
+
+#: What records that a person asked or was quoted in a trace. Kept only while a
+#: deletion is pending, since it is how the sweep finds the traces.
+TRACE_RECORDS = {
+    "trace_export": "SELECT count(*) FROM trace_export WHERE asker_platform_user_id = :u",
+    "trace_export_message": (
+        "SELECT count(*) FROM trace_export_message "
+        "WHERE platform_message_id = ANY(CAST(:m AS bigint[]))"
+    ),
+    "trace_asker_search": "SELECT count(*) FROM trace_asker_search WHERE platform_user_id = :u",
+}
+
+
+class Langfuse:
+    """Deletes whatever it is asked to, and finds nothing more by asker."""
+
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    async def delete_traces(self, trace_ids: Sequence[str]) -> bool:
+        self.deleted.extend(trace_ids)
+        return True
+
+    async def find_traces_by_user(self, platform_user_id: int) -> list[str]:
+        return []
+
+
+@pytest.mark.parametrize("mode", list(ErasureMode))
+async def test_once_langfuse_confirms_no_record_of_their_traces_is_left(
+    clean: AsyncEngine, mode: ErasureMode
+) -> None:
+    """After the withdrawal sweep, nothing says when they asked or which
+    trace quoted them: a confirmed trace keeps its id and deletion time only."""
+    seeded = await _seed(clean)
+    # Confirmed before this revision, with the asker still on it: the
+    # migration scrubs such rows (`test_the_upgrade_scrubs_confirmed_traces`).
+    await _exec(clean, "DELETE FROM trace_export WHERE trace_id LIKE 't2-%'")
+    await _erase(clean, mode)
+    records = {"u": ALICE.platform_user_id, "m": seeded.alice_messages}
+
+    async def records_left() -> dict[str, int]:
+        return {t: await _count(clean, q, **records) for t, q in TRACE_RECORDS.items()}
+
+    assert await records_left() == dict.fromkeys(TRACE_RECORDS, 1), (
+        "kept while the deletion is pending: it is how the sweep finds them"
+    )
+
+    langfuse = Langfuse()
+    index = PostgresTraceIndex(clean)
+    withdrawal = TraceWithdrawal(index, langfuse, langfuse)
+    await withdrawal.search_askers()
+    await withdrawal.drain_pending()
+
+    assert {"quotes-alice", f"t1-{ALICE.platform_user_id}"} <= set(langfuse.deleted)
+    assert await records_left() == dict.fromkeys(TRACE_RECORDS, 0)
+    assert await _count(
+        clean,
+        "SELECT count(*) FROM trace_export WHERE trace_id = 'quotes-alice' "
+        "AND deleted_at IS NOT NULL",
+    ) == 1, "the id stays, so a lagging Langfuse listing does not queue it again"
+    assert await _count(
+        clean, "SELECT count(*) FROM trace_export_message WHERE trace_id = 'quotes-bob'"
+    ) == 1, "Bob's trace is not touched"
+
+
+async def test_the_upgrade_scrubs_confirmed_traces(clean: AsyncEngine) -> None:
+    await clean.dispose()
+    try:
+        alembic("downgrade", "0031")
+        for sql in (
+            "INSERT INTO trace_export (trace_id, created_at, asker_platform_user_id, deleted_at) "
+            "VALUES ('gone', now(), 9101, now()), ('live', now(), 9101, NULL)",
+            "INSERT INTO trace_export_message (trace_id, platform_message_id) "
+            "VALUES ('gone', 1), ('live', 2)",
+            "INSERT INTO trace_asker_search (platform_user_id, completed_at) "
+            "VALUES (9101, now()), (9102, NULL)",
+        ):
+            await _exec(clean, sql)
+        await clean.dispose()
+        alembic("upgrade", "head")
+        async with clean.connect() as conn:
+            rows = await conn.execute(
+                text("SELECT trace_id, asker_platform_user_id FROM trace_export")
+            )
+            askers = {str(r[0]): r[1] for r in rows}
+            links = await conn.scalars(text("SELECT trace_id FROM trace_export_message"))
+            searches = await conn.scalars(text("SELECT platform_user_id FROM trace_asker_search"))
+        assert askers == {"gone": None, "live": 9101}
+        assert list(links) == ["live"]
+        assert list(searches) == [9102], "a pending search is still work to do"
+    finally:
+        await clean.dispose()
+        alembic("upgrade", "head")
 
 
 async def test_the_monthly_ceiling_is_unchanged_after_the_fold(clean: AsyncEngine) -> None:

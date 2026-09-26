@@ -65,7 +65,7 @@ from chatmemory.adapters.discord.formatting import (
     split_message,
 )
 from chatmemory.adapters.discord.privacy import (
-    Erase,
+    EraseOffer,
     SendDetailsView,
     channel_pages,
     delete_everything_view,
@@ -115,7 +115,7 @@ from chatmemory.app.indexing import (
 )
 from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
-from chatmemory.app.privacy import PrivacyReport, PrivacyService, RetentionFacts
+from chatmemory.app.privacy import PrivacyReport, PrivacyService
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import ScheduleService
 from chatmemory.app.self_description import Capabilities
@@ -1391,7 +1391,7 @@ class CyberFriendClient(discord.Client):
                 intro = privacy_text("intro_direct", language)
                 erase = self._privacy_erase(interaction, report)
                 view = (
-                    delete_everything_view(interaction.user.id, language, *erase)
+                    delete_everything_view(interaction.user.id, language, erase)
                     if erase
                     else None
                 )
@@ -1431,7 +1431,7 @@ class CyberFriendClient(discord.Client):
 
     def _privacy_erase(
         self, interaction: discord.Interaction, report: PrivacyReport
-    ) -> tuple[Erase, RetentionFacts] | None:
+    ) -> EraseOffer | None:
         """[Delete everything...] for the caller, or None when nothing can erase.
 
         Bound to the caller's own identity here, when the reply is built, so
@@ -1445,7 +1445,7 @@ class CyberFriendClient(discord.Client):
         async def erase(mode: ErasureMode) -> ErasureRequest:
             return await privacy.erase(person, mode)
 
-        return erase, report.retention
+        return EraseOffer(erase, report.retention, report.inventory.archiving)
 
     @staticmethod
     async def _send_privacy_pages(

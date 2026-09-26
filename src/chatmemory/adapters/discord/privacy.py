@@ -19,8 +19,10 @@ none is written here.
 Both carry [Delete everything...] when the process can erase. It deletes
 nothing itself: it shows what is deleted, the kept list and what each of the
 two choices means, then two buttons, each of which asks for a typed word
-(DELETE, or APAGAR in Portuguese) before anything happens. Only the person who
-asked can press any of it, and the choice expires after two minutes.
+(DELETE, or APAGAR in Portuguese) before anything happens. A person already
+opted out gets only the first button, and is told they stay opted out: erasing
+never lifts an opt-out. Only the person who asked can press any of it, and the
+choice expires after two minutes.
 
 Discord caps a message at 2000 characters, so the report is sent as embeds,
 one per section, split over as many messages ("pages") as the embed limits
@@ -271,17 +273,24 @@ _TEXT: dict[str, dict[Language, str]] = {
     },
     # Delete everything.
     "delete_entry": {EN: "Delete everything…", PT: "Apagar tudo…"},
-    "erase_unavailable": {
-        EN: "I can't delete anything here - this deployment has no storage for it.",
-        PT: "Não consigo apagar nada aqui - esta instalação não tem onde guardar.",
-    },
     "erase_confirm": {
         EN: (
             "**Delete everything I hold about you?**\n"
             "This deletes your archived messages and their attachments, your personal "
             "details, remembered conversation, scheduled questions, alerts, notifications, "
             "suggestions, access tokens and voice usage records, and schedules your recorded "
-            "questions for deletion. **It can't be undone.**\n\n"
+            "questions for deletion. **It can't be undone.**"
+        ),
+        PT: (
+            "**Apagar tudo o que eu guardo sobre você?**\n"
+            "Isso apaga suas mensagens arquivadas e os anexos delas, seus dados pessoais, a "
+            "conversa lembrada, perguntas agendadas, alertas, notificações, sugestões, tokens "
+            "de acesso e registros de uso de voz, e agenda a exclusão das suas perguntas "
+            "registradas. **Não dá para desfazer.**"
+        ),
+    },
+    "erase_choices": {
+        EN: (
             "**Delete everything**: you can keep using CyberFriend. New messages are "
             "archived as usual; nothing from before now is re-imported.\n"
             "**Delete everything and stop archiving me**: CyberFriend will also stop "
@@ -289,16 +298,23 @@ _TEXT: dict[str, dict[Language, str]] = {
             "questions and tracing your questions."
         ),
         PT: (
-            "**Apagar tudo o que eu guardo sobre você?**\n"
-            "Isso apaga suas mensagens arquivadas e os anexos delas, seus dados pessoais, a "
-            "conversa lembrada, perguntas agendadas, alertas, notificações, sugestões, tokens "
-            "de acesso e registros de uso de voz, e agenda a exclusão das suas perguntas "
-            "registradas. **Não dá para desfazer.**\n\n"
             "**Apagar tudo**: você pode continuar usando o CyberFriend. Mensagens novas são "
             "arquivadas normalmente; nada de antes de agora é importado de novo.\n"
             "**Apagar tudo e parar de me arquivar**: o CyberFriend também para de arquivar "
             "suas mensagens, de lembrar fatos e conversas, de responder perguntas por voz e "
             "de registrar suas perguntas."
+        ),
+    },
+    "erase_choice_opted_out": {
+        EN: (
+            "You're already opted out: CyberFriend doesn't archive your messages, remember "
+            "facts and conversations, answer voice questions or trace your questions, and "
+            "that stays so after this."
+        ),
+        PT: (
+            "Você já está fora: o CyberFriend não arquiva suas mensagens, não lembra fatos e "
+            "conversas, não responde perguntas por voz nem registra suas perguntas, e isso "
+            "continua assim depois disto."
         ),
     },
     "erase_button": {EN: "Delete everything", PT: "Apagar tudo"},
@@ -352,6 +368,12 @@ _TEXT: dict[str, dict[Language, str]] = {
         "from before now is re-imported.",
         PT: "Você pode continuar usando o CyberFriend. Mensagens novas são arquivadas "
         "normalmente; nada de antes de agora é importado de novo.",
+    },
+    "erase_still_out": {
+        EN: "You stay opted out: I still don't archive your messages, remember facts and "
+        "conversations, answer voice questions or trace your questions.",
+        PT: "Você continua fora: eu continuo sem arquivar suas mensagens, lembrar fatos e "
+        "conversas, responder perguntas por voz ou registrar suas perguntas.",
     },
     "erase_left": {
         EN: "I've also stopped archiving your messages, remembering facts and conversations, "
@@ -657,14 +679,14 @@ class SendDetailsView(RequesterOnlyView):
         language: Language,
         details: Details,
         timeout: float = DETAILS_WINDOW_SECONDS,
-        erase: tuple[Erase, RetentionFacts] | None = None,
+        erase: EraseOffer | None = None,
     ) -> None:
         super().__init__(requester_id, text("not_yours", language), timeout=timeout)
         self._language = language
         self._details = details
         self.send_button.label = text("details", language)
         if erase is not None:
-            self.add_item(DeleteEverythingButton(requester_id, language, *erase))
+            self.add_item(DeleteEverythingButton(requester_id, language, erase))
 
     @discord.ui.button(label="Send me the details", style=discord.ButtonStyle.primary)
     async def send_button(
@@ -711,12 +733,35 @@ Erase = Callable[[ErasureMode], Awaitable[ErasureRequest]]
 """Runs the erasure for the person who pressed, and returns the finished request."""
 
 
+@dataclass(frozen=True)
+class EraseOffer:
+    """What [Delete everything...] needs, bound when the reply is built.
+
+    `archiving` is False for a person already opted out (by an admin, or an
+    earlier erasure): the first choice would not start archiving them again,
+    so they get one button, and the confirmation and reply say they stay out.
+    """
+
+    erase: Erase
+    retention: RetentionFacts
+    archiving: bool = True
+
+
 def confirm_word(language: Language) -> str:
     return CONFIRM_WORDS[_lang(language)]
 
 
-def erasure_reply(request: ErasureRequest, language: Language) -> str:
-    """What was deleted, what is scheduled, and what happens from now on."""
+def _after_erasure(request: ErasureRequest, archiving: bool) -> str:
+    if request.mode is ErasureMode.ERASE_AND_OPT_OUT:
+        return "erase_left"
+    return "erase_stays" if archiving else "erase_still_out"
+
+
+def erasure_reply(request: ErasureRequest, language: Language, archiving: bool = True) -> str:
+    """What was deleted, what is scheduled, and what happens from now on.
+
+    `archiving` is whether the person was archived before: erasing does not
+    lift an opt-out, so for someone already out the first choice says so."""
     counts = request.counts
     lines = [
         text("erase_messages", language, messages=counts.messages),
@@ -729,7 +774,7 @@ def erasure_reply(request: ErasureRequest, language: Language) -> str:
         text("erase_tokens", language, count=counts.tokens),
         text("erase_voice", language),
     ]
-    after = "erase_left" if request.mode is ErasureMode.ERASE_AND_OPT_OUT else "erase_stays"
+    after = _after_erasure(request, archiving)
     return "\n".join(
         [
             text("erase_done", language),
@@ -775,7 +820,7 @@ class ConfirmErasureModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True, thinking=True)
         request = await self._erase(self._mode)
         await interaction.followup.send(
-            erasure_reply(request, self._language),
+            erasure_reply(request, self._language, self._choice.archiving),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -795,7 +840,10 @@ class ConfirmErasureModal(discord.ui.Modal):
 
 
 class ErasureChoiceView(RequesterOnlyView):
-    """The two buttons: delete everything, or delete everything and leave."""
+    """The two buttons: delete everything, or delete everything and leave.
+
+    A person already opted out gets the first alone: they have already left.
+    """
 
     def __init__(
         self,
@@ -803,12 +851,16 @@ class ErasureChoiceView(RequesterOnlyView):
         language: Language,
         erase: Erase,
         timeout: float = ERASE_CHOICE_SECONDS,
+        archiving: bool = True,
     ) -> None:
         super().__init__(requester_id, text("not_yours", language), timeout=timeout)
         self._language = language
         self._erase = erase
+        self.archiving = archiving
         self.erase_button.label = text("erase_button", language)
         self.leave_button.label = text("erase_leave_button", language)
+        if not archiving:
+            self.remove_item(self.leave_button)
 
     @discord.ui.button(label="Delete everything", style=discord.ButtonStyle.danger)
     async def erase_button(
@@ -833,26 +885,25 @@ class ErasureChoiceView(RequesterOnlyView):
 class DeleteEverythingButton(discord.ui.Button[RequesterOnlyView]):
     """[Delete everything...] under `/privacy`: shows the choice, deletes nothing."""
 
-    def __init__(
-        self, requester_id: int, language: Language, erase: Erase, retention: RetentionFacts
-    ) -> None:
+    def __init__(self, requester_id: int, language: Language, offer: EraseOffer) -> None:
         super().__init__(label=text("delete_entry", language), style=discord.ButtonStyle.danger)
         self._requester_id = requester_id
         self._language = language
-        self._erase = erase
-        self._retention = retention
+        self._offer = offer
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        kept = kept_section(self._retention, self._language)
+        offer, language = self._offer, self._language
+        kept = kept_section(offer.retention, language)
+        choices = "erase_choices" if offer.archiving else "erase_choice_opted_out"
         # Deferred, then a followup: the choice is a message of its own, which
         # its two buttons are stored against.
         await interaction.response.defer(ephemeral=True, thinking=True)
         await interaction.followup.send(
-            text("erase_confirm", self._language),
-            embeds=[
-                discord.Embed(title=kept.title, description=kept.description(self._language))
-            ],
-            view=ErasureChoiceView(self._requester_id, self._language, self._erase),
+            f"{text('erase_confirm', language)}\n\n{text(choices, language)}",
+            embeds=[discord.Embed(title=kept.title, description=kept.description(language))],
+            view=ErasureChoiceView(
+                self._requester_id, language, offer.erase, archiving=offer.archiving
+            ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -861,11 +912,10 @@ class DeleteEverythingButton(discord.ui.Button[RequesterOnlyView]):
 def delete_everything_view(
     requester_id: int,
     language: Language,
-    erase: Erase,
-    retention: RetentionFacts,
+    offer: EraseOffer,
     timeout: float = DETAILS_WINDOW_SECONDS,
 ) -> RequesterOnlyView:
     """The view under the direct-message reply: [Delete everything...] alone."""
     view = RequesterOnlyView(requester_id, text("not_yours", language), timeout=timeout)
-    view.add_item(DeleteEverythingButton(requester_id, language, erase, retention))
+    view.add_item(DeleteEverythingButton(requester_id, language, offer))
     return view

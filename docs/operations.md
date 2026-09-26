@@ -800,6 +800,11 @@ live for two minutes and pressable by the asker alone:
   out (`person_opt_out`, reason `self-service erasure`), so nothing they send
   later is archived, remembered, transcribed or traced.
 
+A person already opted out (by an admin, or an earlier erasure) sees only
+**Delete everything**, and the confirmation and reply say they stay opted
+out: erasing never lifts an opt-out, so promising "new messages are archived"
+would be false.
+
 Either opens a modal asking for `DELETE` (or `APAGAR` for a Portuguese
 caller). Any other text deletes nothing. The deletion cannot be undone.
 
@@ -857,6 +862,15 @@ confirmation):
 `erasure_request` itself keeps the counts of the reply, no content. A later
 opt-out or erasure deletes a person's completed requests through
 `purge_person_derived`; the open one survives, since it is what a resume reads.
+
+**Trace bookkeeping.** While a trace deletion is pending, `trace_export` keeps
+the asker's platform id and `trace_export_message` the quoted message ids:
+that is how the withdrawal sweep finds and retries them. Once Langfuse
+confirms the deletion both go, leaving only the trace id and `deleted_at` (so
+a lagging Langfuse listing does not queue the trace again), and a finished
+`trace_asker_search` row is deleted rather than closed. Migration 0032 scrubs
+rows confirmed before it. So after the sweep, nothing records when an erased
+person asked or which trace quoted them.
 
 **Side effect of the voice fold.** The per-person monthly cap counts
 `media_usage`, so a person who erases and keeps using the bot starts the
