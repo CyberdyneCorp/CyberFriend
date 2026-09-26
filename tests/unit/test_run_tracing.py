@@ -22,6 +22,7 @@ from chatmemory.adapters.tracing.langfuse import (
 from chatmemory.app.reasoning.budgets import Budget
 from chatmemory.app.reasoning.contract import (
     AnswerPath,
+    NoRunTracer,
     RunRecord,
     RunStatus,
     RunTrace,
@@ -30,7 +31,11 @@ from chatmemory.app.reasoning.contract import (
 from chatmemory.app.reasoning.fixed import CorrectiveDriver, FixedPath
 from chatmemory.app.reasoning.loop import ReasoningLoop
 from chatmemory.app.reasoning.service import ReasoningAnswerService
-from chatmemory.app.reasoning.tracing import OptOutAwareTracer, TraceWithdrawal
+from chatmemory.app.reasoning.tracing import (
+    OptOutAwareTracer,
+    TracedAnswerService,
+    TraceWithdrawal,
+)
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import Answer
 from tests.unit.test_reasoning_fixed import (
@@ -69,15 +74,16 @@ class FakeOptOut:
 
 def build_service(
     retrieval: FakeRetrieval, tracer: object | None = None
-) -> ReasoningAnswerService:
+) -> TracedAnswerService:
+    """The reasoning service behind the tracer's seam, as composition builds it."""
     critic = ScriptedCritic()
     synthesizer = CitingSynthesizer()
     driver = CorrectiveDriver(retrieval, critic, budget=Budget(max_attempts=4))
-    return ReasoningAnswerService(
+    reasoning = ReasoningAnswerService(
         FixedPath(driver, synthesizer),
         ReasoningLoop(driver, FakePlanner("first", "second"), synthesizer),
-        tracer=tracer,  # type: ignore[arg-type]
     )
+    return TracedAnswerService(reasoning, tracer or NoRunTracer())  # type: ignore[arg-type]
 
 
 # --- what a trace carries ---------------------------------------------
@@ -100,7 +106,8 @@ async def test_a_trace_carries_the_question_the_answer_and_the_evidence() -> Non
 
 async def test_the_evidence_survives_the_service_rebuilding_the_outcome() -> None:
     """`_recorded` builds a new RunOutcome. Dropping `evidence` there would
-    leave every trace holding an answer with nothing behind it."""
+    leave every trace holding an answer with nothing behind it -- and the
+    message index, which is built from it, with nothing to withdraw."""
     tracer = CapturingTracer()
     service = build_service(FakeRetrieval([[evidence(1), evidence(2)]]), tracer)
 
@@ -120,7 +127,7 @@ async def test_no_tracer_configured_exports_nothing_and_still_answers() -> None:
 
 
 async def test_a_tracer_that_raises_does_not_cost_the_person_their_answer() -> None:
-    """Guarded at the service as well as in the adapter: `RunTracer` says an
+    """Guarded at the seam as well as in the adapter: `RunTracer` says an
     implementation must not raise, and a comment is not an enforcement."""
     service = build_service(FakeRetrieval([[evidence(1)]]), ExplodingTracer())
     answer = await service.answer(question(text="what happened in infra"))

@@ -39,8 +39,10 @@ item, `langfuse.py` `_evidence`). The tracer already sends an `environment`
 `RunRecord` gains `feature: str`, set where the route is decided (the router
 and the answer service), not inferred from strings in the adapter. The trace
 `name` is the feature, and the path stays in metadata. The initial set:
-`corpus.fixed`, `corpus.loop`, `market.price`, `market.other`,
-`wallet.balance`, `wallet.activity`, `portfolio`, `web.search`, `time`,
+`corpus.fixed`, `corpus.loop`, `corpus.catchup`, `corpus.said_by`,
+`market.price`, `market.other`,
+`wallet.balance`, `wallet.activity`, `portfolio`, `defi.positions`,
+`web.search`, `time`,
 `obligations`, `decisions`, `capabilities`, `federation`. New features add a
 constant, and a test asserts that every route decision maps to one.
 
@@ -52,7 +54,9 @@ constant, and a test asserts that every route decision maps to one.
   for each federated tool called. The v1 metrics API groups by `tags`, and the
   traces list filters by them.
 - Every read (metrics, traces) and every delete query this change adds filters
-  on `environment = LANGFUSE_ENVIRONMENT` and tag `app:cyberfriend`. Nothing
+  on `environment = LANGFUSE_ENVIRONMENT` and tag `app:cyberfriend` (the
+  opt-out search also accepts the untagged legacy names `fixed` / `loop`, which
+  predate the tag, and nothing else untagged). Nothing
   here ever reads or deletes another app's or environment's traces in a shared
   Langfuse project.
 
@@ -86,8 +90,10 @@ the console admin role, as an ops rule in `docs/operations.md`.
 
 The tracer seam moves from `ReasoningAnswerService._recorded` to the outermost
 answer service wrapper built in `composition.py`. Capabilities, obligations and
-decisions then produce traces with their feature ids. The opted-out rule still
-applies at the seam.
+decisions then produce traces with their feature ids. Catch-up and said-by are
+answered by `AskService` before that chain, so it exports their runs through the
+same tracer and the same `export_run` helper. The opted-out rule still applies
+at the seam.
 
 ### Model prices
 

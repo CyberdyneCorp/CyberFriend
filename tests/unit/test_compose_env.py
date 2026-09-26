@@ -341,3 +341,11 @@ def test_voice_settings_reach_the_bot_and_nothing_else(setting: str) -> None:
     for other in ("ingest", "mcp", "admin"):
         assert f"{setting}=" not in service_block(other)
     assert "VOICE_QUESTIONS_ENABLED=${VOICE_QUESTIONS_ENABLED:-false}" in service_block("bot")
+
+
+def test_the_console_gets_the_langfuse_host_and_not_its_keys() -> None:
+    """The host alone is enough to warn at startup that Langfuse left v3."""
+    block = service_block("admin")
+    assert "LANGFUSE_HOST=" in block
+    for variable in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        assert variable not in block

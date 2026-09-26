@@ -1,19 +1,19 @@
 ## 1. Ops
 
 - [ ] 1.1 (Done in add-privacy-dashboard 1.2) `LangfuseTraceDeleter` built with `edges.http_transport`
-- [ ] 1.2 Ops: pin `langfuse/langfuse:3.225.8` and the worker tag in the Coolify `cyberfriend-langfuse` service; record the tags and the v4 trap in `docs/operations.md`; startup warning when `/api/public/health` reports a major version other than 3
-- [ ] 1.3 Ops: limit Langfuse UI logins to the console admin set; document in `docs/operations.md`
+- [ ] 1.2 Ops: pin `langfuse/langfuse:3.225.8` and the worker tag in the Coolify `cyberfriend-langfuse` service; record the tags and the v4 trap in `docs/operations.md`; startup warning when `/api/public/health` reports a major version other than 3 (docs and warning done; applying the pin in Coolify is the remaining ops step)
+- [ ] 1.3 Ops: limit Langfuse UI logins to the console admin set; document in `docs/operations.md` (documented; applying it in Coolify is the remaining ops step)
 
 ## 2. What traces carry
 
-- [ ] 2.1 `RunRecord.feature` set by the router/answer service; test that every route decision maps to a feature
-- [ ] 2.2 Trace name = feature; tags `app:cyberfriend`, feature/path/lang/tool; `LANGFUSE_ENVIRONMENT` setting
-- [ ] 2.3 Evidence exported as references only (window id, channel, source, score); test that no evidence text or excerpt is in the batch
-- [ ] 2.4 Move the tracer seam to the outermost answer service; capabilities/obligations/decisions traced
+- [x] 2.1 `RunRecord.feature` set by the router/answer service; test that every route decision maps to a feature
+- [x] 2.2 Trace name = feature; tags `app:cyberfriend`, feature/path/lang/tool; `LANGFUSE_ENVIRONMENT` setting
+- [x] 2.3 Evidence exported as references only (window id, channel, source, score); test that no evidence text or excerpt is in the batch
+- [x] 2.4 Move the tracer seam to the outermost answer service; capabilities/obligations/decisions traced; catch-up/said-by (answered before that chain) traced through the same tracer
 - [ ] 2.5 `ModelUsage` in `BudgetLedger`; thread completion tokens and model through `Plan`/`Grounded`
 - [ ] 2.6 `generation-create` per model call; `span-create` per federated tool call, no arguments
 - [ ] 2.7 `scripts/langfuse_models.py` + checked-in price table; docs
-- [ ] 2.8 Tests: batch shape, no tool arguments exported, opted-out asker still not exported
+- [ ] 2.8 Tests: batch shape, no tool arguments exported, opted-out asker still not exported (batch shape without generations/spans and opted-out asker done with 2.1-2.4; generation/span shape and tool arguments land with 2.5-2.6)
 
 ## 3. Retention
 

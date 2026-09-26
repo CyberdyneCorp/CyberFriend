@@ -7,11 +7,17 @@ trace and never costs a requester an answer -- would then belong to somebody
 else's scheduler. One POST with a timeout is a property you can read off the
 code.
 
-What is sent is the whole run: the question as asked, the answer as sent, the
-decision trail, and every piece of evidence with its text. That is what makes
-it useful for improving the assistant, and it is also why the destination
-holds private-channel content with no viewer scoping. That trade is stated in
-the proposal and in the operator documentation; it is not this file's to make.
+What is sent is the question as asked, the answer as sent, the decision trail
+and a reference to each piece of evidence -- its window, channel, source
+system and score, never its text. Evidence quotes other people's messages,
+private channels and DMs included, and anyone with a Langfuse login could read
+it there; the reference is enough to study a retrieval against the corpus,
+where viewer scoping still applies. `trace_export_message` still records which
+messages a trace drew on, so deleting one withdraws the traces built from it.
+
+A trace is named by its feature and tagged with this application's tag, so
+that every read and delete against a shared Langfuse project can be scoped to
+this application and environment.
 """
 
 from __future__ import annotations
@@ -26,17 +32,24 @@ import httpx
 import structlog
 
 from chatmemory.app.reasoning.contract import AnswerPath, RunTrace
+from chatmemory.app.reasoning.features import FEATURES
+from chatmemory.app.reasoning.loop import FEDERATION_CALL
 from chatmemory.ports.tracing import TraceIndex
 
 log = structlog.get_logger()
 
 DEFAULT_TIMEOUT = 5.0
-#: Enough to study a retrieval, far short of a database dump in a JSON field.
-MAX_EVIDENCE_CHARS = 4000
 
-#: The names this application gives its traces (`_batch` names a trace after
-#: its path). A search of a shared Langfuse project deletes nothing else.
-TRACE_NAMES = frozenset(str(path) for path in AnswerPath)
+APP_TAG = "app:cyberfriend"
+"""Carried by every trace this application exports; reads and deletes filter on it."""
+
+#: The names traces were given before features and the app tag existed. Only
+#: these are recognised without `APP_TAG`: they predate it.
+LEGACY_TRACE_NAMES = frozenset(str(path) for path in AnswerPath)
+#: The names this application gives its traces: the feature ids, and the
+#: legacy path names. A feature id is a generic word (`time`, `portfolio`), so
+#: a row with one is ours only if it also carries `APP_TAG`.
+TRACE_NAMES = FEATURES | LEGACY_TRACE_NAMES
 #: Langfuse's largest page for the traces list.
 SEARCH_PAGE_SIZE = 100
 
@@ -88,9 +101,10 @@ class LangfuseTracer:
         now = _now()
         body: dict[str, Any] = {
             "id": trace_id,
-            "name": str(run.record.path),
+            "name": _name(run),
             "timestamp": now,
             "environment": self._environment,
+            "tags": _tags(run),
             # The asker, so a run can be followed without joining anything.
             # Their platform id, which is what the corpus keys on; no display
             # name, because that is a second copy of somebody's identity in a
@@ -123,7 +137,7 @@ class LangfuseTracer:
                 ],
                 "blocked": [str(b.action) for b in run.record.blocked_actions],
                 "evidence": [_evidence(e) for e in run.evidence],
-                "citations": [c.excerpt for c in run.answer.citations],
+                "citations": [_citation(c) for c in run.answer.citations],
             },
         }
         return {
@@ -210,7 +224,9 @@ class LangfuseTraceFinder:
     Filtered twice: the query asks for our environment, and every row is
     checked for our environment and one of our trace names before its id is
     returned, so a server that ignores a filter still cannot widen a deletion
-    to another application's traces.
+    to another application's traces. A row named by a feature must also carry
+    `APP_TAG`: another application in a shared project may well name a trace
+    `time`. Only the legacy path names, which predate the tag, pass without it.
     """
 
     def __init__(
@@ -266,31 +282,119 @@ class LangfuseTraceFinder:
         }
 
     def _ours(self, rows: Sequence[dict[str, Any]]) -> list[str]:
-        return [
-            str(row["id"])
-            for row in rows
-            if row.get("environment") == self._environment
-            and row.get("name") in TRACE_NAMES
-            and row.get("id")
-        ]
+        return [str(row["id"]) for row in rows if row.get("id") and self._is_ours(row)]
+
+    def _is_ours(self, row: dict[str, Any]) -> bool:
+        if row.get("environment") != self._environment:
+            return False
+        name = row.get("name")
+        if name in LEGACY_TRACE_NAMES:
+            return True
+        return name in FEATURES and APP_TAG in (row.get("tags") or ())
+
+
+SUPPORTED_MAJOR = 3
+"""The Langfuse major version this adapter is written against.
+
+v4 answers `trace-create` ingestion with a 400 and drops the v1 reads, so a
+v4 deployment would silently stop recording. The Coolify service is pinned
+(`docs/operations.md`); this is the check that says so when the pin slips.
+"""
+
+
+async def langfuse_major_version(
+    host: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> int | None:
+    """The major version `/api/public/health` reports, or None if it says none."""
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+        response = await client.get(host.rstrip("/") + "/api/public/health")
+        response.raise_for_status()
+        version = str(response.json().get("version") or "")
+    major = version.split(".", 1)[0]
+    return int(major) if major.isdigit() else None
+
+
+async def warn_unless_supported(
+    host: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> int | None:
+    """Log a warning when Langfuse is not on the supported major version.
+
+    Best effort, and never raises: a trace store that cannot be reached must
+    not stop a process from starting. Returns the major version seen.
+    """
+    try:
+        major = await langfuse_major_version(host, timeout, transport)
+    except Exception as exc:  # noqa: BLE001 - a startup check, never a startup failure
+        log.warning("tracing.langfuse_health_unreadable", error=str(exc))
+        return None
+    if major != SUPPORTED_MAJOR:
+        log.warning(
+            "tracing.langfuse_unsupported_version",
+            major=major,
+            supported=SUPPORTED_MAJOR,
+        )
+    return major
+
+
+def _name(run: RunTrace) -> str:
+    """The feature, or the path for a record no answer service named."""
+    return run.record.feature or str(run.record.path)
+
+
+def _tags(run: RunTrace) -> list[str]:
+    """What the metrics API groups by and the traces list filters by."""
+    tags = [
+        APP_TAG,
+        f"feature:{_name(run)}",
+        f"path:{run.record.path}",
+        f"lang:{run.language or 'unknown'}",
+    ]
+    tags.extend(f"tool:{name}" for name in _tools(run))
+    return tags
+
+
+def _tools(run: RunTrace) -> list[str]:
+    """The federated tools the run asked to call, by qualified name.
+
+    Names only: the arguments can hold a wallet address or a query, and are
+    never exported.
+    """
+    called = {
+        d.detail
+        for d in run.record.decisions
+        if d.name == FEDERATION_CALL and d.outcome == "tool_requested" and d.detail
+    }
+    return sorted(called)
 
 
 def _evidence(item: Any) -> dict[str, Any]:
+    """A reference to the evidence, never its text or any excerpt of it."""
     return {
         "window_id": item.window_id,
         "channel": str(item.channel),
         "source_system": item.source_system,
         "score": round(item.score, 4),
-        "relevance": str(item.relevance_source),
-        "author": item.author_display,
-        "url": item.url,
-        "text": item.text[:MAX_EVIDENCE_CHARS],
+    }
+
+
+def _citation(item: Any) -> dict[str, Any]:
+    """Which message a citation points at, never what it quotes."""
+    return {
+        "channel": str(item.channel),
+        "message_id": item.message_id,
+        "source_system": item.source_system,
     }
 
 
 def _message_ids(run: RunTrace) -> list[int]:
-    """Every corpus message the trace quotes.
+    """Every corpus message the trace draws on: its evidence and its citations.
 
+    Citations count because an answer given from records -- an obligation, a
+    decision -- quotes its source message without holding evidence for it.
     External evidence carries no message ids, so nothing is recorded for it --
     which is right: there is no tombstone coming for a Wikipedia article.
     """
@@ -298,4 +402,5 @@ def _message_ids(run: RunTrace) -> list[int]:
     for item in run.evidence:
         if item.from_corpus:
             ids.update(item.message_ids)
+    ids.update(c.message_id for c in run.answer.citations if c.is_corpus)
     return sorted(ids)

@@ -47,19 +47,17 @@ from chatmemory.app.egress import (
     MARKET_INDEX_PROVIDER,
 )
 from chatmemory.app.language import Language, detect
+from chatmemory.app.reasoning import features
 from chatmemory.app.reasoning.budgets import Budget
 from chatmemory.app.reasoning.contract import (
     AnswerPath,
     Decision,
     DecisionMaker,
     LoggingRunRecorder,
-    NoRunTracer,
     RunOutcome,
     RunRecord,
     RunRecorder,
     RunStatus,
-    RunTrace,
-    RunTracer,
     TerminalCause,
 )
 from chatmemory.app.reasoning.fixed import CorrectiveDriver, FixedPath
@@ -73,6 +71,7 @@ from chatmemory.app.reasoning.ports import (
 )
 from chatmemory.app.reasoning.stages import ModelCritic, ModelPlanner, ModelSynthesizer
 from chatmemory.app.routing import (
+    MarketKind,
     MarketQuestion,
     PositionKind,
     Route,
@@ -128,24 +127,53 @@ class ChainHandler:
     servers: frozenset[str]
     tool: str | None
     decision: str
+    feature: str
 
 
 CHAIN_HANDLERS = {
-    CryptoRoute.WALLET_ACTIVITY: ChainHandler(DEFI_SERVERS, ACTIVITY_TOOL, "wallet_activity"),
-    CryptoRoute.PORTFOLIO: ChainHandler(DEFI_SERVERS, PORTFOLIO_TOOL, "portfolio"),
+    CryptoRoute.WALLET_ACTIVITY: ChainHandler(
+        DEFI_SERVERS, ACTIVITY_TOOL, "wallet_activity", features.WALLET_ACTIVITY
+    ),
+    CryptoRoute.PORTFOLIO: ChainHandler(
+        DEFI_SERVERS, PORTFOLIO_TOOL, "portfolio", features.PORTFOLIO
+    ),
     CryptoRoute.DEFI_LIQUIDITY: ChainHandler(
-        DEFI_SERVERS, DEFI_TOOLS[PositionKind.LIQUIDITY], f"defi_{PositionKind.LIQUIDITY}"
+        DEFI_SERVERS,
+        DEFI_TOOLS[PositionKind.LIQUIDITY],
+        f"defi_{PositionKind.LIQUIDITY}",
+        features.DEFI_POSITIONS,
     ),
     CryptoRoute.DEFI_LENDING: ChainHandler(
-        DEFI_SERVERS, DEFI_TOOLS[PositionKind.LENDING], f"defi_{PositionKind.LENDING}"
+        DEFI_SERVERS,
+        DEFI_TOOLS[PositionKind.LENDING],
+        f"defi_{PositionKind.LENDING}",
+        features.DEFI_POSITIONS,
     ),
     CryptoRoute.DEFI_BOTH: ChainHandler(
-        DEFI_SERVERS, DEFI_TOOLS[PositionKind.BOTH], f"defi_{PositionKind.BOTH}"
+        DEFI_SERVERS,
+        DEFI_TOOLS[PositionKind.BOTH],
+        f"defi_{PositionKind.BOTH}",
+        features.DEFI_POSITIONS,
     ),
-    CryptoRoute.WALLET_BALANCE: ChainHandler(CHAIN_SERVERS, None, "wallet"),
+    CryptoRoute.WALLET_BALANCE: ChainHandler(
+        CHAIN_SERVERS, None, "wallet", features.WALLET_BALANCE
+    ),
 }
 """One row per chain label. With no address to read, any of them is answered
 with a request for one (`wallet_address_missing`), and nothing is read."""
+
+MARKET_FEATURES = {
+    MarketKind.CRYPTO: features.MARKET_PRICE,
+    MarketKind.INDEX: features.MARKET_PRICE,
+    MarketKind.CONVERSION: features.MARKET_OTHER,
+}
+"""The feature each kind of market figure is counted as."""
+
+CORPUS_FEATURES = {
+    Route.FIXED: features.CORPUS_FIXED,
+    Route.LOOP: features.CORPUS_LOOP,
+}
+"""The feature a corpus run is counted as, by the route it finally took."""
 
 MCP_CHANGE_REFUSAL = (
     "I can't add, remove or change MCP servers from chat. Connecting a server "
@@ -211,21 +239,23 @@ class ReasoningAnswerService:
         loop: ReasoningLoop,
         recorder: RunRecorder | None = None,
         classifier: Callable[[str], RoutingDecision] = classify,
-        tracer: RunTracer | None = None,
         clock: Clock = utc_now,
     ) -> None:
         self._fixed = fixed
         self._loop = loop
         self._recorder = recorder or LoggingRunRecorder()
         self._classify = classifier
-        self._tracer = tracer or NoRunTracer()
         self._clock = clock
 
     async def answer(self, question: Question) -> Answer:
         return (await self.answer_run(question)).answer
 
     async def answer_run(self, question: Question) -> RunOutcome:
-        """The same work as `answer`, returning the operator record too."""
+        """The same work as `answer`, returning the operator record too.
+
+        Every record leaves here named by its feature, so the tracer at the
+        outermost answer service names the trace without inferring anything.
+        """
         routing = self._classify(question.text)
         decisions = [_route_decision(routing)]
         direct = await self._answer_outside_corpus(question)
@@ -251,6 +281,7 @@ class ReasoningAnswerService:
             outcome = await self._loop.run(question, consult_outside=False)
         else:
             outcome = await self._fixed.run(question)
+        outcome = _named(outcome, CORPUS_FEATURES[route])
 
         # The fixed path searches the corpus and nothing else, and it carries
         # nearly every question -- which left every external tool unreachable
@@ -275,7 +306,7 @@ class ReasoningAnswerService:
             )
             escalated = await self._loop.run(question)
             if _improves_on(outcome, escalated):
-                outcome = escalated
+                outcome = _named(escalated, features.FEDERATION)
 
         return await self._recorded(question, outcome, decisions)
 
@@ -287,26 +318,9 @@ class ReasoningAnswerService:
             decisions=(*decisions, *outcome.record.decisions),
         )
         self._recorder.record(record)
-        # After the record, and never in its place: the log line is what an
-        # operator watches live, and must not depend on a remote destination.
-        #
-        # Guarded here as well as in the adapter. `RunTracer` says an
-        # implementation must not raise, and the Langfuse one does not -- but
-        # "must not" is a comment, and the cost of one being wrong is a person
-        # losing their answer to a bookkeeping error. The answer has already
-        # been written by this point; there is nothing left that failing could
-        # usefully abandon.
-        try:
-            await self._tracer.trace(
-                RunTrace(
-                    question=question,
-                    answer=outcome.answer,
-                    record=record,
-                    evidence=outcome.evidence,
-                )
-            )
-        except Exception as exc:  # noqa: BLE001 - tracing never costs a reply
-            log.warning("reasoning.trace_failed", error=str(exc))
+        # The trace is exported by the outermost answer service
+        # (`tracing.TracedAnswerService`), so that answers this service never
+        # sees -- capabilities, obligations, decisions -- are traced too.
         # `evidence` is carried through: rebuilding the outcome without it
         # would leave the tracer holding nothing on any escalated run.
         return RunOutcome(
@@ -326,7 +340,9 @@ class ReasoningAnswerService:
         text = question.text
         if mcp_change_request(text):
             log.info("reasoning.external_route", route="mcp_change_refused")
-            return _route(EXTERNAL_ROUTE, "mcp_change_refused"), refusal(MCP_CHANGE_REFUSAL)
+            return _route(EXTERNAL_ROUTE, "mcp_change_refused"), refusal(
+                MCP_CHANGE_REFUSAL, features.FEDERATION
+            )
         market, asked = _market_request(question)
         if market is not None:
             outcome = await self._loop.run_external(asked, MARKET_SERVERS, verbatim=True)
@@ -338,7 +354,7 @@ class ReasoningAnswerService:
             log.info("reasoning.external_route", route="market", kind=str(market.kind))
             return (
                 _route(EXTERNAL_ROUTE, f"market_{market.kind}"),
-                replace(outcome, answer=answer),
+                _named(replace(outcome, answer=answer), MARKET_FEATURES[market.kind]),
             )
         if time_question(text):
             # The corpus cannot answer what day it is, and asked to try it
@@ -351,7 +367,7 @@ class ReasoningAnswerService:
             # only get it wrong.
             log.info("reasoning.external_route", route="time")
             return _route(EXTERNAL_ROUTE, "time"), refusal(
-                current_time_answer(detect(text), self._clock())
+                current_time_answer(detect(text), self._clock()), features.TIME
             )
         # Remembered questions are the asker's own words as typed.
         previous = tuple(turn.question for turn in question.memory.turns)
@@ -366,7 +382,10 @@ class ReasoningAnswerService:
         if explicit_web_search(text):
             log.info("reasoning.external_route", route="explicit_web_search")
             outcome = await self._loop.run_external(question)
-            return _route(EXTERNAL_ROUTE, "explicit_web_search"), outcome
+            return (
+                _route(EXTERNAL_ROUTE, "explicit_web_search"),
+                _named(outcome, features.WEB_SEARCH),
+            )
         return None
 
 
@@ -389,7 +408,10 @@ class ReasoningAnswerService:
             )
             return (
                 _route(EXTERNAL_ROUTE, "wallet_choose"),
-                refusal(f"{WHICH_SAVED_WALLET}\n{suffix_list(lookup.choose_from)}"),
+                refusal(
+                    f"{WHICH_SAVED_WALLET}\n{suffix_list(lookup.choose_from)}",
+                    handler.feature,
+                ),
             )
         if not addresses:
             log.info(
@@ -397,7 +419,7 @@ class ReasoningAnswerService:
             )
             return (
                 _route(EXTERNAL_ROUTE, "wallet_address_missing"),
-                refusal(WALLET_ADDRESS_MISSING),
+                refusal(WALLET_ADDRESS_MISSING, handler.feature),
             )
         outcome = await self._loop.run_external(
             _spelled_out(question, addresses),
@@ -417,7 +439,7 @@ class ReasoningAnswerService:
         )
         return (
             _route(EXTERNAL_ROUTE, handler.decision),
-            replace(outcome, answer=answer),
+            _named(replace(outcome, answer=answer), handler.feature),
         )
 
 
@@ -558,7 +580,12 @@ def _improves_on(original: RunOutcome, escalated: RunOutcome) -> bool:
     return any(window_id < 0 for window_id in escalated.record.evidence_window_ids)
 
 
-def refusal(text: str) -> RunOutcome:
+def _named(outcome: RunOutcome, feature: str) -> RunOutcome:
+    """`outcome`, its record named by the feature it was for."""
+    return replace(outcome, record=replace(outcome.record, feature=feature))
+
+
+def refusal(text: str, feature: str) -> RunOutcome:
     """An answer that consulted nothing, recorded as blocked by configuration."""
     return RunOutcome(
         # An empty set, not None: nothing was read, so the reply rests on no
@@ -568,6 +595,7 @@ def refusal(text: str) -> RunOutcome:
             path=AnswerPath.FIXED,
             status=RunStatus.ANSWERED,
             cause=TerminalCause.CONFIGURATION_BLOCKED,
+            feature=feature,
         ),
     )
 
@@ -594,7 +622,6 @@ def build_answer_service(
     loop_driver: CorrectiveDriver | None = None,
     recorder: RunRecorder | None = None,
     tools: ToolSurface | None = None,
-    tracer: RunTracer | None = None,
     clock: Clock = utc_now,
 ) -> ReasoningAnswerService:
     """Wire the default composition.
@@ -621,7 +648,7 @@ def build_answer_service(
         writer,
         tools=tools,
     )
-    return ReasoningAnswerService(fixed, loop, recorder, tracer=tracer, clock=clock)
+    return ReasoningAnswerService(fixed, loop, recorder, clock=clock)
 
 
 LOOP_BUDGET = Budget(max_attempts=6, max_model_calls=16, max_tool_calls=24)

@@ -46,8 +46,16 @@ from chatmemory.app.catchup import catch_up_request
 from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.language import Language
 from chatmemory.app.people import name_key
+from chatmemory.app.reasoning import features
 from chatmemory.app.reasoning.budgets import Budget, BudgetLedger
-from chatmemory.app.reasoning.contract import Decision, DecisionMaker, failure_answer
+from chatmemory.app.reasoning.contract import (
+    Decision,
+    DecisionMaker,
+    RunOutcome,
+    TerminalCause,
+    answered,
+    failure_answer,
+)
 from chatmemory.app.reasoning.errors import RetrievalUnavailable
 from chatmemory.app.reasoning.evidence import EvidenceLedger
 from chatmemory.app.reasoning.fixed import consulted_channels, write_answer
@@ -357,10 +365,19 @@ class PeopleDirectory(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SaidByOutcome:
-    """The answer, or None to fall through; and the decision either way."""
+    """The run behind the answer, or None to fall through; and the decision either way.
 
-    answer: Answer | None
+    The run is named `corpus.said_by` and carries the route's decision in its
+    record, so the trace says why this question was answered from one person's
+    messages.
+    """
+
+    run: RunOutcome | None
     decision: Decision
+
+    @property
+    def answer(self) -> Answer | None:
+        return self.run.answer if self.run is not None else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +397,16 @@ def _decision(outcome: str, request: SaidByRequest) -> Decision:
         made_by=DecisionMaker.HEURISTIC,
         detail=f"{request.person.kind}:{label}",
     )
+
+
+def _outcome(
+    decision: Decision,
+    answer: Answer,
+    cause: TerminalCause = TerminalCause.EVIDENCE_SUFFICIENT,
+) -> SaidByOutcome:
+    """An answer given without synthesis, named and carrying the route's decision."""
+    run = answered(answer, features.CORPUS_SAID_BY, cause, decisions=(decision,))
+    return SaidByOutcome(run, decision)
 
 
 class SaidByService:
@@ -416,17 +443,16 @@ class SaidByService:
             target = await self._resolve(viewer, question, request)
         except Exception as exc:  # noqa: BLE001 - any failure is "could not look"
             log.warning("said_by.resolution_unavailable", error=type(exc).__name__)
-            return SaidByOutcome(
-                replace(failure_answer(), consulted_channels=frozenset()),
+            return _outcome(
                 _decision("unavailable", request),
+                replace(failure_answer(), consulted_channels=frozenset()),
+                TerminalCause.DEPENDENCY_FAILED,
             )
         if target is None:
             return SaidByOutcome(None, _decision("fallback", request))
         if isinstance(target, list):
-            return SaidByOutcome(self._which(request, target), _decision("ambiguous", request))
-        return SaidByOutcome(
-            await self._search(question, viewer, request, target), _decision("resolved", request)
-        )
+            return _outcome(_decision("ambiguous", request), self._which(request, target))
+        return await self._search(question, viewer, request, target)
 
     async def _resolve(
         self, viewer: Viewer, question: Question, request: SaidByRequest
@@ -470,7 +496,8 @@ class SaidByService:
 
     async def _search(
         self, question: Question, viewer: Viewer, request: SaidByRequest, target: _Target
-    ) -> Answer:
+    ) -> SaidByOutcome:
+        decision = _decision("resolved", request)
         span = request.span
         query = SearchQuery(
             text=request.topic,
@@ -485,7 +512,11 @@ class SaidByService:
             # A failure, never "they said nothing": that is the one answer
             # that is always wrong when we could not look.
             log.warning("said_by.retrieval_unavailable", error=str(exc))
-            return replace(failure_answer(), consulted_channels=frozenset())
+            return _outcome(
+                decision,
+                replace(failure_answer(), consulted_channels=frozenset()),
+                TerminalCause.DEPENDENCY_FAILED,
+            )
         log.info(
             "said_by.searched",
             asker=str(viewer.person),
@@ -496,11 +527,15 @@ class SaidByService:
         who = self._who(request, target, result)
         if not result.items:
             # Consulted and found empty, across every channel searched.
-            return Answer(
-                text=self._line("empty", request, who),
-                consulted_channels=viewer.visible_channels,
+            return _outcome(
+                decision,
+                Answer(
+                    text=self._line("empty", request, who),
+                    consulted_channels=viewer.visible_channels,
+                ),
+                TerminalCause.CORPUS_EMPTY,
             )
-        return await self._write(question, request, who, result)
+        return await self._write(question, request, who, result, decision)
 
     def _who(self, request: SaidByRequest, target: _Target, result: RetrievalResult) -> str:
         if target.kind is SlotKind.SELF:
@@ -517,16 +552,22 @@ class SaidByService:
         return words[key].format(who=who, about=about, when=when)
 
     async def _write(
-        self, question: Question, request: SaidByRequest, who: str, result: RetrievalResult
-    ) -> Answer:
+        self,
+        question: Question,
+        request: SaidByRequest,
+        who: str,
+        result: RetrievalResult,
+        decision: Decision,
+    ) -> SaidByOutcome:
         evidence = EvidenceLedger()
         evidence.add(result.items, result.source_system)
-        decisions: list[Decision] = []
+        decisions: list[Decision] = [decision]
+        spend = BudgetLedger(SAID_BY_BUDGET)
         answer = await write_answer(
             self._synthesizer,
             replace(question, text=self._directive(question.text, request, who)),
             evidence,
-            BudgetLedger(SAID_BY_BUDGET),
+            spend,
             decisions,
             partial=result.truncated,
         )
@@ -534,14 +575,25 @@ class SaidByService:
         if answer.abstained:
             # Their messages were found, but none the model could cite about
             # this: to the asker that is "nothing about it", the same sentence.
-            return replace(
+            answer = replace(
                 answer,
                 text=self._line("empty", request, who),
                 abstained=False,
                 consulted_channels=consulted,
             )
-        header = self._line("header", request, who)
-        return replace(answer, text=f"{header}\n\n{answer.text}", consulted_channels=consulted)
+        else:
+            header = self._line("header", request, who)
+            answer = replace(
+                answer, text=f"{header}\n\n{answer.text}", consulted_channels=consulted
+            )
+        run = answered(
+            answer,
+            features.CORPUS_SAID_BY,
+            spend=spend.spend(),
+            decisions=tuple(decisions),
+            evidence=evidence.items,
+        )
+        return SaidByOutcome(run, decision)
 
     def _directive(self, asked: str, request: SaidByRequest, who: str) -> str:
         about = f" about {request.topic}" if request.topic else ""

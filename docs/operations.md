@@ -278,10 +278,38 @@ the next sign-in starts: the table holds at most ten minutes of them.
 
 ## Tracing
 
-With `TRACING_ENABLED=true` and a Langfuse destination configured, every run is
-exported: the question as asked, the answer as sent, the decision trail, and
-each piece of retrieved evidence with its text. This is what makes it possible
-to say later whether the assistant is getting better.
+With `TRACING_ENABLED=true` and a Langfuse destination configured, every answer
+is exported: the question as asked, the answer as sent, the decision trail, and
+a reference to each piece of retrieved evidence (window id, channel, source
+system, score) and each citation (channel, message id, source system). The
+evidence text and citation excerpts are **not** exported. This is what makes it
+possible to say later whether the assistant is getting better.
+
+Every answer service is traced, not only the two reasoning paths: the tracer
+sits at the outermost answer service, so capabilities, obligations and
+decisions replies are exported too, and the catch-up and said-by routes -- which
+the ask service answers before that chain -- export through the same tracer.
+Each trace is:
+
+- **named by its feature**, a stable id decided where the route is decided:
+  `corpus.fixed`, `corpus.loop`, `corpus.catchup` ("what did I miss in #x"),
+  `corpus.said_by` ("what did Ana say about X"), `market.price` (crypto and
+  index prices),
+  `market.other` (currency conversions), `wallet.balance`, `wallet.activity`,
+  `portfolio`, `defi.positions`, `web.search`, `time`, `obligations`,
+  `decisions`, `capabilities`, `federation` (a corpus question answered by
+  escalating to federated tools, or a request to change MCP servers). Traces
+  exported before features existed are named `fixed` or `loop`;
+- **tagged** `app:cyberfriend`, `feature:<id>`, `path:<fixed|loop>`,
+  `lang:<en|pt|unknown>` and `tool:<server:tool>` for each federated tool the
+  run asked to call (names only, never arguments);
+- **in the environment** `LANGFUSE_ENVIRONMENT`.
+
+Every read and delete this application makes against Langfuse is scoped by
+that environment and by our tag: a trace named by a feature is only ours if it
+also carries `app:cyberfriend`, and only the legacy `fixed` / `loop` names,
+which predate the tag, are recognised without it. Another app or environment
+sharing the project is never touched.
 
 | | |
 |---|---|
@@ -297,10 +325,16 @@ out on the day somebody asks what went wrong.
 
 ### What this means for confidentiality
 
-The trace store holds verbatim content from every channel the assistant has
-retrieved from, and it has no viewer scoping — none of the rules that decide
-who may read what in Discord apply to it. **Treat access to Langfuse as
-equivalent to access to the database.**
+The trace store holds every question asked and every answer sent, and an
+answer can paraphrase private channels and DMs it drew on. It has no viewer
+scoping — none of the rules that decide who may read what in Discord apply to
+it. **Treat access to Langfuse as equivalent to access to the database.**
+
+- **Langfuse UI logins are limited to the console admin set** (the people who
+  hold the console `admin` role). In the `cyberfriend-langfuse` Coolify
+  service set `AUTH_DISABLE_SIGNUP=true`, invite only those admins to the
+  organisation, and remove a person's Langfuse account when their console
+  admin role is removed. Nobody else gets a login, not even read-only.
 
 Two things limit the exposure, and it is worth knowing exactly what they do:
 
@@ -320,7 +354,8 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   exported before 0029 carry no recorded asker, so the `ingest` sweep pages
   `GET /api/public/traces?userId=<id>&environment=<LANGFUSE_ENVIRONMENT>`
   for each queued id and records what it finds as pending, keeping only rows
-  in our environment named after one of our answer paths (`fixed`, `loop`):
+  in our environment named after one of our features or answer paths
+  (`fixed`, `loop`):
   another app's or environment's traces in a shared project are never
   deleted. The same sweep then deletes everything pending. The console only
   marks: it holds no Langfuse keys, and `bot` and `ingest` are the processes
@@ -352,6 +387,28 @@ curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
 
 The bot logs `composition.tracing enabled=true` at startup when a destination
 is configured, and `reasoning.trace_failed` when an export is dropped.
+
+### Langfuse version: stay on v3
+
+The Langfuse stack is the Coolify service `cyberfriend-langfuse`, not part of
+this repo's `docker-compose.yml`. Pin its images to exact tags rather than
+`:3`:
+
+| Image | Tag |
+|---|---|
+| `langfuse/langfuse` | `3.225.8` |
+| `langfuse/langfuse-worker` | `3.225.8` |
+
+**The v4 trap:** Langfuse v4 answers `trace-create` ingestion with a 400 and
+removes the v1 public read APIs (`/api/public/traces`, `/api/public/metrics`)
+that deletion and usage reads rely on. A floating `:3` or `:latest` tag that
+moves to v4 silently stops every export and leaves opt-out deletions pending
+forever. An OTLP exporter is a prerequisite for any v4 upgrade.
+
+When `LANGFUSE_HOST` is set, the `admin` process reads `/api/public/health` at
+startup and logs `tracing.langfuse_unsupported_version` if the reported major
+version is not 3 (or `tracing.langfuse_health_unreadable` if it cannot read
+it). Neither stops the process.
 
 ## Checking the console after a deploy
 

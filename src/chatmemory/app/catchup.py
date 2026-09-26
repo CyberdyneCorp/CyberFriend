@@ -46,8 +46,16 @@ import structlog
 
 from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.periods import portuguese_period
+from chatmemory.app.reasoning import features
 from chatmemory.app.reasoning.budgets import Budget, BudgetLedger
-from chatmemory.app.reasoning.contract import Decision, failure_answer
+from chatmemory.app.reasoning.contract import (
+    Decision,
+    DecisionMaker,
+    RunOutcome,
+    TerminalCause,
+    answered,
+    failure_answer,
+)
 from chatmemory.app.reasoning.errors import RetrievalUnavailable
 from chatmemory.app.reasoning.evidence import EvidenceLedger
 from chatmemory.app.reasoning.fixed import consulted_channels, write_answer
@@ -387,18 +395,25 @@ class CatchUpService:
         self, question: Question, request: CatchUpRequest, here: ChannelRef | None
     ) -> Answer:
         """The summary, the refusal, or the honest "it was quiet"."""
+        return (await self.summarise_run(question, request, here)).answer
+
+    async def summarise_run(
+        self, question: Question, request: CatchUpRequest, here: ChannelRef | None
+    ) -> RunOutcome:
+        """`summarise`, with the record behind it, named `corpus.catchup` for tracing."""
         viewer = retrieval_viewer(question)
         target = resolve_channel(viewer, request, here)
         if target.channel is None:
-            log.info(
-                "catchup.refused",
-                asker=str(viewer.person),
-                # Which refusal, never which channel: logs are read by
-                # operators, and an id here would record exactly the
-                # disclosure the refusal exists to prevent.
-                reason="unnamed" if target.refusal is NAME_THE_CHANNEL else "unavailable",
+            # Which refusal, never which channel: logs and traces are read by
+            # operators, and an id here would record exactly the disclosure
+            # the refusal exists to prevent.
+            reason = "unnamed" if target.refusal is NAME_THE_CHANNEL else "unavailable"
+            log.info("catchup.refused", asker=str(viewer.person), reason=reason)
+            return _run(
+                Answer(text=target.refusal, consulted_channels=frozenset()),
+                TerminalCause.ACCESS_BLOCKED,
+                decisions=(_decision("refused", reason),),
             )
-            return Answer(text=target.refusal, consulted_channels=frozenset())
 
         bounds = request.period.bounds(self._clock())
         # The viewer, not the query, is what bounds this to one channel: see
@@ -415,7 +430,10 @@ class CatchUpService:
             # Reported as a failure, never as "it was quiet": saying nothing
             # happened when we could not look is the one answer always wrong.
             log.warning("catchup.retrieval_unavailable", error=str(exc))
-            return replace(failure_answer(), consulted_channels=frozenset())
+            return _run(
+                replace(failure_answer(), consulted_channels=frozenset()),
+                TerminalCause.DEPENDENCY_FAILED,
+            )
 
         note = period_note(target.channel, bounds, request.period_named)
         log.info(
@@ -426,12 +444,15 @@ class CatchUpService:
             days_back=request.period.days_back,
         )
         if not result.items:
-            return Answer(
-                text=f"{note}\n{QUIET_PERIOD}",
-                # Consulted and found empty. Memory re-checks this channel
-                # before recalling the turn, which is right: "nothing was
-                # said" is itself a statement about a channel.
-                consulted_channels=frozenset({target.channel}),
+            return _run(
+                Answer(
+                    text=f"{note}\n{QUIET_PERIOD}",
+                    # Consulted and found empty. Memory re-checks this channel
+                    # before recalling the turn, which is right: "nothing was
+                    # said" is itself a statement about a channel.
+                    consulted_channels=frozenset({target.channel}),
+                ),
+                TerminalCause.CORPUS_EMPTY,
             )
         return await self._write(question, result, bounds, note)
 
@@ -462,7 +483,7 @@ class CatchUpService:
         result: RetrievalResult,
         bounds: tuple[datetime, datetime | None],
         note: str,
-    ) -> Answer:
+    ) -> RunOutcome:
         """Synthesise over the retrieved windows, exactly as an answer is written.
 
         `write_answer` is the fixed path's own, so the summary gets its
@@ -473,21 +494,27 @@ class CatchUpService:
         evidence = EvidenceLedger()
         evidence.add(result.items, result.source_system)
         decisions: list[Decision] = []
+        spend = BudgetLedger(SUMMARY_BUDGET)
         answer = await write_answer(
             self._synthesizer,
             replace(question, text=self._directive(question.text, bounds)),
             evidence,
-            BudgetLedger(SUMMARY_BUDGET),
+            spend,
             decisions,
             partial=result.truncated,
         )
         consulted = consulted_channels(evidence)
-        if answer.abstained:
-            # Not "nothing was found": windows were retrieved, so the period
-            # was not quiet. What failed is the summary, and saying so keeps
-            # the two apart for whoever reads it.
-            return replace(answer, text=f"{note}\n{NO_SUMMARY}", consulted_channels=consulted)
-        return replace(answer, text=f"{note}\n\n{answer.text}", consulted_channels=consulted)
+        # Not "nothing was found" on abstention: windows were retrieved, so the
+        # period was not quiet. What failed is the summary, and saying so keeps
+        # the two apart for whoever reads it.
+        text = f"{note}\n{NO_SUMMARY}" if answer.abstained else f"{note}\n\n{answer.text}"
+        return _run(
+            replace(answer, text=text, consulted_channels=consulted),
+            TerminalCause.EVIDENCE_SUFFICIENT,
+            decisions=tuple(decisions),
+            ledger=spend,
+            evidence=evidence,
+        )
 
     def _directive(self, asked: str, bounds: tuple[datetime, datetime | None]) -> str:
         since, until = bounds
@@ -497,3 +524,26 @@ class CatchUpService:
             else f"between {_stamp(since)} and {_stamp(until)}"
         )
         return SUMMARY_DIRECTIVE.format(span=span, asked=asked)
+
+
+def _decision(outcome: str, detail: str = "") -> Decision:
+    return Decision("catchup", outcome, DecisionMaker.HEURISTIC, detail=detail)
+
+
+def _run(
+    answer: Answer,
+    cause: TerminalCause,
+    *,
+    decisions: tuple[Decision, ...] = (),
+    ledger: BudgetLedger | None = None,
+    evidence: EvidenceLedger | None = None,
+) -> RunOutcome:
+    """A catch-up's outcome, named so its trace says what it was for."""
+    return answered(
+        answer,
+        features.CORPUS_CATCHUP,
+        cause,
+        spend=ledger.spend() if ledger is not None else None,
+        decisions=decisions,
+        evidence=evidence.items if evidence is not None else (),
+    )

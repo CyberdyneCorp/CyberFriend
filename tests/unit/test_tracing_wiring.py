@@ -8,8 +8,8 @@ like nothing having been deleted.
 Two chains, because the halves share no memory:
 
   bot     build_answer_stack -> build_tracer -> OptOutAwareTracer over a
-          LangfuseTracer, handed to build_answers and reaching
-          ReasoningAnswerService, which calls it from every run
+          LangfuseTracer, handed to TracedAnswerService, the outermost
+          answer service, which calls it for every answer the chain gives
 
   ingest  main -> IngestService(traces=build_trace_withdrawal(...)) so a
           tombstone reaches the trace store, and main -> trace_withdrawal_loop
@@ -39,7 +39,7 @@ from chatmemory.config import Settings
 SRC = Path(__file__).resolve().parents[2] / "src" / "chatmemory"
 INGEST = SRC / "entrypoints" / "ingest.py"
 COMPOSITION = SRC / "composition.py"
-SERVICE = SRC / "app" / "reasoning" / "service.py"
+TRACING = SRC / "app" / "reasoning" / "tracing.py"
 
 BASE = {
     "discord_token": "x",
@@ -78,18 +78,36 @@ def _calls(scope: ast.AST, func: str, keyword: str | None = None) -> list[ast.Ca
 # --- the bot half: runs are exported ------------------------------------
 
 
-def test_the_answer_stack_builds_a_tracer_and_hands_it_to_the_service() -> None:
+def test_the_answer_stack_builds_a_tracer_and_hands_it_to_the_seam() -> None:
     """Built but not passed is the failure mode this whole file exists for."""
     stack = _function(COMPOSITION, "build_answer_stack")
     assert _calls(stack, "build_tracer"), "build_answer_stack must build a tracer"
-    handed = _calls(stack, "build_answers", keyword="tracer")
-    assert handed, "the tracer must reach build_answers, not just be constructed"
+    [seam] = _calls(stack, "TracedAnswerService")
+    assert any(
+        getattr(arg, "id", None) == "tracer" for arg in ast.walk(seam)
+    ), "the tracer must reach TracedAnswerService, not just be constructed"
+    assert not _calls(stack, "build_answers", keyword="tracer"), (
+        "a second seam inside reasoning would export its runs twice"
+    )
 
 
-def test_the_service_calls_the_tracer_on_every_run() -> None:
-    recorded = _function(SERVICE, "_recorded")
-    assert _calls(recorded, "trace"), (
-        "_recorded is the one point every run passes through; the trace goes here"
+def test_the_seam_calls_the_tracer_on_every_answer() -> None:
+    answered = _function(TRACING, "answer_run")
+    assert _calls(answered, "export_run"), (
+        "answer_run of the outermost service is the one point every chain "
+        "answer passes through; the trace goes here"
+    )
+    assert _calls(_function(TRACING, "export_run"), "trace"), (
+        "export_run is what hands the run to the tracer"
+    )
+
+
+def test_the_routes_answered_before_the_chain_are_exported_too() -> None:
+    """Catch-up and said-by never reach the chain's seam; the ask service
+    exports their runs through the same helper."""
+    produce = _function(SRC / "app" / "ask.py", "_produce")
+    assert _calls(produce, "export_run"), (
+        "AskService._produce must export the catch-up / said-by run it answers"
     )
 
 
