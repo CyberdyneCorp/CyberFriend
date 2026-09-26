@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime
 import pytest
 from pydantic import ValidationError
 
+from chatmemory import composition
 from chatmemory.adapters.discord.privacy import (
     MESSAGE_EMBED_CHARS,
     MESSAGE_EMBEDS,
@@ -27,6 +28,7 @@ from chatmemory.app.channel_listing import ChannelListingService
 from chatmemory.app.facts import DIRECT_ONLY_KINDS
 from chatmemory.app.language import Language
 from chatmemory.app.privacy import PrivacyService, RetentionFacts
+from chatmemory.composition import build_privacy
 from chatmemory.config import Settings
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
 from chatmemory.ports.facts import FactKind
@@ -170,7 +172,7 @@ def test_trace_retention_and_admin_access_are_stated_from_settings() -> None:
     shown = _text(channel_sections(INVENTORY.summary(), facts, EN))
 
     assert "recorded for up to 45 days, and admins can read them" in shown
-    assert "Recorded now: 6 of your questions." in shown
+    assert "Recorded now: at least 6 of your questions." in shown
     assert "90 days" not in shown
 
 
@@ -200,7 +202,7 @@ def test_the_kept_list_names_everything_that_survives_a_deletion() -> None:
     shown = _text([kept_section(RetentionFacts(True, 90, 21, 7), EN)])
 
     for survivor in (
-        "A minimal record of you",
+        "A record of you",
         "admin change log",
         "Database backups",
         "CyberdyneAuth account",
@@ -208,9 +210,22 @@ def test_the_kept_list_names_everything_that_survives_a_deletion() -> None:
         "Other people's remembered answers",
         "expire within 21 days",
         "Messages I already sent on Discord",
-        "anonymous total of voice minutes",
+        "Your voice minutes for each month, still under your record",
     ):
         assert survivor in shown
+
+
+def test_the_kept_list_describes_opt_out_as_it_is_today() -> None:
+    """Opt-out is the only deletion today: it keeps the name and voice usage.
+
+    Until self-service erasure lands, the list must not promise a cleared name
+    or an anonymised voice total (regression).
+    """
+    shown = _text([kept_section(RETENTION, EN)])
+
+    assert "your name" in shown
+    assert "cleared" not in shown
+    assert "anonymous" not in shown and "nobody attached" not in shown
 
 
 def test_the_statements_are_in_portuguese_for_a_portuguese_caller() -> None:
@@ -318,3 +333,32 @@ def test_backup_retention_is_unset_by_default_and_when_blank() -> None:
 def test_a_zero_backup_retention_is_refused() -> None:
     with pytest.raises(ValidationError):
         Settings(**BASE, backup_retention_days=0)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "tracing"),
+    [
+        ({"tracing_enabled": True, "langfuse_host": "https://lf.example"}, True),
+        ({"tracing_enabled": True}, False),
+        ({"tracing_enabled": False, "langfuse_host": "https://lf.example"}, False),
+    ],
+)
+async def test_build_privacy_states_the_configured_retention(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, object], tracing: bool
+) -> None:
+    """The wiring passes every period from settings, and "tracing" only when
+    `build_tracer` would export: enabled and a Langfuse host set."""
+    monkeypatch.setattr(composition, "PostgresPrivacyStore", lambda engine: _Store())
+    settings = Settings(
+        **BASE,  # type: ignore[arg-type]
+        trace_retention_days=45,
+        memory_retention_days=7,
+        backup_retention_days=14,
+        **overrides,  # type: ignore[arg-type]
+    )
+
+    report = await build_privacy(settings, object(), None, clock=_now).report(  # type: ignore[arg-type]
+        PERSON
+    )
+
+    assert report.retention == RetentionFacts(tracing, 45, 7, 14)

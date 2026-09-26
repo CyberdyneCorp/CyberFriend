@@ -11,16 +11,25 @@ Run against a database at head (`alembic upgrade head`).
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.discord.privacy import channel_sections, kept_section
 from chatmemory.adapters.store.privacy_postgres import PostgresPrivacyStore
+from chatmemory.app.language import Language
+from chatmemory.app.privacy import RetentionFacts
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.facts import FactKind
-from chatmemory.ports.privacy import HeldFact, Inventory, MemoryCounts, NotificationSetting
+from chatmemory.ports.privacy import (
+    RECENT_QUESTIONS,
+    HeldFact,
+    Inventory,
+    MemoryCounts,
+    NotificationSetting,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -218,3 +227,75 @@ async def test_an_unknown_person_is_empty_and_not_created(clean: AsyncEngine) ->
 
     assert held == Inventory()
     assert await _exec(clean, "SELECT count(*) FROM person") == 0
+
+
+async def test_only_unsettled_notifications_are_counted_as_queued(clean: AsyncEngine) -> None:
+    alice = await _person(clean, ALICE, "Alice")
+    bob = await _person(clean, BOB, "Bob")
+    await _message(clean, 5, READABLE, bob)
+    await _message(clean, 6, READABLE, bob)
+    await _queue_notification(clean, alice, 5)
+    await _queue_notification(clean, alice, 6)
+    await _exec(
+        clean,
+        "UPDATE notification SET settled_at = now(), outcome = 'sent' WHERE source_message_id = 5",
+    )
+
+    held = await PostgresPrivacyStore(clean).inventory(ALICE, [READABLE], MONTH)
+
+    assert held.notifications.queued == 1, "a settled notification is no longer waiting"
+
+
+async def test_only_the_latest_questions_are_listed(clean: AsyncEngine) -> None:
+    alice = await _person(clean, ALICE, "Alice")
+    for n in range(RECENT_QUESTIONS + 1):
+        await _exec(
+            clean,
+            "INSERT INTO conversation_turn (person_id, location_platform, location_id, "
+            "location_direct, question, answer, channel_ids, created_at) "
+            "VALUES (:i, 'discord', 1, TRUE, :q, 'a', '{}', :at)",
+            i=alice,
+            q=f"question {n}",
+            at=NOW + timedelta(minutes=n),
+        )
+
+    held = await PostgresPrivacyStore(clean).inventory(ALICE, [READABLE], MONTH)
+
+    assert held.memory.direct_turns == RECENT_QUESTIONS + 1
+    assert held.recent_questions == tuple(
+        f"question {n}" for n in range(RECENT_QUESTIONS, 0, -1)
+    ), "the latest five, newest first"
+
+
+async def test_after_opt_out_the_kept_list_matches_the_rows_that_remain(
+    clean: AsyncEngine,
+) -> None:
+    """Opt-out keeps the name, the notification setting and voice usage.
+
+    The kept list must say so rather than promise a cleared name or an
+    anonymous voice total (regression: it described the not-yet-built erasure).
+    """
+    alice = await _person(clean, ALICE, "Alice Real Name")
+    await _seed_personal(clean, alice, ALICE.platform_user_id)
+
+    await _exec(clean, "INSERT INTO person_opt_out (person_id) VALUES (:i)", i=alice)
+
+    name = await _exec(clean, "SELECT display_name FROM person WHERE id = :i", i=alice)
+    preference = await _exec(
+        clean, "SELECT count(*) FROM notification_preference WHERE person_id = :i", i=alice
+    )
+    held = await PostgresPrivacyStore(clean).inventory(ALICE, [READABLE], MONTH)
+    retention = RetentionFacts(True, 90, 30, None)
+    shown = "\n".join(
+        s.description(Language.ENGLISH)
+        for s in channel_sections(held.summary(), retention, Language.ENGLISH)
+    )
+
+    assert name == "Alice Real Name" and preference == 1
+    assert held.facts == () and not held.archiving
+    assert held.voice_seconds_this_month == 90, "voice usage stays tied to the person"
+    assert "1.5 minutes of your audio" in shown
+    kept = kept_section(retention, Language.ENGLISH).description(Language.ENGLISH)
+    assert "your name and your notification setting" in kept
+    assert "voice minutes for each month, still under your record" in kept
+    assert "cleared" not in kept and "anonymous" not in kept

@@ -50,6 +50,7 @@ OWNER_ID = 900002
 permission check, so no scenario's person may be one."""
 
 EPHEMERAL = 1 << 6
+DEFERRED_CHANNEL_MESSAGE = 5
 IS_VOICE_MESSAGE = 1 << 13
 """The message flag Discord sets on a voice message recorded in the client."""
 
@@ -99,6 +100,10 @@ class Sent:
     def text(self) -> str:
         """The content and every embed, as a person reads the message."""
         return "\n".join([self.content, *self.embeds]).strip("\n")
+
+
+def _is_ephemeral(data: Mapping[str, Any]) -> bool:
+    return bool(int(data.get("flags") or 0) & EPHEMERAL)
 
 
 def _embeds(payload: Mapping[str, Any]) -> tuple[str, ...]:
@@ -426,12 +431,19 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
 
     `events` keeps the response type too, so a scenario can check that a
     command deferred before it followed up.
+
+    As on Discord, the first followup after a deferred channel message
+    (type 5) edits that deferred "thinking" message, so its visibility is the
+    defer's, whatever flags the followup itself carries. A public defer
+    followed by an "ephemeral" followup is therefore recorded as public.
     """
 
     def __init__(self, wire: FakeDiscord) -> None:
         super().__init__()  # type: ignore[no-untyped-call]
         self._wire = wire
         self.events: list[tuple[str, dict[str, Any]]] = []
+        # Interaction token -> whether its pending deferred message is ephemeral.
+        self._deferred: dict[str, bool] = {}
 
     async def request(self, route: Route, session: Any, **kwargs: Any) -> Any:
         payload: dict[str, Any] = kwargs.get("payload") or {}
@@ -440,6 +452,8 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
         if route.path.endswith("/callback"):
             self.events.append(("response", payload))
             data = payload.get("data") or {}
+            if payload.get("type") == DEFERRED_CHANNEL_MESSAGE:
+                self._deferred[token] = _is_ephemeral(data)
             if data.get("content"):
                 # An update (type 7) rewrites the message that was pressed,
                 # which keeps its id: a view it carries is pressed there next.
@@ -448,6 +462,7 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
             return {"interaction": {"id": str(route.webhook_id), "type": 2}}
         if route.method == "DELETE":
             # `delete_original_response`: the deferred "thinking" message.
+            self._deferred.pop(token, None)
             self.events.append(("delete", payload))
             return None
         if route.method == "PATCH":
@@ -456,13 +471,20 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
             return self._wire.bot_message(channel_id, str(payload.get("content") or ""))
         self.events.append(("followup", payload))
         message = self._wire.bot_message(channel_id, str(payload.get("content") or ""))
-        self._record("followup", channel_id, payload, int(message["id"]))
+        ephemeral = self._deferred.pop(token, None)
+        self._record("followup", channel_id, payload, int(message["id"]), ephemeral)
         return message
 
     def _record(
-        self, via: Via, channel_id: int, data: Mapping[str, Any], message_id: int = 0
+        self,
+        via: Via,
+        channel_id: int,
+        data: Mapping[str, Any],
+        message_id: int = 0,
+        ephemeral: bool | None = None,
     ) -> None:
-        ephemeral = bool(int(data.get("flags") or 0) & EPHEMERAL)
+        if ephemeral is None:
+            ephemeral = _is_ephemeral(data)
         buttons, disabled = _buttons(data)
         self._wire.http.sent.append(
             Sent(

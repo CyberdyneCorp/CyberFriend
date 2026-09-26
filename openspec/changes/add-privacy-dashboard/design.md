@@ -127,9 +127,12 @@ survives, in the person's language:
   Name and preferences are cleared.
 - **`config_audit` entries** that refer to them (for example an admin
   opt-out). The log is append-only.
-- **Postgres backups** (Coolify scheduled backups) still hold the data until
-  they age out. The retention period is stated as configured in Coolify and
-  recorded in `docs/operations.md`.
+- **Postgres backups**, if any, still hold the data until they age out. The
+  statement comes from the `BACKUP_RETENTION_DAYS` setting: set, it names that
+  period; unset (the default), it says no backups are kept. The CyberFriend
+  Postgres (`cyberfriend-pgvector`) has no scheduled backups configured today,
+  so the setting stays unset until Coolify backups are turned on, and
+  `docs/operations.md` records this.
 - **The CyberdyneAuth account**, if one was linked. CyberdyneAuth has no
   deletion API yet; the reply says how to ask its team.
 - **Other people's messages** that mention them. Only the mention index goes.
@@ -138,6 +141,17 @@ survives, in the person's language:
   within `MEMORY_RETENTION_DAYS` (default 30).
 - **Messages the bot already sent** in Discord.
 - **An anonymous voice total** for the month, with no person attached.
+
+Until the erasure flow (tasks section 4) ships, the only deletion is opt-out,
+which keeps the person row with its name and notification setting and keeps
+`media_usage` tied to the person. The `/privacy` kept list shipped with the
+dashboard (section 3) states that, not the erasure wording above: it names the
+display name and notification setting in the person record and says voice
+minutes stay under the person's record. Section 4 switches it to the erasure
+wording when the tombstone and the `media_usage_anonymous` fold exist.
+
+The trace count is stated as "at least N": traces exported before 0029 have no
+asker and cannot be counted per person while Langfuse still holds them.
 
 ### Confirmation: one flow, two buttons
 

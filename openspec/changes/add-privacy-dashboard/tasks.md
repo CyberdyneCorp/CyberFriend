@@ -18,7 +18,7 @@
 - [x] 3.1 `PrivacyService.inventory(person)` across all stores in the design table, including `message_media`
 - [x] 3.2 Guild view (ephemeral, counts/kinds) and DM view (embeds, pages)
 - [x] 3.3 Archive coverage from `ChannelListingService`; unreadable channels neither named nor counted
-- [x] 3.4 Fixed statements: questions and answers recorded up to 90 days, admins can read them; the kept list
+- [x] 3.4 Statements from settings: questions and answers recorded up to `TRACE_RETENTION_DAYS`, admins can read them; remembered answers expire within `MEMORY_RETENTION_DAYS`; backups from `BACKUP_RETENTION_DAYS` (unset = no backups kept); the kept list worded for opt-out until section 4 ships
 - [x] 3.5 Command table, `commands.json` snapshot; "forget everything you know about me" reply points to `/privacy`
 - [x] 3.6 Tests: DIRECT_ONLY_KINDS values never in guild reply; no hidden channel names or counts
 
@@ -32,4 +32,4 @@
 - [ ] 4.6 Tests: crash after step 4 resumes; tombstone keeps id, platform ids, `erased_before` and (mode 2) the opt-out flag; backfill does not re-import in either mode; mode 1 archives a new message afterwards; monthly ceiling unchanged after the fold
 - [ ] 4.7 e2e: FakeDiscord `/privacy` -> delete (each mode) -> counts reply; FakeWeb receives trace DELETE; real Postgres has no `message`, `message_media`, `media_usage`, `scheduled_task`, `person_fact`, `conversation_turn`, `mcp_token` or `document_fetch` rows for the person
 - [ ] 4.8 Ops: verify Langfuse v3 deletion removes MinIO event blobs; document
-- [ ] 4.9 Docs: `docs/operations.md` opt-out gap closed; erasure semantics; the kept list; Postgres backup retention; which processes hold the Langfuse key pair
+- [ ] 4.9 Docs: `docs/operations.md` opt-out gap closed; switch the `/privacy` kept list (`kept_person`, `kept_voice`) to the erasure wording; erasure semantics; the kept list; Postgres backup retention; which processes hold the Langfuse key pair

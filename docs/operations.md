@@ -765,11 +765,22 @@ counted, for the same reason as above.
 | Other people's remembered answers expire within N days | `MEMORY_RETENTION_DAYS` |
 | Database backups keep the data until they age out after N days, or no backups are kept | `BACKUP_RETENTION_DAYS` |
 
-The kept list (what survives a deletion) is: a minimal person record, admin
-change-log entries that refer to them, database backups, a linked
-CyberdyneAuth account (not deletable from here yet), other people's messages
-that mention them, other people's remembered answers, messages the bot already
-sent, and an anonymous monthly voice total.
+The kept list (what survives a deletion) describes the only deletion that
+exists today, opt-out: a person record (internal id, platform ids, display
+name and notification setting, which stop re-archiving), admin change-log
+entries that refer to them, database backups, a linked CyberdyneAuth account
+(not deletable from here yet), other people's messages that mention them,
+other people's remembered answers, messages the bot already sent, and their
+monthly voice minutes, still tied to them because they count toward the
+monthly limit. When self-service erasure ships (it clears the name and folds
+voice usage into an anonymous total) the list changes with it.
+
+**Trace count.** "Recorded now: at least N of your questions" counts
+`trace_export` rows whose `asker_platform_user_id` is the person's. Traces
+exported before migration 0029 carry no asker, so they cannot be counted per
+person, yet Langfuse keeps them until `TRACE_RETENTION_DAYS` passes. For that
+long after 0029 deploys the true number may be higher, hence "at least".
+Opt-out still finds those traces through the Langfuse `userId` backstop.
 
 **Backups.** The CyberFriend Postgres (Coolify database
 `cyberfriend-pgvector`) has **no scheduled backups configured today**, so

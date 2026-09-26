@@ -9,7 +9,12 @@ addresses by suffix, suggestion texts and token labels.
 
 Both carry the same statements, in the person's language: how long questions
 and answers are recorded and that admins can read them, and the list of what
-survives a deletion. Every period in them comes from `RetentionFacts`, so
+survives a deletion. The deletion that exists today is opt-out, which keeps
+the person row (name included) and their `media_usage` rows, so the kept list
+says so; it changes when self-service erasure (tasks section 4) lands. The
+trace count is "at least": traces exported before migration 0029 carry no
+asker, so they cannot be counted per person although Langfuse may still hold
+them until TRACE_RETENTION_DAYS. Every period in them comes from `RetentionFacts`, so
 none is written here.
 
 Discord caps a message at 2000 characters, so the report is sent as embeds,
@@ -199,17 +204,18 @@ _TEXT: dict[str, dict[Language, str]] = {
         PT: "Não registro suas perguntas e respostas nesta instalação.",
     },
     "traces_count": {
-        EN: "Recorded now: {count} of your questions.",
-        PT: "Registradas agora: {count} perguntas suas.",
+        EN: "Recorded now: at least {count} of your questions.",
+        PT: "Registradas agora: pelo menos {count} perguntas suas.",
     },
     "kept_person": {
         EN: (
-            "A minimal record of you: an internal id and your account ids, so what "
-            "was deleted is not imported again. Your name and preferences are cleared."
+            "A record of you: an internal id, your account ids, your name and your "
+            "notification setting, so nothing you send is archived again."
         ),
         PT: (
-            "Um registro mínimo seu: um id interno e os ids das suas contas, para que "
-            "o que foi apagado não seja importado de novo. Nome e preferências são apagados."
+            "Um registro seu: um id interno, os ids das suas contas, seu nome e sua "
+            "configuração de notificações, para que nada do que você manda seja "
+            "arquivado de novo."
         ),
     },
     "kept_audit": {
@@ -249,8 +255,10 @@ _TEXT: dict[str, dict[Language, str]] = {
         PT: "Mensagens que eu já mandei no Discord.",
     },
     "kept_voice": {
-        EN: "An anonymous total of voice minutes for the month, with nobody attached.",
-        PT: "Um total anônimo de minutos de voz do mês, sem ninguém associado.",
+        EN: "Your voice minutes for each month, still under your record: they count "
+        "toward the monthly limit.",
+        PT: "Seus minutos de voz de cada mês, ainda no seu registro: eles contam para "
+        "o limite mensal.",
     },
 }
 

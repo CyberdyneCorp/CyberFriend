@@ -127,7 +127,7 @@ LANGFUSE = "langfuse.e2e.test"
 async def configured(
     clean: AsyncEngine, e2e_database_url: str, sealed_network: NetworkSeal
 ) -> AsyncIterator[E2EBot]:
-    """Tracing on with a 30-day retention, and backups kept 14 days."""
+    """Tracing on with a 30-day retention, memory kept 7 days, backups 14 days."""
     settings = e2e_settings(e2e_database_url).model_copy(
         update={
             "tracing_enabled": True,
@@ -135,6 +135,7 @@ async def configured(
             "langfuse_public_key": SecretStr("pk-e2e"),
             "langfuse_secret_key": SecretStr("sk-e2e"),
             "trace_retention_days": 30,
+            "memory_retention_days": 7,
             "backup_retention_days": 14,
         }
     )
@@ -151,6 +152,8 @@ async def test_the_statements_are_the_configured_periods(configured: E2EBot) -> 
     shown = await configured.dm(configured.person("Leo")).slash("privacy")
 
     assert "recorded for up to 30 days, and admins can read them" in shown.text
-    assert "Recorded now: 0 of your questions." in shown.text
+    assert "Recorded now: at least 0 of your questions." in shown.text
+    assert "Deleted after 7 days" in shown.text
+    assert "They expire within 7 days." in shown.text
     assert "Database backups, until they age out after 14 days." in shown.text
     assert "90 days" not in shown.text
