@@ -31,12 +31,13 @@ the statement below changes in substance."""
 _RECORDING = {
     Language.ENGLISH: (
         "Your questions and my answers are recorded for up to {days}, and "
-        "CyberFriend admins can read them. Use `/privacy` to see or delete them."
+        "CyberFriend admins can read them. Use `/privacy` to see how many are kept "
+        "or to delete them."
     ),
     Language.PORTUGUESE: (
         "Suas perguntas e minhas respostas ficam registradas por até {days}, e "
         "os administradores do CyberFriend podem lê-las. Use `/privacy` para "
-        "ver ou apagar."
+        "ver quantas estão guardadas ou apagá-las."
     ),
 }
 

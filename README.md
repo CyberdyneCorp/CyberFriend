@@ -43,7 +43,7 @@ internet said.
 | **Channel media (recording only)** | From `MEDIA_ENABLED_AT`, voice notes and images posted in indexed channels are recorded as pending rows: metadata and a CDN link, nothing downloaded and nothing searchable yet. Transcribing voice notes and reading images come later. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
-| **Tracing** | Each answer — question, answer, feature, references to the evidence behind it (never its text), per-call model token usage and federated tool calls (never their arguments) — exported to Langfuse for study. Off by default. When on, each person's first traced reply carries a one-time notice (EN/PT) that questions and answers are recorded for up to `TRACE_RETENTION_DAYS` days, admins can read them, and `/privacy` shows and deletes them; "what can you do?" says the same |
+| **Tracing** | Each answer — question, answer, feature, references to the evidence behind it (never its text), per-call model token usage and federated tool calls (never their arguments) — exported to Langfuse for study. Off by default. When on, each person's first traced reply carries a one-time notice (EN/PT) that questions and answers are recorded for up to `TRACE_RETENTION_DAYS` days, admins can read them, and `/privacy` shows how many are kept and deletes them; "what can you do?" says the same |
 
 ### Every feature at a glance
 

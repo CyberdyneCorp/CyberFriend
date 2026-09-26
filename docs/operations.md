@@ -378,11 +378,12 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   pass under `trace_retention`; a pass that could not read Langfuse shows
   `found: null` and is retried the next day.
 - **People are told, once.** With tracing on, a person's first traced reply
-  (a question answered in a DM or a channel; not a slash command, a fact, an
-  alert proposal or a scheduled run) ends with a notice in their language:
-  their questions and the bot's answers are recorded for up to
-  `TRACE_RETENTION_DAYS` days, CyberFriend admins can read them, and
-  `/privacy` shows and deletes them. `person.tracing_notice_version` and
+  (a question answered in a DM, a channel or through `/ask`; not a typed
+  command such as `/forget`, a fact, an alert proposal or a scheduled run)
+  ends with a notice in their language: their questions and the bot's answers
+  are recorded for up to `TRACE_RETENTION_DAYS` days, CyberFriend admins can
+  read them, and `/privacy` shows how many are kept and deletes them. The
+  notice is never part of the remembered conversation turn. `person.tracing_notice_version` and
   `tracing_notice_at` (migration 0033) record which notice they got and when;
   the claim is one conditional UPDATE, so two racing replies show it once. It
   is never shown to an opted-out person or with tracing off, and the
@@ -391,7 +392,8 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   raise it when the statement changes in substance, such as a different
   `TRACE_RETENTION_DAYS`, and everybody is told again, once. The question
   that earned the notice was traced before it was shown, so it predates
-  `tracing_notice_at`.
+  `tracing_notice_at`. "Delete everything" clears both columns, so a person
+  who asks again afterwards is told again.
 - **An opt-out stops new exports.** Nothing is exported for a person who has
   opted out of indexing. If the opt-out registry cannot be read, the run is
   withheld rather than exported.

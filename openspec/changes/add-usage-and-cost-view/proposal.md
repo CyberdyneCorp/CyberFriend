@@ -56,7 +56,7 @@ text. That text is the most sensitive thing the console would ever show.
 - **Active disclosure.** The first time a person talks to the bot after this
   ships (DM or channel reply), the reply carries a one-time notice in their
   language (EN/PT): their questions and the bot's answers are recorded for up
-  to 90 days, admins can read them, and `/privacy` shows and deletes them. The
+  to 90 days, admins can read them, and `/privacy` shows how many are kept and deletes them. The
   notice is recorded per person. A person's question text is readable in the
   console only for traces exported after that notice; older traces are
   counted, never shown.

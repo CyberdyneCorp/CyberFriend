@@ -169,6 +169,13 @@ async def _seed(engine: AsyncEngine) -> Seeded:
     bob = await _person(engine, BOB, "Bob")
     await _seed_personal(engine, alice, ALICE.platform_user_id)
     await _seed_personal(engine, bob, BOB.platform_user_id)
+    await _exec(
+        engine,
+        "UPDATE person SET tracing_notice_version = 1, tracing_notice_at = now() "
+        "WHERE id IN (:a, :b)",
+        a=alice,
+        b=bob,
+    )
     first, second = _snowflake(BEFORE), _snowflake(BEFORE + timedelta(seconds=1))
     bob_message = _snowflake(BEFORE + timedelta(seconds=2))
     await _message(engine, first, alice, BEFORE)
@@ -251,7 +258,10 @@ async def test_erasure_leaves_a_tombstone_and_nothing_else(
     async with clean.connect() as conn:
         person = (
             await conn.execute(
-                text("SELECT display_name, erased_before FROM person WHERE id = :i"),
+                text(
+                    "SELECT display_name, erased_before, tracing_notice_version, "
+                    "tracing_notice_at FROM person WHERE id = :i"
+                ),
                 {"i": seeded.alice},
             )
         ).one()
@@ -266,6 +276,14 @@ async def test_erasure_leaves_a_tombstone_and_nothing_else(
         )
     assert person.display_name == ERASED_NAME
     assert person.erased_before is not None
+    # Not in the kept list, so not kept: asking again brings the notice again.
+    assert person.tracing_notice_version is None
+    assert person.tracing_notice_at is None
+    assert await _count(
+        clean,
+        "SELECT count(*) FROM person WHERE id = :i AND tracing_notice_version = 1",
+        i=seeded.bob,
+    ) == 1, "Bob's notice record is untouched"
     assert list(platform_ids) == [ALICE.platform_user_id]
     assert opted_out == (1 if mode is ErasureMode.ERASE_AND_OPT_OUT else 0)
     assert {"quotes-alice", f"t1-{ALICE.platform_user_id}"} <= await _pending(clean)

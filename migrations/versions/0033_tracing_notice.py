@@ -4,8 +4,9 @@ A person's questions and the assistant's answers are exported to Langfuse,
 kept up to `TRACE_RETENTION_DAYS` and readable by admins. The first traced
 reply a person gets carries a notice saying so; these columns record which
 version of that notice they were shown and when, so it is shown once per
-version. The admin console shows a person's question text only for traces
-exported after `tracing_notice_at`.
+version. "Delete everything" clears both. Later, the admin console's usage
+view will use `tracing_notice_at` to show a person's question text only for
+traces exported after it; nothing reads it for that yet.
 
 No new table, so `purge_person_derived` is unchanged: the columns hold a
 number and a time, not anything the person said.

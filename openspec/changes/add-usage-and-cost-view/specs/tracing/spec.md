@@ -62,29 +62,50 @@ environment in the same trace store.
 
 ### Requirement: People are told actively that their questions and answers are recorded
 
-When tracing is enabled, the first reply the assistant gives a person after
-this notice takes effect, in a direct message or a channel, SHALL carry a
-one-time notice in the person's language (English or Portuguese) stating that
-their questions and the assistant's answers are recorded for up to the
+When tracing is enabled, the first traced reply the assistant gives a person
+after this notice takes effect (a question answered through the answer path,
+in a direct message, a channel or the ask command) SHALL carry a one-time
+notice in the person's language (English or Portuguese; the question's
+language, else the person's saved preferred language, else English) stating
+that their questions and the assistant's answers are recorded for up to the
 retention period, that admins can read them, and that the privacy command
-shows and deletes them. The system SHALL record that the person received it
-and SHALL NOT repeat it until the notice changes. The assistant's description
-of itself SHALL state the same.
+shows how many are kept and deletes them. Replies that do not reach the
+answer path (personal fact requests, alert proposals, typed commands, bare
+mentions) SHALL NOT carry it. The system SHALL record that the person received
+it and SHALL NOT repeat it until the notice changes. The notice SHALL NOT be
+stored as part of the remembered conversation turn. The assistant's
+description of itself SHALL state the same.
 
-#### Scenario: First reply after the change
-- WHEN a person who has not received the notice gets a reply
+#### Scenario: First traced reply after the change
+- WHEN a person who has not received the notice gets a traced reply
 - THEN the reply SHALL carry the notice in their language
 - AND the system SHALL record that they received it
+- AND the remembered turn SHALL NOT contain the notice
 
 #### Scenario: Later replies
 - WHEN a person who has received the current notice gets another reply
 - THEN the reply SHALL NOT carry the notice
 
+#### Scenario: Tracing disabled
+- WHEN tracing is disabled and a person gets a reply
+- THEN the reply SHALL NOT carry the notice
+- AND nothing SHALL be recorded for the person
+
+#### Scenario: Opted-out person
+- WHEN a person who opted out of indexing gets a reply
+- THEN the reply SHALL NOT carry the notice
+- AND nothing SHALL be recorded for the person
+
+#### Scenario: Scheduled run
+- WHEN a scheduled question is answered and delivered
+- THEN the delivery SHALL NOT carry the notice
+- AND the notice SHALL NOT be recorded as received
+
 #### Scenario: Asking what the assistant can do
-- WHEN someone asks what the assistant does
+- WHEN someone asks what the assistant does and tracing is enabled
 - THEN the reply SHALL state that questions and answers are recorded, the
   retention period, that admins can read them, and that the privacy command
-  shows and deletes them
+  shows how many are kept and deletes them
 
 ## MODIFIED Requirements
 

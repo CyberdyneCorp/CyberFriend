@@ -21,12 +21,13 @@ __all__ = ["traced"]
 
 EN_NOTICE = (
     "**Note:** Your questions and my answers are recorded for up to 90 days, and "
-    "CyberFriend admins can read them. Use `/privacy` to see or delete them."
+    "CyberFriend admins can read them. Use `/privacy` to see how many are kept or "
+    "to delete them."
 )
 PT_NOTICE = (
     "**Aviso:** Suas perguntas e minhas respostas ficam registradas por até 90 dias, "
-    "e os administradores do CyberFriend podem lê-las. Use `/privacy` para ver ou "
-    "apagar."
+    "e os administradores do CyberFriend podem lê-las. Use `/privacy` para ver "
+    "quantas estão guardadas ou apagá-las."
 )
 
 

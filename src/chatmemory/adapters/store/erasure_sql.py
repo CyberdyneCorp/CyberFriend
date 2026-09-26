@@ -64,8 +64,12 @@ SELECT COALESCE(sum(seconds), 0) FROM summed
 
 #: A name nobody could have: the unnamed-people repair looks for rows still
 #: called by their account id, and this is not one, so it is never renamed.
+#: The tracing notice record goes too, so the tombstone keeps only what
+#: `/privacy` says it keeps; a person who asks again is told again, once.
 TOMBSTONE_PERSON = text("""
-UPDATE person SET display_name = :placeholder WHERE id = :person_id
+UPDATE person
+SET display_name = :placeholder, tracing_notice_version = NULL, tracing_notice_at = NULL
+WHERE id = :person_id
 """)
 
 RESET_PREFERENCES = text("""

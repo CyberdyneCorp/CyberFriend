@@ -250,10 +250,11 @@ ROWS = (
         "recorded questions",
         {"tracing_enabled": False},
         "Your questions and my answers are recorded for up to 90 days, and "
-        "CyberFriend admins can read them. Use `/privacy` to see or delete them.",
+        "CyberFriend admins can read them. Use `/privacy` to see how many are kept "
+        "or to delete them.",
         "Suas perguntas e minhas respostas ficam registradas por até 90 dias, e "
         "os administradores do CyberFriend podem lê-las. Use `/privacy` para "
-        "ver ou apagar.",
+        "ver quantas estão guardadas ou apagá-las.",
     ),
     Row(
         "asked today",

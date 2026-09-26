@@ -14,6 +14,7 @@ from chatmemory.adapters.discord.acl import DiscordAclResolver, DiscordAudienceR
 from chatmemory.adapters.discord.bot import _render
 from chatmemory.app.ask import AskRequest, AskService
 from chatmemory.app.disclosure import ScopedAnswer
+from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.language import Language
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.self_description import Capabilities
@@ -25,8 +26,10 @@ from chatmemory.app.tracing_notice import (
 )
 from chatmemory.composition import build_tracing_notice, deployment_capabilities
 from chatmemory.config import Settings
-from chatmemory.domain.identity import PersonRef
+from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.ports.answers import Answer, Citation
+from chatmemory.ports.facts import FactKind, PersonalFact
+from chatmemory.ports.memory import ConversationLocation, Recollection
 from tests.unit.test_ask import (
     GENERAL,
     LEAD,
@@ -36,17 +39,19 @@ from tests.unit.test_ask import (
     guild,
     person,
 )
+from tests.unit.test_facts import FakeFactStore
 
 NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
 
 EN_NOTICE = (
     "**Note:** Your questions and my answers are recorded for up to 90 days, and "
-    "CyberFriend admins can read them. Use `/privacy` to see or delete them."
+    "CyberFriend admins can read them. Use `/privacy` to see how many are kept or "
+    "to delete them."
 )
 PT_NOTICE = (
     "**Aviso:** Suas perguntas e minhas respostas ficam registradas por até 90 dias, "
-    "e os administradores do CyberFriend podem lê-las. Use `/privacy` para ver ou "
-    "apagar."
+    "e os administradores do CyberFriend podem lê-las. Use `/privacy` para ver "
+    "quantas estão guardadas ou apagá-las."
 )
 
 
@@ -69,8 +74,34 @@ class FakeNoticeStore:
         return True
 
 
+class RecordingConversations:
+    """`Conversations` that stores nothing and keeps each remembered answer."""
+
+    def __init__(self) -> None:
+        self.answers: list[str] = []
+
+    async def recall(self, viewer: Viewer, location: ConversationLocation) -> Recollection:
+        return Recollection()
+
+    async def remember(
+        self,
+        viewer: Viewer,
+        location: ConversationLocation,
+        question: str,
+        answer: Answer,
+        *,
+        informed_by: Recollection,
+    ) -> bool:
+        self.answers.append(answer.text)
+        return True
+
+
 def build(
-    store: FakeNoticeStore | None = None, *, version: int = NOTICE_VERSION
+    store: FakeNoticeStore | None = None,
+    *,
+    version: int = NOTICE_VERSION,
+    memory: RecordingConversations | None = None,
+    facts: FakeFactStore | None = None,
 ) -> tuple[AskService, FakeNoticeStore]:
     store = store or FakeNoticeStore()
     g = guild()
@@ -81,6 +112,8 @@ def build(
         audiences=DiscordAudienceResolver(g, indexed),
         answers=RecordingAnswerService(),  # type: ignore[arg-type]
         limiter=RateLimiter(),
+        conversations=memory,  # type: ignore[arg-type]
+        facts=PersonalFactsService(facts) if facts is not None else None,  # type: ignore[arg-type]
         tracing_notice=notice,
     )
     return asks, store
@@ -159,6 +192,16 @@ async def test_a_message_with_no_language_gets_english() -> None:
     assert outcome.scoped.notice == EN_NOTICE
 
 
+async def test_a_message_with_no_language_uses_the_saved_one() -> None:
+    """Nothing to detect in "ok", so the person's saved language decides."""
+    facts = FakeFactStore()
+    await facts.set_fact(person(LEAD), PersonalFact(FactKind.PREFERRED_LANGUAGE, "pt"))
+    asks, _ = build(facts=facts)
+    outcome = await asks.ask(dm("ok"))
+    assert outcome.scoped is not None
+    assert outcome.scoped.notice == PT_NOTICE
+
+
 # --- and only where it is true ------------------------------------------------
 
 
@@ -232,6 +275,17 @@ async def test_the_answer_itself_is_left_alone() -> None:
     assert outcome.scoped.answer.text == "here you go"
 
 
+async def test_the_remembered_turn_never_holds_it() -> None:
+    """On the very reply that carries it, the stored turn is the answer alone."""
+    remembered = RecordingConversations()
+    asks, _ = build(memory=remembered)
+
+    outcome = await asks.ask(dm("what happened?"))
+
+    assert outcome.scoped is not None and outcome.scoped.notice == EN_NOTICE
+    assert remembered.answers == ["here you go"]
+
+
 # --- where Discord shows it --------------------------------------------------
 
 
@@ -264,12 +318,13 @@ def test_the_capabilities_reply_states_it_where_tracing_is_on() -> None:
 
     assert (
         "**Privacy**\n• Your questions and my answers are recorded for up to 90 days, "
-        "and CyberFriend admins can read them. Use `/privacy` to see or delete them."
+        "and CyberFriend admins can read them. Use `/privacy` to see how many are "
+        "kept or to delete them."
     ) in english.split("\n\n")
     assert (
         "**Privacidade**\n• Suas perguntas e minhas respostas ficam registradas por "
         "até 90 dias, e os administradores do CyberFriend podem lê-las. Use "
-        "`/privacy` para ver ou apagar."
+        "`/privacy` para ver quantas estão guardadas ou apagá-las."
     ) in portuguese.split("\n\n")
     # Kept in a DM, where guild-only commands are dropped.
     assert caps.offered(direct_message=True).trace_retention_days == 90

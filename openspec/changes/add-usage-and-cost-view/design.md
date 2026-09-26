@@ -200,7 +200,7 @@ trace into FakeLangfuse and asserts neither appears in counts or text.
   or channel) and their `tracing_notice_version` is below the current version,
   the reply carries a short notice in their language (EN/PT): "Your questions
   and my answers are recorded for up to 90 days and CyberFriend admins can read
-  them. Use /privacy to see or delete them." The period is
+  them. Use /privacy to see how many are kept or to delete them." The period is
   `TRACE_RETENTION_DAYS`. The version and time are recorded right after the
   traced answer, by one conditional UPDATE on the person row that also
   refuses an opted-out person, so the notice is shown once even when two
