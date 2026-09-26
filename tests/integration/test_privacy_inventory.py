@@ -17,10 +17,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from chatmemory.adapters.discord.privacy import channel_sections, kept_section
 from chatmemory.adapters.store.privacy_postgres import PostgresPrivacyStore
-from chatmemory.app.language import Language
-from chatmemory.app.privacy import RetentionFacts
 from chatmemory.domain.identity import ChannelRef, PersonRef
 from chatmemory.ports.facts import FactKind
 from chatmemory.ports.privacy import (
@@ -265,37 +262,3 @@ async def test_only_the_latest_questions_are_listed(clean: AsyncEngine) -> None:
     assert held.recent_questions == tuple(
         f"question {n}" for n in range(RECENT_QUESTIONS, 0, -1)
     ), "the latest five, newest first"
-
-
-async def test_after_opt_out_the_kept_list_matches_the_rows_that_remain(
-    clean: AsyncEngine,
-) -> None:
-    """Opt-out keeps the name, the notification setting and voice usage.
-
-    The kept list must say so rather than promise a cleared name or an
-    anonymous voice total (regression: it described the not-yet-built erasure).
-    """
-    alice = await _person(clean, ALICE, "Alice Real Name")
-    await _seed_personal(clean, alice, ALICE.platform_user_id)
-
-    await _exec(clean, "INSERT INTO person_opt_out (person_id) VALUES (:i)", i=alice)
-
-    name = await _exec(clean, "SELECT display_name FROM person WHERE id = :i", i=alice)
-    preference = await _exec(
-        clean, "SELECT count(*) FROM notification_preference WHERE person_id = :i", i=alice
-    )
-    held = await PostgresPrivacyStore(clean).inventory(ALICE, [READABLE], MONTH)
-    retention = RetentionFacts(True, 90, 30, None)
-    shown = "\n".join(
-        s.description(Language.ENGLISH)
-        for s in channel_sections(held.summary(), retention, Language.ENGLISH)
-    )
-
-    assert name == "Alice Real Name" and preference == 1
-    assert held.facts == () and not held.archiving
-    assert held.voice_seconds_this_month == 90, "voice usage stays tied to the person"
-    assert "1.5 minutes of your audio" in shown
-    kept = kept_section(retention, Language.ENGLISH).description(Language.ENGLISH)
-    assert "your name and your notification setting" in kept
-    assert "voice minutes for each month, still under your record" in kept
-    assert "cleared" not in kept and "anonymous" not in kept

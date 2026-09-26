@@ -65,8 +65,10 @@ from chatmemory.adapters.discord.formatting import (
     split_message,
 )
 from chatmemory.adapters.discord.privacy import (
+    Erase,
     SendDetailsView,
     channel_pages,
+    delete_everything_view,
     direct_pages,
 )
 from chatmemory.adapters.discord.privacy import text as privacy_text
@@ -113,7 +115,7 @@ from chatmemory.app.indexing import (
 )
 from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
-from chatmemory.app.privacy import PrivacyReport, PrivacyService
+from chatmemory.app.privacy import PrivacyReport, PrivacyService, RetentionFacts
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import ScheduleService
 from chatmemory.app.self_description import Capabilities
@@ -135,6 +137,7 @@ from chatmemory.ports.notifications import (
     NotificationDraft,
     PendingNotification,
 )
+from chatmemory.ports.privacy import ErasureMode, ErasureRequest
 from chatmemory.ports.schedules import (
     MAX_INTERVAL_HOURS,
     MIN_INTERVAL_HOURS,
@@ -1370,7 +1373,8 @@ class CyberFriendClient(discord.Client):
 
         Private everywhere. In a server channel it shows counts and fact kinds
         with a button that sends the values by direct message; in a direct
-        message it shows the values.
+        message it shows the values. Both carry [Delete everything...] when
+        this process can erase (`adapters.discord.privacy`).
         """
 
         @app_commands.command(name="privacy", description="See what I hold about you")
@@ -1385,7 +1389,15 @@ class CyberFriendClient(discord.Client):
             report = await self._privacy.report(_person(interaction.user))
             if interaction.guild_id is None:
                 intro = privacy_text("intro_direct", language)
-                await self._send_privacy_pages(interaction, intro, direct_pages(report, language))
+                erase = self._privacy_erase(interaction, report)
+                view = (
+                    delete_everything_view(interaction.user.id, language, *erase)
+                    if erase
+                    else None
+                )
+                await self._send_privacy_pages(
+                    interaction, intro, direct_pages(report, language), view
+                )
                 return
             await self._send_privacy_summary(interaction, report, language)
 
@@ -1401,7 +1413,12 @@ class CyberFriendClient(discord.Client):
         async def details() -> PrivacyReport:
             return await privacy.report(person)
 
-        view = SendDetailsView(interaction.user.id, language, details)
+        view = SendDetailsView(
+            interaction.user.id,
+            language,
+            details,
+            erase=self._privacy_erase(interaction, report),
+        )
         first, *rest = channel_pages(report, language)
         await interaction.followup.send(
             privacy_text("intro_channel", language),
@@ -1412,16 +1429,37 @@ class CyberFriendClient(discord.Client):
         )
         await self._send_privacy_pages(interaction, None, rest)
 
+    def _privacy_erase(
+        self, interaction: discord.Interaction, report: PrivacyReport
+    ) -> tuple[Erase, RetentionFacts] | None:
+        """[Delete everything...] for the caller, or None when nothing can erase.
+
+        Bound to the caller's own identity here, when the reply is built, so
+        the button can only ever erase the person the dashboard was for.
+        """
+        privacy = self._privacy
+        if privacy is None or not privacy.can_erase:
+            return None
+        person = _person(interaction.user)
+
+        async def erase(mode: ErasureMode) -> ErasureRequest:
+            return await privacy.erase(person, mode)
+
+        return erase, report.retention
+
     @staticmethod
     async def _send_privacy_pages(
         interaction: discord.Interaction,
         intro: str | None,
         pages: Sequence[Sequence[discord.Embed]],
+        view: discord.ui.View | None = None,
     ) -> None:
         for index, embeds in enumerate(pages):
+            first = index == 0
             await interaction.followup.send(
-                intro if index == 0 and intro else discord.utils.MISSING,
+                intro if first and intro else discord.utils.MISSING,
                 embeds=list(embeds),
+                view=view if first and view is not None else discord.utils.MISSING,
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )

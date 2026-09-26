@@ -44,6 +44,7 @@ SQL_MODULES = (
     "media_sql",
     "feature_requests_sql",
     "privacy_sql",
+    "erasure_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -562,6 +563,29 @@ UNSCOPED: dict[str, str] = {
         "everyone's. Returns numbers, never who or what"
     ),
     "media_sql.CHARGE": "write; adds seconds to the asker's row for the month",
+    # --- erasure_sql: /privacy -> delete everything, the asker's own rows ----
+    "erasure_sql.OPEN_REQUEST": (
+        "write; records the asker's own erasure request, keyed on their person "
+        "id. Returns the request's ids, step and counts, never content"
+    ),
+    "erasure_sql.STOP_REIMPORT": "write; sets the asker's own erasure cut on their person row",
+    "erasure_sql.RECORD_TRACES": "write; a count on the asker's own request",
+    "erasure_sql.PURGE_DERIVED": (
+        "write; purge_person_derived for the asker's own person id. Returns nothing"
+    ),
+    "erasure_sql.FOLD_VOICE": (
+        "write; moves the asker's own voice seconds to the anonymous total. "
+        "Returns a number of seconds"
+    ),
+    "erasure_sql.TOMBSTONE_PERSON": "write; clears the asker's own display name",
+    "erasure_sql.RESET_PREFERENCES": "write; deletes the asker's own notification setting",
+    "erasure_sql.ADVANCE": (
+        "write; records a finished step on one request. Returns ids, step and counts"
+    ),
+    "erasure_sql.OPEN_REQUESTS": (
+        "ingest maintenance; open requests with the person's id and one "
+        "platform id, to resume. Numbers and ids only, never content"
+    ),
 }
 
 # Viewer-scoped statements that do not filter tombstones, and why. Kept

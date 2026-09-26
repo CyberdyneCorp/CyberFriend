@@ -45,6 +45,7 @@ from tests.e2e.harness.discord_wire import (
     CommandMentionedButNotOffered,
     FakeDiscord,
     Sent,
+    ShownModal,
     snowflake,
 )
 from tests.e2e.harness.ingest import Ingest
@@ -139,6 +140,7 @@ class Turn:
     searched: bool
     hosts: frozenset[str]
     schemas: tuple[str, ...]
+    modals: tuple[ShownModal, ...] = ()
 
     @property
     def text(self) -> str:
@@ -249,6 +251,16 @@ class Conversation:
 
         return await self._bot.turn(run)
 
+    async def submit(self, modal: ShownModal, value: str) -> Turn:
+        """This person types `value` into the modal the bot opened and submits it."""
+        wire = self._bot.discord
+
+        async def run() -> None:
+            with wire.webhooks_installed():
+                await wire.submit(self.who, modal, value)
+
+        return await self._bot.turn(run)
+
     async def expire(self, sent: Sent) -> Turn:
         """Nobody answers the buttons on `sent` before they time out."""
         return await self._bot.turn(lambda: self._bot.discord.expire(sent))
@@ -308,6 +320,7 @@ class E2EBot:
     async def turn(self, act: Callable[[], Any]) -> Turn:
         """Run one inbound event to completion and report what it touched."""
         sent, hosts, calls = len(self.discord.http.sent), len(self.web.calls), len(self.chat.calls)
+        modals = len(self.discord.modals)
         searches = self._search.calls
         refused, sealed = len(self.web.refused), len(self.seal.refused)
         await act()
@@ -318,6 +331,7 @@ class E2EBot:
             searched=self._search.calls > searches,
             hosts=self.web.hosts(hosts),
             schemas=tuple(schema for schema, _ in self.chat.calls[calls:]),
+            modals=tuple(self.discord.modals[modals:]),
         )
         self._check_commands_offered(turn)
         return turn

@@ -4,7 +4,7 @@ Runs exactly one replica. Two containers sharing a bot token both identify to
 the gateway and ingest every message twice; Discord does not error, so the
 duplication is silent. See docker-compose.yml.
 
-Eleven concurrent jobs make up the process, each a loop that survives its own
+Twelve concurrent jobs make up the process, each a loop that survives its own
 failures because none of them may take the others down:
 
   scope        indexing scope re-read from runtime configuration
@@ -18,6 +18,7 @@ failures because none of them may take the others down:
   ask state    open/answered/stale, applied from observed events only
   notify       obligations addressed to one person, queued for the bot to send
   memory       remembered conversation past its retention window, deleted
+  erasure      `/privacy` deletions interrupted partway, finished
 
 Indexing scope is read live, not once at startup. Every job below asks the
 same `LiveScope` which channels are in scope each time it acts, so a channel
@@ -81,6 +82,7 @@ from chatmemory.app.asks.worker import (
     ExtractionWorker,
 )
 from chatmemory.app.conversation import MemoryRetention
+from chatmemory.app.erasure import ErasureService
 from chatmemory.app.ingest import EmbeddingWorker, IngestService
 from chatmemory.app.notifications import ObligationNotifier
 from chatmemory.app.reasoning.tracing import TraceRetention, TraceWithdrawal
@@ -90,6 +92,7 @@ from chatmemory.composition import (
     build_ask_pipeline,
     build_corpus_store,
     build_decision_store,
+    build_erasure,
     build_memory_retention,
     build_obligation_notifier,
     build_trace_retention,
@@ -137,6 +140,9 @@ NOTIFICATION_SWEEP_INTERVAL_SECONDS = 60.0
 # How often expired conversation memory is deleted. Hourly: a window measured
 # in days is honoured to within an hour, and a pass is two indexed deletes.
 MEMORY_RETENTION_INTERVAL_SECONDS = 3600.0
+# How often interrupted `/privacy` erasures are looked for. Each step is
+# idempotent, so a pass that fails costs only the wait for the next one.
+ERASURE_SWEEP_INTERVAL_SECONDS = 300.0
 
 
 def channels_in(channel_ids: frozenset[int]) -> list[ChannelRef]:
@@ -616,6 +622,35 @@ async def memory_retention_loop(
         await asyncio.sleep(interval)
 
 
+async def erasure_sweep_loop(
+    erasure: ErasureService,
+    state: HealthState,
+    interval: float = ERASURE_SWEEP_INTERVAL_SECONDS,
+) -> None:
+    """Finish `/privacy` erasures the bot started and did not finish.
+
+    The bot runs every step while the person waits; a deploy or crash in the
+    middle leaves the request open at the last step that finished. Here
+    rather than in the bot for the reason memory retention is: this is the
+    one process that runs sweeps. Runs before its first sleep, so a restart
+    resumes at once.
+    """
+    while True:
+        try:
+            await erasure_sweep_pass(erasure, state)
+        except Exception:
+            # The requests stay open at their last finished step.
+            log.exception("erasure.sweep_failed")
+        await asyncio.sleep(interval)
+
+
+async def erasure_sweep_pass(erasure: ErasureService, state: HealthState) -> None:
+    """One pass: resume stalled requests, and say so on /health when any were."""
+    finished = await erasure.resume_stalled()
+    if finished:
+        state.details["erasure"] = {"finished": finished, "last_run_at": time.time()}
+
+
 async def scope_loop(scope: LiveScope, state: HealthState) -> None:
     """Keep indexing scope current, and say on the health endpoint that it is.
 
@@ -793,6 +828,9 @@ async def main() -> None:
         )
 
         start_trace_sweeps(tasks, settings, engine, state)
+        # Unconditional: a person who asked for everything to be deleted
+        # must not depend on the bot staying up for the whole erasure.
+        tasks.create_task(erasure_sweep_loop(build_erasure(engine), state))
 
         if asks is not None:
             # The point of the whole ask pipeline: without these tasks the

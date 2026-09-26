@@ -129,9 +129,11 @@ Feature requests (`/suggest`) are deleted too, by a trigger on
 dropped before it is stored; the command tells them so.
 
 Voice questions are refused for an opted-out person: nothing is downloaded and
-nothing is sent to the transcription endpoint. Their `media_usage` rows (seconds
-per month, no content) are kept, because dropping them would hand the month's
-minutes back to the deployment's ceiling.
+nothing is sent to the transcription endpoint. An admin opt-out keeps their
+`media_usage` rows (seconds per month, no content), because dropping them would
+hand the month's minutes back to the deployment's ceiling; self-service
+erasure instead folds them into the anonymous total (see
+[Deleting everything](#deleting-everything)).
 
 ## Running the migration
 
@@ -233,11 +235,11 @@ These are real and are not fixed by anything on this page:
 - **Nothing schedules retention.** There is no `RETENTION_DAYS` setting in
   `chatmemory.config.Settings` and no loop in `entrypoints/ingest.py` that calls
   `run_once`. Until both exist, retention runs only when an operator runs it.
-- **Nothing exposes opt-out to the people it is for.** There is no Discord
-  command and no MCP tool; an opt-out today is an operator acting on
-  somebody's behalf, from the admin console (`/api/optouts`) or by running
-  `OptOutService.opt_out`. A consent control that requires filing a ticket is a
-  weak one.
+- ~~**Nothing exposes opt-out to the people it is for.**~~ Closed:
+  `/privacy` -> [Delete everything...] lets a person erase their data and,
+  with the second button, opt out, without an operator (see
+  [Deleting everything](#deleting-everything)). The console opt-out remains
+  for acting on somebody's behalf.
 - **`OptOutService.filter_messages` is not called by ingestion.** It is an
   optimisation, not the guarantee — the trigger is the guarantee — but until it
   is wired into `IngestService`, every excluded message costs a round trip to
@@ -765,15 +767,9 @@ counted, for the same reason as above.
 | Other people's remembered answers expire within N days | `MEMORY_RETENTION_DAYS` |
 | Database backups keep the data until they age out after N days, or no backups are kept | `BACKUP_RETENTION_DAYS` |
 
-The kept list (what survives a deletion) describes the only deletion that
-exists today, opt-out: a person record (internal id, platform ids, display
-name and notification setting, which stop re-archiving), admin change-log
-entries that refer to them, database backups, a linked CyberdyneAuth account
-(not deletable from here yet), other people's messages that mention them,
-other people's remembered answers, messages the bot already sent, and their
-monthly voice minutes, still tied to them because they count toward the
-monthly limit. When self-service erasure ships (it clears the name and folds
-voice usage into an anonymous total) the list changes with it.
+The kept list (what survives [Delete everything...]) is described under
+[Deleting everything](#deleting-everything) below; the dashboard, the
+confirmation and this page state the same list.
 
 **Trace count.** "Recorded now: at least N of your questions" counts
 `trace_export` rows whose `asker_platform_user_id` is the person's. Traces
@@ -790,6 +786,97 @@ service to their retention, or the statement becomes false.
 
 "Forget everything you know about me" deletes the person's facts and points to
 `/privacy` for the rest.
+
+## Deleting everything
+
+`/privacy` carries a [Delete everything...] button (in a channel beside
+[Send me the details], in a DM on its own). It deletes nothing itself: it
+shows what goes, the kept list, and what each choice means, with two buttons,
+live for two minutes and pressable by the asker alone:
+
+- **Delete everything**: they keep using the bot. New messages are archived as
+  usual; nothing from before the erasure is re-imported.
+- **Delete everything and stop archiving me**: the same, and they are opted
+  out (`person_opt_out`, reason `self-service erasure`), so nothing they send
+  later is archived, remembered, transcribed or traced.
+
+Either opens a modal asking for `DELETE` (or `APAGAR` for a Portuguese
+caller). Any other text deletes nothing. The deletion cannot be undone.
+
+**What happens** (`app/erasure.py`, migration 0032). A durable
+`erasure_request` row is written first, then the steps run in order, each
+recorded in `erasure_request.step` as it finishes:
+
+1. record the request, with the counts the reply will give;
+2. stop re-import: `person.erased_before` is set to the request time, and the
+   0008 message guard now also drops a message whose author has
+   `erased_before` later than its `created_at` -- whatever issues the INSERT,
+   so a backfill cannot bring anything back. The mention index and document
+   entries (dated by the Discord snowflake of their message) are guarded the
+   same way, and a re-read old message cannot write the name back. With the
+   second button the opt-out is recorded here too;
+3. and 4. mark every trace quoting their messages and every trace of their
+   questions for deletion, and queue the Langfuse `userId` search for traces
+   exported before askers were recorded -- the same call an admin opt-out
+   makes;
+5. purge their messages and everything built on them, their documents and
+   fetch log (the opt-out's own purge), then `purge_person_derived`;
+6. fold their `media_usage` seconds into `media_usage_anonymous` (month and
+   purpose only, no person), under the voice ledger's lock. The server-wide
+   monthly ceiling sums both tables, so it does not move;
+7. reduce the person row to a tombstone: display name `(erased)`,
+   notification preference deleted;
+8. mark the request complete and reply with counts.
+
+Every step is idempotent. The bot runs them while the person waits; if it
+dies partway, the `ingest` process resumes any open request that has not
+advanced for two minutes, every five minutes (`erasure` on `/health` when it
+finishes one). Langfuse unreachable does not hold the erasure up: the traces
+stay pending and ingest's withdrawal sweep retries them, so the reply says
+traces are **scheduled for deletion**, never deleted. Message and attachment
+counts in the reply are for channels the person can read now, plus "any of
+yours in other channels": all of them are deleted, only the count is limited,
+for the reason `/channels` gives.
+
+**What is kept, on purpose** (and said so in the dashboard and the
+confirmation):
+
+- a minimal person record: internal id, platform ids, `erased_before`, and the
+  opt-out flag if chosen. Without it backfill re-imports everything. Name and
+  notification preference are cleared;
+- `config_audit` entries that refer to them (append-only);
+- Postgres backups, until they age out -- stated from `BACKUP_RETENTION_DAYS`
+  (unset: no backups are kept, which is true today, see above);
+- a linked CyberdyneAuth account: it has no deletion API yet;
+- other people's messages that mention them (only the mention index goes);
+- other people's remembered answers, which may paraphrase them; they expire
+  within `MEMORY_RETENTION_DAYS`;
+- messages the bot already sent in Discord;
+- an anonymous monthly voice total.
+
+`erasure_request` itself keeps the counts of the reply, no content. A later
+opt-out or erasure deletes a person's completed requests through
+`purge_person_derived`; the open one survives, since it is what a resume reads.
+
+**Side effect of the voice fold.** The per-person monthly cap counts
+`media_usage`, so a person who erases and keeps using the bot starts the
+month's personal allowance again. The server-wide ceiling is unaffected.
+
+**Langfuse keys.** The key pair is project-wide (ingest, read and delete).
+Two processes hold it: `bot` (it exports traces, and states retention in
+`/privacy`) and `ingest` (withdrawal, the asker search and retention). The
+admin console holds none; it and the bot's erasure only mark traces in
+`trace_export`, and ingest deletes. Rotating the pair means updating both
+services.
+
+**Open ops check: Langfuse blobs.** Langfuse v3 deletes a trace
+asynchronously (a worker purges ClickHouse). Whether that also removes the
+raw event blobs in its S3/MinIO bucket has not been verified on
+`cyberfriend-langfuse`. To check: export a trace, note its id, delete it
+through `DELETE /api/public/traces`, wait for the worker, then list the
+event bucket for objects under that trace id (`mc ls --recursive
+<alias>/<bucket>/ | grep <trace id>`). Until an empty result is recorded
+here, "scheduled for deletion" is the honest wording, and the reply uses it.
 
 ## What someone said
 

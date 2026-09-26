@@ -202,7 +202,7 @@ def test_the_kept_list_names_everything_that_survives_a_deletion() -> None:
     shown = _text([kept_section(RetentionFacts(True, 90, 21, 7), EN)])
 
     for survivor in (
-        "A record of you",
+        "A minimal record of you",
         "admin change log",
         "Database backups",
         "CyberdyneAuth account",
@@ -210,22 +210,20 @@ def test_the_kept_list_names_everything_that_survives_a_deletion() -> None:
         "Other people's remembered answers",
         "expire within 21 days",
         "Messages I already sent on Discord",
-        "Your voice minutes for each month, still under your record",
+        "An anonymous total of voice minutes",
     ):
         assert survivor in shown
 
 
-def test_the_kept_list_describes_opt_out_as_it_is_today() -> None:
-    """Opt-out is the only deletion today: it keeps the name and voice usage.
-
-    Until self-service erasure lands, the list must not promise a cleared name
-    or an anonymised voice total (regression).
-    """
+def test_the_kept_list_describes_what_delete_everything_leaves() -> None:
+    """The kept list is worded for erasure: the tombstone and the anonymous
+    voice total, not the name and per-person minutes an opt-out keeps."""
     shown = _text([kept_section(RETENTION, EN)])
 
-    assert "your name" in shown
-    assert "cleared" not in shown
-    assert "anonymous" not in shown and "nobody attached" not in shown
+    assert "Your name and preferences are cleared" in shown
+    assert "An anonymous total of voice minutes" in shown
+    assert "still under your record" not in shown
+    assert "your name and your notification setting" not in shown
 
 
 def test_the_statements_are_in_portuguese_for_a_portuguese_caller() -> None:

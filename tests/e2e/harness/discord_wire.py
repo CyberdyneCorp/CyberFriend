@@ -19,7 +19,10 @@ Two chokepoints are replaced:
 
 A button press is a component interaction handed to the view discord.py
 stored for the message the buttons were sent on (`FakeDiscord.press`), so
-`interaction_check` and the button's callback run for real.
+`interaction_check` and the button's callback run for real. A modal the bot
+opens is recorded as a `ShownModal`, and submitting it (`FakeDiscord.submit`)
+hands a modal-submit interaction to the modal discord.py stored, so its
+`on_submit` runs for real too.
 
 Every contact point with discord.py internals is in this module, and each is
 named by `tests/e2e/test_harness_canary.py`, so an upgrade that moves one
@@ -51,6 +54,9 @@ permission check, so no scenario's person may be one."""
 
 EPHEMERAL = 1 << 6
 DEFERRED_CHANNEL_MESSAGE = 5
+MODAL = 9
+MODAL_SUBMIT = 5
+TEXT_INPUT = 4
 IS_VOICE_MESSAGE = 1 << 13
 """The message flag Discord sets on a voice message recorded in the client."""
 
@@ -100,6 +106,32 @@ class Sent:
     def text(self) -> str:
         """The content and every embed, as a person reads the message."""
         return "\n".join([self.content, *self.embeds]).strip("\n")
+
+
+@dataclass(frozen=True)
+class ShownModal:
+    """A modal the bot opened: its title, and the label of each text input by custom id."""
+
+    channel_id: int
+    custom_id: str
+    title: str
+    inputs: tuple[tuple[str, str], ...]
+
+    @property
+    def labels(self) -> tuple[str, ...]:
+        return tuple(label for _, label in self.inputs)
+
+
+def _text_inputs(components: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
+    """(custom id, label) of every text input in a modal's component tree."""
+    found: list[tuple[str, str]] = []
+    for component in components:
+        if component.get("type") == TEXT_INPUT:
+            found.append((str(component["custom_id"]), str(component.get("label") or "")))
+        found += _text_inputs(component.get("components") or [])
+        if isinstance(component.get("component"), Mapping):
+            found += _text_inputs([component["component"]])
+    return found
 
 
 def _is_ephemeral(data: Mapping[str, Any]) -> bool:
@@ -450,15 +482,7 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
         token = str(route.webhook_token)
         channel_id = self._wire.interaction_channel(token)
         if route.path.endswith("/callback"):
-            self.events.append(("response", payload))
-            data = payload.get("data") or {}
-            if payload.get("type") == DEFERRED_CHANNEL_MESSAGE:
-                self._deferred[token] = _is_ephemeral(data)
-            if data.get("content"):
-                # An update (type 7) rewrites the message that was pressed,
-                # which keeps its id: a view it carries is pressed there next.
-                updated = self._wire.pressed_message(token) if payload.get("type") == 7 else 0
-                self._record("response", channel_id, data, updated)
+            self._callback(token, channel_id, payload)
             return {"interaction": {"id": str(route.webhook_id), "type": 2}}
         if route.method == "DELETE":
             # `delete_original_response`: the deferred "thinking" message.
@@ -474,6 +498,28 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
         ephemeral = self._deferred.pop(token, None)
         self._record("followup", channel_id, payload, int(message["id"]), ephemeral)
         return message
+
+    def _callback(self, token: str, channel_id: int, payload: Mapping[str, Any]) -> None:
+        """An interaction's initial response: a defer, a modal, or a message."""
+        self.events.append(("response", dict(payload)))
+        data = payload.get("data") or {}
+        kind = payload.get("type")
+        if kind == DEFERRED_CHANNEL_MESSAGE:
+            self._deferred[token] = _is_ephemeral(data)
+        if kind == MODAL:
+            self._wire.modals.append(
+                ShownModal(
+                    channel_id,
+                    str(data["custom_id"]),
+                    str(data.get("title") or ""),
+                    tuple(_text_inputs(data.get("components") or [])),
+                )
+            )
+        if data.get("content"):
+            # An update (type 7) rewrites the message that was pressed,
+            # which keeps its id: a view it carries is pressed there next.
+            updated = self._wire.pressed_message(token) if kind == 7 else 0
+            self._record("response", channel_id, data, updated)
 
     def _record(
         self,
@@ -514,6 +560,7 @@ class FakeDiscord:
         self._pressed: dict[str, int] = {}
         self.http: FakeHTTP
         self.webhooks = FakeWebhookAdapter(self)
+        self.modals: list[ShownModal] = []
         self.guild: discord.Guild
 
     @property
@@ -787,6 +834,32 @@ class FakeDiscord:
         if item is None or item.view is None:
             return
         await item.view._scheduled_task(item, interaction)
+
+    async def submit(self, member: discord.Member, modal: ShownModal, value: str) -> None:
+        """`member` types `value` into every text input of `modal` and submits it.
+
+        Handed to the modal discord.py stored when the bot opened it, and
+        awaited, so `interaction_check` and `on_submit` run for real. A modal
+        that has stopped or timed out reaches nothing, as on Discord.
+        """
+        components = [
+            {"type": 1, "components": [{"type": TEXT_INPUT, "custom_id": cid, "value": value}]}
+            for cid, _ in modal.inputs
+        ]
+        channel = (
+            None if self.is_dm(modal.channel_id) else self.guild.get_channel(modal.channel_id)
+        )
+        payload = self._interaction_payload(
+            member,
+            {"custom_id": modal.custom_id, "components": components},
+            channel,  # type: ignore[arg-type]
+            kind=MODAL_SUBMIT,
+        )
+        interaction = discord.Interaction(data=payload, state=self.state)  # type: ignore[arg-type]
+        stored = self.state._view_store._modals.get(modal.custom_id)
+        if stored is None:
+            return
+        await stored._scheduled_task(interaction, components, {})
 
     def view_timeout(self, sent: Sent) -> float | None:
         """The timeout discord.py holds for the live view on the message `sent`.

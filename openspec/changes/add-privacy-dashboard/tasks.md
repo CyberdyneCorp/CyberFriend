@@ -24,12 +24,12 @@
 
 ## 4. Delete everything
 
-- [ ] 4.1 Migrations: `erasure_request` (with `mode`), `person.erased_before`, `media_usage_anonymous`; the monthly ceiling sums both usage tables
-- [ ] 4.2 Backfill and ingestion skip a person's messages created before `erased_before`
-- [ ] 4.3 `PrivacyService.erase(person, mode)` steps 1-8, idempotent, with step tracking; purge via `OptOutService` message purge + `purge_person_derived`
-- [ ] 4.4 Resume sweep in ingest
-- [ ] 4.5 [Delete everything...] view with the kept list and two buttons, then the typed-confirmation modal (DELETE/APAGAR), requester only, timeout
-- [ ] 4.6 Tests: crash after step 4 resumes; tombstone keeps id, platform ids, `erased_before` and (mode 2) the opt-out flag; backfill does not re-import in either mode; mode 1 archives a new message afterwards; monthly ceiling unchanged after the fold
-- [ ] 4.7 e2e: FakeDiscord `/privacy` -> delete (each mode) -> counts reply; FakeWeb receives trace DELETE; real Postgres has no `message`, `message_media`, `media_usage`, `scheduled_task`, `person_fact`, `conversation_turn`, `mcp_token` or `document_fetch` rows for the person
-- [ ] 4.8 Ops: verify Langfuse v3 deletion removes MinIO event blobs; document
-- [ ] 4.9 Docs: `docs/operations.md` opt-out gap closed; switch the `/privacy` kept list (`kept_person`, `kept_voice`) to the erasure wording; erasure semantics; the kept list; Postgres backup retention; which processes hold the Langfuse key pair
+- [x] 4.1 Migrations: `erasure_request` (with `mode`), `person.erased_before`, `media_usage_anonymous`; the monthly ceiling sums both usage tables
+- [x] 4.2 Backfill and ingestion skip a person's messages created before `erased_before`
+- [x] 4.3 `PrivacyService.erase(person, mode)` steps 1-8, idempotent, with step tracking; purge via `OptOutService` message purge + `purge_person_derived`
+- [x] 4.4 Resume sweep in ingest
+- [x] 4.5 [Delete everything...] view with the kept list and two buttons, then the typed-confirmation modal (DELETE/APAGAR), requester only, timeout
+- [x] 4.6 Tests: crash after step 4 resumes; tombstone keeps id, platform ids, `erased_before` and (mode 2) the opt-out flag; backfill does not re-import in either mode; mode 1 archives a new message afterwards; monthly ceiling unchanged after the fold
+- [x] 4.7 e2e: FakeDiscord `/privacy` -> delete (each mode) -> counts reply; FakeWeb receives trace DELETE; real Postgres has no `message`, `message_media`, `media_usage`, `scheduled_task`, `person_fact`, `conversation_turn`, `mcp_token` or `document_fetch` rows for the person
+- [ ] 4.8 Ops: verify Langfuse v3 deletion removes MinIO event blobs; document (procedure documented in `docs/operations.md`; the check on `cyberfriend-langfuse` is still to run)
+- [x] 4.9 Docs: `docs/operations.md` opt-out gap closed; switch the `/privacy` kept list (`kept_person`, `kept_voice`) to the erasure wording; erasure semantics; the kept list; Postgres backup retention; which processes hold the Langfuse key pair

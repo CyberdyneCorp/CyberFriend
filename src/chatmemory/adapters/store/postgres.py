@@ -98,8 +98,10 @@ class PostgresStore:
                 if m.author_display:
                     # Keep the latest name the platform gave us, so a rename
                     # does not leave every past citation showing the old one.
-                    await conn.execute(sql.UPDATE_PERSON_DISPLAY,
-                                       {"id": person_id, "n": m.author_display})
+                    await conn.execute(
+                        sql.UPDATE_PERSON_DISPLAY,
+                        {"id": person_id, "n": m.author_display, "created_at": m.created_at},
+                    )
                 result = await conn.execute(
                     sql.UPSERT_MESSAGE,
                     {
