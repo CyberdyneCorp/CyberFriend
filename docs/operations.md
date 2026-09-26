@@ -331,7 +331,7 @@ project is never touched.
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
 | `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
-| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest` |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, and by `bot`, which states it in `/privacy` |
 
 Turning it on with a host but no keys is refused at startup rather than
 silently disabled. A deployment that believes it is recording and is not finds
@@ -732,6 +732,53 @@ channels this person cannot see.
 
 Operators who need the full picture, with message counts, use the admin
 console's channel view rather than this command.
+
+## What someone can see about themselves
+
+`/privacy` shows the person asking, and only them, what is held about them:
+facts, remembered conversation (split into direct messages and server channels,
+never per channel), scheduled questions, alerts, the notification setting and
+queued count, voice/audio minutes this month, attachments on their archived
+messages, suggestions, live access tokens, whether they are archived, their
+archived message count per channel, how many of their questions are traced,
+and their linked platforms. Every store is read by person id alone
+(`privacy_sql`, registered in the SQL audit).
+
+**Where the values appear.** In a server channel the reply is ephemeral and
+rendered from `Inventory.summary()`, a type with no field for a value: counts
+and fact kinds only, so an email, phone, address or birth date can never be
+shown there. A [Send me the details] button, pressable by the asker alone,
+sends the full report by DM. In a DM `/privacy` shows the values directly. The
+report is sent as embeds, one per section, split over messages to stay within
+Discord's limits.
+
+**Channels.** Archived messages and their media are counted only in the
+channels `/channels` would list for them now (scope intersected with their
+readable channels). A channel they can no longer read is neither named nor
+counted, for the same reason as above.
+
+**What it states.** Every period comes from a setting, never from text:
+
+| Statement | Setting |
+|---|---|
+| Questions and answers are recorded for up to N days, and admins can read them (or, with tracing off, that they are not recorded) | `TRACING_ENABLED`, `TRACE_RETENTION_DAYS` |
+| Other people's remembered answers expire within N days | `MEMORY_RETENTION_DAYS` |
+| Database backups keep the data until they age out after N days, or no backups are kept | `BACKUP_RETENTION_DAYS` |
+
+The kept list (what survives a deletion) is: a minimal person record, admin
+change-log entries that refer to them, database backups, a linked
+CyberdyneAuth account (not deletable from here yet), other people's messages
+that mention them, other people's remembered answers, messages the bot already
+sent, and an anonymous monthly voice total.
+
+**Backups.** The CyberFriend Postgres (Coolify database
+`cyberfriend-pgvector`) has **no scheduled backups configured today**, so
+`BACKUP_RETENTION_DAYS` is unset and `/privacy` says no backups are kept. The
+day backups are turned on in Coolify, set `BACKUP_RETENTION_DAYS` on the `bot`
+service to their retention, or the statement becomes false.
+
+"Forget everything you know about me" deletes the person's facts and points to
+`/privacy` for the rest.
 
 ## What someone said
 

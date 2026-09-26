@@ -15,12 +15,12 @@
 
 ## 3. `/privacy` dashboard (after trace retention ships)
 
-- [ ] 3.1 `PrivacyService.inventory(person)` across all stores in the design table, including `message_media`
-- [ ] 3.2 Guild view (ephemeral, counts/kinds) and DM view (embeds, pages)
-- [ ] 3.3 Archive coverage from `ChannelListingService`; unreadable channels neither named nor counted
-- [ ] 3.4 Fixed statements: questions and answers recorded up to 90 days, admins can read them; the kept list
-- [ ] 3.5 Command table, `commands.json` snapshot; "forget everything you know about me" reply points to `/privacy`
-- [ ] 3.6 Tests: DIRECT_ONLY_KINDS values never in guild reply; no hidden channel names or counts
+- [x] 3.1 `PrivacyService.inventory(person)` across all stores in the design table, including `message_media`
+- [x] 3.2 Guild view (ephemeral, counts/kinds) and DM view (embeds, pages)
+- [x] 3.3 Archive coverage from `ChannelListingService`; unreadable channels neither named nor counted
+- [x] 3.4 Fixed statements: questions and answers recorded up to 90 days, admins can read them; the kept list
+- [x] 3.5 Command table, `commands.json` snapshot; "forget everything you know about me" reply points to `/privacy`
+- [x] 3.6 Tests: DIRECT_ONLY_KINDS values never in guild reply; no hidden channel names or counts
 
 ## 4. Delete everything
 

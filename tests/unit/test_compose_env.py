@@ -70,7 +70,12 @@ DEPLOYMENT_SETTINGS = {
     # that silently does not apply.
     "MEMORY_RECENT_TURNS": ("bot",),
     "MEMORY_SUMMARISE_AFTER_TURNS": ("bot",),
-    "MEMORY_RETENTION_DAYS": ("ingest",),
+    # The bot states it in `/privacy` (other people's remembered answers
+    # expire within it), so a window set only for ingest would be misstated.
+    "MEMORY_RETENTION_DAYS": ("ingest", "bot"),
+    # Stated by `/privacy` and enforced where backups run; declared or an
+    # operator who turns backups on can never make the statement true.
+    "BACKUP_RETENTION_DAYS": ("bot",),
     # Notifications are produced in one process and delivered by another, so
     # each half gets the settings it actually applies. The switch reaches
     # both: an operator turning it off in the platform must stop the queueing
@@ -124,6 +129,13 @@ def test_setting_reaches_every_service_that_reads_it(
             f"{service} never receives {setting}; an operator setting it in the "
             "platform gets the hardcoded default instead, silently"
         )
+
+
+@pytest.mark.parametrize("service", ["ingest", "bot"])
+def test_trace_retention_reaches_the_sweep_and_the_privacy_statement(service: str) -> None:
+    """Ingest deletes traces after it; the bot tells people the same period in
+    `/privacy`. Set for one alone, the statement and the sweep disagree."""
+    assert "TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}" in service_block(service)
 
 
 def test_answer_timezone_reaches_the_bot_with_the_teams_default() -> None:

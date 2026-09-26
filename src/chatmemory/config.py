@@ -311,6 +311,15 @@ class Settings(BaseSettings):
     application's traces in `langfuse_environment` are ever deleted.
     """
 
+    backup_retention_days: int | None = None
+    """How long a database backup is kept, as configured where backups run.
+
+    Only ever stated, never enforced here: `/privacy` tells a person that their
+    data stays in backups until they age out after this many days. Unset means
+    no backups are kept, and `/privacy` says so, so set it the day backups are
+    turned on or the statement is false.
+    """
+
     tracing_timeout_seconds: float = 5.0
     """What an export may cost before it is abandoned.
 
@@ -501,6 +510,15 @@ class Settings(BaseSettings):
     def _positive_memory_setting(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("must be positive")
+        return v
+
+    @field_validator("backup_retention_days")
+    @classmethod
+    def _positive_backup_retention(cls, v: int | None) -> int | None:
+        """Refused rather than read as "no backups": unset already means that,
+        and a zero would be a period somebody typed by mistake."""
+        if v is not None and v <= 0:
+            raise ValueError("must be positive, or unset when no backups are kept")
         return v
 
     @model_validator(mode="after")

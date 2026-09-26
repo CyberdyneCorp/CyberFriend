@@ -278,6 +278,22 @@
       "nsfw": false,
       "options": [],
       "type": 1
+    },
+    {
+      "contexts": [
+        0,
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "See what I hold about you",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "privacy",
+      "nsfw": false,
+      "options": [],
+      "type": 1
     }
   ],
   "guild": [

@@ -35,6 +35,7 @@ internet said.
 | **Alerts** | Ask *tell me when my LP goes out of range*, *warn me when my LP is within 5% of the range edge*, *me avisa se o health factor cair abaixo de 1,3* or *avisa quando o BTC passar de 100k*. A Confirm button shows exactly what will be watched and where it is now, and a DM arrives once when it changes. `/alert list`, `/alert delete`. Off by default |
 | **Index from chat** | `/index #channel` for anyone with Manage Channels there, applied without a redeploy |
 | **See what is archived** | `/channels` lists the archived channels you can read, and discloses nothing about the rest |
+| **See what it holds about you** | `/privacy` lists everything stored about you: facts, remembered conversation, scheduled questions, alerts, notification setting, voice minutes, attachments on your archived messages, suggestions, access tokens, archived message counts in the channels you can read now, and how many of your questions are traced. In a server channel it is private and shows counts and fact kinds only, with a button that sends the values by DM; in a DM it shows the values. It states how long questions and answers are traced (`TRACE_RETENTION_DAYS`), that admins can read them, and what survives a deletion, including backups (`BACKUP_RETENTION_DAYS`) |
 | **Scheduled questions** | `/schedule` asks something for you hourly to daily and messages you the answer — only when there is one. Off by default |
 | **Feature requests** | `/suggest` records an idea in your own words (up to 1000 characters) and answers with its number; `/suggestions` lists yours and their status. A message starting "tenho uma sugestão", "sugestão:", "seria legal se você", "I have a feature request", "feature request:" or "it would be nice if you could" is offered with [Record suggestion] and [No, answer it], unless something else the bot does answers it. The team sees the text and your Discord name. Text with an email, phone number or wallet address is refused, resubmitting is idempotent, and five a day at most. Opt-out deletes them |
 | **Voice questions** | Send the bot a voice message in a DM and get an answer as if you had typed it, with a small quoted line of what it understood. Transcribed by `gpt-4o-mini-transcribe`; the audio is never stored. Hard monthly caps per person and for the server. Off by default |
@@ -102,6 +103,7 @@ mindmap
       /schedule create, list, delete
       /alert list, delete
       /suggest /suggestions
+      /privacy
       In the server and in DMs
       /index /unindex in the server
     Operators
@@ -144,7 +146,7 @@ graph LR
     YOU --> Y2["my wallet is 0x... then: my wallet balance?"]
     YOU --> Y3["answers in the language you asked in"]
     YOU --> Y5["prefiro ver em reais &middot; prices and totals in USD and BRL"]
-    YOU --> Y4["/forget &middot; /notifications"]
+    YOU --> Y4["/forget &middot; /notifications &middot; /privacy"]
     YOU --> Y6["/suggest an idea &middot; /suggestions"]
     YOU --> Y5["a voice message in a DM, answered as typed"]
 
@@ -181,6 +183,7 @@ moment: scheduled questions and position alerts.
 | `/alert list`, `delete` | Your alerts (range, range edge, health factor, BTC/ETH price), and stopping one. An alert is created by asking in words and pressing Confirm |
 | `/suggest` | Suggest something the bot should learn to do; the reply gives its number and asks whether to DM you when its status changes |
 | `/suggestions` | Your suggestions and their status (new, triaged, planned, done, declined, duplicate) |
+| `/privacy` | What I hold about you and what is kept after a deletion. Counts and fact kinds in a server channel (only you see it, with a button for the details by DM); values in a DM |
 
 Every command except `/index` and `/unindex` works in the server **and in a
 direct message with the bot**; those two act on a channel, so they live in the
@@ -474,7 +477,8 @@ lists the common ones. The settings worth knowing:
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
 | `LANGFUSE_ENVIRONMENT` | Langfuse environment to export to and search on opt-out (`production`) |
-| `TRACE_RETENTION_DAYS` | Days an exported trace is kept; `ingest` deletes this app's older traces daily (default 90) |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept; `ingest` deletes this app's older traces daily (default 90). `/privacy` states the same period |
+| `BACKUP_RETENTION_DAYS` | Days a database backup is kept, as configured where backups run. Only stated, by `/privacy`; unset (the default) says no backups are kept, so set it when backups are turned on |
 
 Anything that reaches outside the server is off by default. A deployment should
 acquire an outbound boundary because somebody chose it.

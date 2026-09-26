@@ -235,8 +235,14 @@ _TEXT: dict[str, dict[Language, str]] = {
         PT: "Só mostro {p} em mensagem direta. Me pergunte lá.",
     },
     "forgot_all": {
-        EN: "Done. I don't have any personal details saved for you any more.",
-        PT: "Pronto. Não tenho mais nenhum dado pessoal seu guardado.",
+        EN: (
+            "Done. I don't have any personal details saved for you any more. "
+            "`/privacy` shows everything else I hold about you."
+        ),
+        PT: (
+            "Pronto. Não tenho mais nenhum dado pessoal seu guardado. "
+            "`/privacy` mostra tudo o mais que eu guardo sobre você."
+        ),
     },
     "forgot_one": {
         EN: "Done. I don't have a {l} for you any more.",

@@ -82,7 +82,8 @@ class Sent:
     message channel; `send` is a plain send to a guild channel; `response`
     and `followup` answer an interaction; `edit` rewrites one already sent.
     `buttons` maps each button's label to its custom id, and `disabled`
-    holds the labels of the ones that cannot be pressed.
+    holds the labels of the ones that cannot be pressed. `embeds` is each
+    embed's title and description, one string per embed.
     """
 
     via: Via
@@ -92,6 +93,20 @@ class Sent:
     message_id: int = 0
     buttons: tuple[tuple[str, str], ...] = ()
     disabled: frozenset[str] = frozenset()
+    embeds: tuple[str, ...] = ()
+
+    @property
+    def text(self) -> str:
+        """The content and every embed, as a person reads the message."""
+        return "\n".join([self.content, *self.embeds]).strip("\n")
+
+
+def _embeds(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """Each embed in a message payload as "title\ndescription"."""
+    return tuple(
+        "\n".join(str(e.get(k)) for k in ("title", "description") if e.get(k))
+        for e in payload.get("embeds") or []
+    )
 
 
 def _buttons(payload: Mapping[str, Any]) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
@@ -367,7 +382,16 @@ class FakeHTTP(HTTPClient):
         message = self._wire.bot_message(channel_id, content)
         buttons, disabled = _buttons(payload)
         self.sent.append(
-            Sent(via, channel_id, content, False, int(message["id"]), buttons, disabled)
+            Sent(
+                via,
+                channel_id,
+                content,
+                False,
+                int(message["id"]),
+                buttons,
+                disabled,
+                _embeds(payload),
+            )
         )
         return message
 
@@ -449,6 +473,7 @@ class FakeWebhookAdapter(AsyncWebhookAdapter):
                 message_id,
                 buttons,
                 disabled,
+                _embeds(data),
             )
         )
 
@@ -500,6 +525,18 @@ class FakeDiscord:
         member = discord.Member(data=data, guild=self.guild, state=self.state)  # type: ignore[arg-type]
         self.guild._add_member(member)
         return member
+
+    def set_roles(self, member: discord.Member, roles: Sequence[str]) -> discord.Member:
+        """`member` now holds exactly `roles`, as a gateway member update would say.
+
+        Returns the updated member: act as them through it, since an
+        interaction carries the roles of the member it is built from.
+        """
+        user = self._users[member.id]
+        data = member_payload(user, [self.layout.role_ids[r] for r in roles])
+        updated = discord.Member(data=data, guild=self.guild, state=self.state)  # type: ignore[arg-type]
+        self.guild._add_member(updated)
+        return updated
 
     def channel(self, name: str) -> discord.TextChannel:
         found = discord.utils.get(self.guild.text_channels, name=name)
