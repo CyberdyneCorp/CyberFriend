@@ -51,6 +51,7 @@ from chatmemory.admin.auth import AdminAuthenticator, AdminAuthMiddleware, Opera
 from chatmemory.admin.handlers import (
     changes,
     channels,
+    feature_requests,
     federation,
     optouts,
     settings,
@@ -110,6 +111,7 @@ def api_routes(services: AdminServices) -> list[Route]:
         *optouts.routes(services),
         *tokens.routes(services),
         *changes.routes(services),
+        *feature_requests.routes(services),
     ]
 
 
@@ -158,6 +160,9 @@ ROUTE_ACCESS: Mapping[RouteKey, Access] = {
     # MCP credentials: review and revoke only.
     ("GET", "/api/tokens"): _OPERATOR,
     ("DELETE", "/api/tokens/{id}"): _ADMIN,
+    # Feature requests: operators read them, admins triage (audited).
+    ("GET", "/api/feature-requests"): _OPERATOR,
+    ("PATCH", "/api/feature-requests/{id}"): _ADMIN,
     # The refusal for anything unclaimed under /api. Its non-read verbs are
     # admin like every other write, so an operator's POST is a 403 rather than
     # a tour of which paths exist.

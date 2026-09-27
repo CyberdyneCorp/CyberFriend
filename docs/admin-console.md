@@ -136,6 +136,7 @@ credential issue as an escalation.
 | Retention | How long anything is kept, and who has opted out. |
 | Settings | Every setting, its value, and **where that value came from**. |
 | Tokens | Review and revoke MCP credentials. Issuing one is not possible from here; see below. |
+| Feature requests | What people suggested (`/suggest`), in their own words, with their display name and how many others suggested the same. Filter by status; admins triage a row (status, a note for the team, duplicate of #) and each changed field lands in the audit — the note as "set" or "empty", never its text. Authors who asked are told of a status change by the bot, not from here. |
 | Audit | Who changed what, when, from what to what. |
 
 ## The four rules this interface is built around
@@ -426,10 +427,10 @@ rebuild the oracle the server refuses to be.
 ## Roles, and which route needs which
 
 The API has two console roles. **Operator** is read-only: status, settings,
-federation, channels, opt-outs, tokens and the audit, and nothing that changes
-them. **Admin** implies operator and is required for every write — a setting,
-a federated server or tool, a channel, an opt-out (which purges), an MCP token
-revocation.
+federation, channels, opt-outs, tokens, feature requests and the audit, and
+nothing that changes them. **Admin** implies operator and is required for
+every write — a setting, a federated server or tool, a channel, an opt-out
+(which purges), an MCP token revocation, a feature request's triage.
 
 Which role a route needs is decided in one place, `ROUTE_ACCESS` in
 `src/chatmemory/admin/server.py`, with one explicit row per mounted

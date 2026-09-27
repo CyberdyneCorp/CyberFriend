@@ -27,6 +27,7 @@ from chatmemory.admin.handlers.queries import (
 from chatmemory.app.configuration import ConfigurationEditor, RuntimeConfiguration
 from chatmemory.app.optout import OptOutService
 from chatmemory.app.tokens import TokenDirectory
+from chatmemory.ports.feature_requests import FeatureRequestTriage
 
 ServerProbe = Callable[[ServerConfig], Awaitable[ServerDiscovery]]
 """Ask one federated server what it offers, without joining it to anything.
@@ -71,3 +72,6 @@ class AdminServices:
     mcp_tokens: TokenDirectory
     #: Reachability and offered tools, asked of a server before it is stored.
     probe: ServerProbe
+    #: What people suggested, and the admin's triage of it. A suggestion is
+    #: the person's own words given to the team, never corpus content.
+    feature_requests: FeatureRequestTriage

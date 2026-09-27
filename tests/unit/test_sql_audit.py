@@ -500,6 +500,37 @@ UNSCOPED: dict[str, str] = {
         "write; the requester's answer to 'tell you when its status changes?', "
         "keyed on their person id as well as the row id. Returns no row"
     ),
+    "feature_requests_sql.TRIAGE_PAGE": (
+        "the admin console's list of every suggestion, with the author's display "
+        "name and a count of others with the same text. A suggestion is the "
+        "person's own words given to the team with a disclosure, never channel "
+        "content, so there is no channel to scope by"
+    ),
+    "feature_requests_sql.TRIAGE_COUNT": (
+        "a count of suggestions for the console's pager, optionally one status. "
+        "No content"
+    ),
+    "feature_requests_sql.TRIAGE_ROW": (
+        "one suggestion by id for an admin's triage, locked so the change is "
+        "recorded against the row it was applied to; the person's own words, "
+        "never channel content"
+    ),
+    "feature_requests_sql.TRIAGE_EXISTS": (
+        "a flag: whether the suggestion an admin names as the original exists"
+    ),
+    "feature_requests_sql.TRIAGE_UPDATE": (
+        "write; an admin's status, note and duplicate link on one suggestion, "
+        "keyed on its id. Returns no row"
+    ),
+    "feature_requests_sql.CLAIM_STATUS_NEWS": (
+        "write and read; claims status changes to announce to authors who opted "
+        "in, returning each author's own suggestion and platform id so the bot "
+        "can message them their own words. Never channel content"
+    ),
+    "feature_requests_sql.RELEASE_STATUS_NEWS": (
+        "write; puts back a claim whose message was not sent, keyed on the row "
+        "id and the status it claimed. Returns no row"
+    ),
     # --- privacy_sql: /privacy, the asker's own rows ------------------------
     "privacy_sql.IS_OPTED_OUT": (
         "the asker's own opt-out flag, keyed on their person id"

@@ -61,6 +61,7 @@ from chatmemory.adapters.store.admin_session_postgres import (
     PostgresSessionStore,
 )
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestTriage
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
 from chatmemory.adapters.tracing.langfuse import warn_unless_supported
@@ -274,6 +275,7 @@ def build(
         ),
         mcp_tokens=PostgresTokenStore(engine),
         probe=make_probe(),
+        feature_requests=PostgresFeatureRequestTriage(engine),
     )
     signing_in = sign_in(settings, engine, transport)
     return ConsoleProcess(

@@ -20,8 +20,11 @@
 
 ## 3. Triage and notification
 
-- [ ] 3.1 `GET /api/feature-requests` (operator), `PATCH /api/feature-requests/{id}` (admin, audited); rows in the route-to-role table
-- [ ] 3.2 Svelte `FeatureRequestsVM` + screen (filters by status, duplicate count)
-- [ ] 3.3 Status-change DM sweep in the bot process (opt-in only)
-- [ ] 3.4 Tests: operator PATCH -> 403; audit entry; DM sent once per status change; undeliverable skipped; no DM without opt-in
-- [ ] 3.5 Docs: user-facing commands, admin console screen
+- [x] 3.1 `GET /api/feature-requests` (operator), `PATCH /api/feature-requests/{id}` (admin, audited); rows in the route-to-role table
+  (one audit entry per changed field: `.status` and `.duplicate_of` with before/after, `.admin_note` as set/empty only; unknown fields, including `text`, are refused)
+- [x] 3.2 Svelte `FeatureRequestsVM` + screen (filters by status, duplicate count)
+- [x] 3.3 Status-change DM sweep in the bot process (opt-in only)
+  (`StatusNewsRunner`, every 10 minutes after the gateway connects; claims by advancing `notified_status` before sending and puts back an unsent claim; also skips people who turned `/notifications` off. No migration: 0030's columns suffice)
+- [x] 3.4 Tests: operator PATCH -> 403; audit entry; DM sent once per status change; undeliverable skipped; no DM without opt-in
+  (plus opt-out, erasure and notifications-off send nothing; e2e through the assembled bot)
+- [x] 3.5 Docs: user-facing commands, admin console screen
