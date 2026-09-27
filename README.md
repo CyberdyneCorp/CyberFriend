@@ -41,7 +41,7 @@ internet said.
 | **Feature requests** | `/suggest` records an idea in your own words (up to 1000 characters) and answers with its number; `/suggestions` lists yours and their status. A message starting "tenho uma sugestão", "sugestão:", "seria legal se você", "I have a feature request", "feature request:" or "it would be nice if you could" is offered with [Record suggestion] and [No, answer it], unless something else the bot does answers it. The team sees the text and your Discord name. Text with an email, phone number or wallet address is refused, resubmitting is idempotent, and five a day at most. Opt-out deletes them |
 | **Voice questions** | Send the bot a voice message in a DM and get an answer as if you had typed it, with a small quoted line of what it understood. Transcribed by `gpt-4o-mini-transcribe`; the audio is never stored. Hard monthly caps per person and for the server. Off by default |
 | **Channel media (recording only)** | From `MEDIA_ENABLED_AT`, voice notes and images posted in indexed channels are recorded as pending rows: metadata and a CDN link, nothing downloaded and nothing searchable yet. Transcribing voice notes and reading images come later. Off by default |
-| **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
+| **Admin console** | A web console for federation, channels, retention, opt-outs and tokens, and an API for usage and estimated cost per person and feature, read live from Langfuse (a person's question text only for admins signed in through CyberdyneAuth, audited, and only after their disclosure notice) |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
 | **Tracing** | Each answer — question, answer, feature, references to the evidence behind it (never its text), per-call model token usage and federated tool calls (never their arguments) — exported to Langfuse for study. Off by default. When on, each person's first traced reply carries a one-time notice (EN/PT) that questions and answers are recorded for up to `TRACE_RETENTION_DAYS` days, admins can read them, and `/privacy` shows how many are kept and deletes them; "what can you do?" says the same |
 
@@ -476,7 +476,7 @@ lists the common ones. The settings worth knowing:
 | `VOICE_PERSON_MONTHLY_MINUTES`, `MEDIA_AUDIO_MONTHLY_MINUTES` | Hard monthly caps on transcription, per person (default 60) and overall (default 1500) |
 | `MEDIA_ENABLED_AT`, `MEDIA_BACKFILL_DAYS` | From when channel voice notes and images are recorded (unset: never), and how many days before that also count for messages ingest writes from now on (default 0) |
 | `TRACING_ENABLED`, `LANGFUSE_HOST` | Export runs for study. Off by default |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Credentials for that destination. Also given to `admin`, which reads usage from Langfuse server-side (docs/admin-console.md, "Usage") |
 | `LANGFUSE_ENVIRONMENT` | Langfuse environment to export to and search on opt-out (`production`) |
 | `TRACE_RETENTION_DAYS` | Days an exported trace is kept; `ingest` deletes this app's older traces daily (default 90). `/privacy`, the one-time tracing notice and the capabilities reply state the same period |
 | `BACKUP_RETENTION_DAYS` | Days a database backup is kept, as configured where backups run. Only stated, by `/privacy`; unset (the default) says no backups are kept, so set it when backups are turned on |

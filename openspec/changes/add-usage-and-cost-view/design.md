@@ -120,11 +120,19 @@ is no rollup table and no sync loop.
     `[userId, name]`, metrics `[count]`. Every query groups by `userId`, so
     exclusion can be applied before anything is summed.
   - `row_limit` is 1000. A window whose result reaches it is split in halves
-    until it fits.
-- **Cache:** an in-process TTL cache (5 minutes) keyed by window and
-  dimension, holding the per-user rows before exclusion. Exclusion runs on
-  every request against the current database, so an opt-out or erasure takes
-  effect at once, not after the cache expires. Question text is never cached.
+    until it fits; a single day that still reaches it is "usage unavailable",
+    never a partial count.
+  - The observations view filters on the observation's own `environment`
+    (Langfuse stores one sent without it as `default`), so the tracer sets
+    `environment` on every generation and span, not only on the trace.
+- **Cache:** an in-process TTL cache (5 minutes) keyed by window and by the
+  set of deletion-requested trace ids in it, holding the per-user, per-day
+  rows before people are excluded (one fetch serves every grouping). Person
+  exclusion runs on every request against the current database, so an
+  opt-out or erasure takes effect at once, not after the cache expires.
+  Deletion-requested traces are left out by Langfuse's own query (`none of`
+  on the trace id), and because they are part of the key a new deletion
+  request is a new read. Question text is never cached.
 - **Unavailable:** when Langfuse cannot be reached the summary returns 503
   `{"error": "usage unavailable"}` and the screen says so.
 - **Display names** are joined at read time from `person_platform_id` and
@@ -142,8 +150,15 @@ is no rollup table and no sync loop.
 - platform ids of people with a completed erasure: rows up to and including
   the day of `person.erased_before` are excluded (day granularity for counts;
   exact timestamp for text);
-- for the questions endpoint, trace ids in `trace_export` with
-  `deletion_requested_at` set.
+- trace ids in `trace_export` with `deletion_requested_at` set, not yet
+  confirmed or confirmed within the last day (Langfuse deletes
+  asynchronously), whatever their `created_at` (a trace found by the asker
+  search or the retention sweep is recorded when found, not when traced).
+  A trace whose asker is excluded whole is not listed: it adds nothing and
+  lengthens the query. They are left out of counts by the metrics query and
+  dropped from question text. They travel in the GET query string, so above
+  250 ids the read is "usage unavailable" on purpose rather than a request
+  line the server refuses.
 
 Aggregates drop excluded user rows before summing. The questions endpoint
 returns an empty page for an excluded person, and otherwise drops excluded
@@ -153,14 +168,22 @@ trace into FakeLangfuse and asserts neither appears in counts or text.
 ### Read path and gating
 
 - `GET /api/usage/summary?from&to&group=person|feature|model|tool`: operator.
-  Window capped at 90 days. Counts only.
+  `from`/`to` are inclusive dates (whole UTC days, the last 30 by default),
+  window capped at 90 days. Counts only. Aggregates group by `[userId, name]`
+  (traces), `[userId, traceName, providedModelName]` (generations) and
+  `[userId, traceName, name]` (spans), all by day, so feature and person
+  groupings both come from the same rows.
 - `GET /api/usage/people/{platform_user_id}/questions?from&to&page`:
   `admin_oidc` in the route table, meaning admin role and `via == "oidc"`. A
   `cfa_` token gets 403 whatever its role.
-  - Calls `GET /api/public/traces?userId=&environment=&tags=app:cyberfriend&fields=core,io&limit=50`
+  - Calls `GET /api/public/traces?userId=&environment=&tags=app:cyberfriend&fields=core,io,metrics&limit=50`
     and returns only `{timestamp, feature, tools, question, input_tokens,
-    output_tokens, cost}`. Answer, evidence and metadata are dropped
-    server-side.
+    output_tokens, cost}` (tokens from the trace's own metadata, cost from
+    `totalCost`, the question cut at 2,000 characters). Answer, evidence and
+    metadata are dropped server-side, and each row is re-checked for our
+    environment, tag, trace names and the asker.
+  - The hidden count is one metrics query (traces view, count) for the
+    person between their erasure (if any) and their notice.
   - Only traces with `timestamp >= person.tracing_notice_at` are returned as
     text. A person who never received the notice has no readable text. Older
     traces are counted in the response (`hidden_before_notice: n`) but never

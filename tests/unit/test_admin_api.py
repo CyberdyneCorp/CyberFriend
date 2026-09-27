@@ -38,9 +38,11 @@ from chatmemory.app.authorization import ToolEffect
 from chatmemory.app.configuration import ConfigurationEditor, RuntimeConfiguration
 from chatmemory.app.optout import OptOutService, PersonPurge
 from chatmemory.app.tokens import InMemoryTokenStore, TokenRecord
+from chatmemory.app.usage import UsageService
 from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints.admin import environment_baseline
 from chatmemory.ports.configuration import StoredSetting
+from tests.unit.usage_fakes import FakeUsageDirectory, FakeUsageSource
 
 ANA = Operator("ana")
 BEN = Operator("ben")
@@ -234,6 +236,7 @@ async def build_console(
     status: StatusSnapshot | None = None,
     oidc_configured: bool = False,
     sign_in: SignIn | None = None,
+    usage: UsageService | None = None,
 ) -> Console:
     tokens = InMemoryOperatorTokens()
     issued = await tokens.issue(ANA, "laptop")
@@ -256,6 +259,7 @@ async def build_console(
         optouts=OptOutService(registry, FakeDocumentPurge(), FakePersonTraces()),
         mcp_tokens=ReviewAndRevokeOnly(mcp_tokens),
         probe=probe,
+        usage=usage or UsageService(FakeUsageSource(), FakeUsageDirectory()),
     )
     app = build_app(services, tokens, oidc_configured=oidc_configured, sign_in=sign_in)
     return Console(

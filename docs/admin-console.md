@@ -426,8 +426,8 @@ rebuild the oracle the server refuses to be.
 ## Roles, and which route needs which
 
 The API has two console roles. **Operator** is read-only: status, settings,
-federation, channels, opt-outs, tokens and the audit, and nothing that changes
-them. **Admin** implies operator and is required for every write — a setting,
+federation, channels, opt-outs, tokens, the audit and the usage summary, and
+nothing that changes them. **Admin** implies operator and is required for every write — a setting,
 a federated server or tool, a channel, an opt-out (which purges), an MCP token
 revocation.
 
@@ -468,6 +468,81 @@ only from the CyberdyneAuth role. A token never reads personal content
 break-glass rollback: tokens are admin again on the next start, and sessions
 stop being accepted. The other four sign-in variables may stay set; without an
 issuer they are ignored, with a warning naming them.
+
+## Usage: what traced questions cost, and who asked what
+
+Two routes read the trace store (Langfuse) live, server-side, with a
+five-minute in-process cache. There is no usage table of our own. Both answer
+`503 {"error": "usage unavailable"}` when Langfuse cannot be read or is not
+configured (`LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`
+in the admin service; `LANGFUSE_ENVIRONMENT` scopes every read, default
+`production`), never stale or partial figures.
+
+**`GET /api/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&group=person|feature|model|tool`**
+(operator). Both dates inclusive, the last 30 days by default, at most 90
+days (400 otherwise). Each row has `key`, `name` (a person's current display
+name, or null when none is known: the key is then their platform id),
+`questions`, `input_tokens`, `output_tokens`, `cost` (USD, an estimate from
+Langfuse's price table, see docs/operations.md "Model prices"), `tool_calls`,
+`tools` and `voice_seconds`; a figure that does not apply to the grouping is
+null. Voice seconds come from the `media_usage` ledger by month, shown per
+person, and as the feature `voice` together with the anonymous total folded
+out of erased people's rows. `totals` sums everything, and `label` is
+"traced question runs": background work and opted-out askers are never
+traced, so the totals are an undercount by design. Counts only, no text.
+
+**`GET /api/usage/people/{platform_user_id}/questions?from&to&page`**
+(`admin_oidc`: an admin signed in through CyberdyneAuth; an operator or any
+`cfa_` token, whatever its role, gets 403). The id must be ASCII digits that
+fit a bigint and `page` a whole number from 1 to 1,000 (400 otherwise).
+Returns 50 per page, newest first, each with only `timestamp`, `feature`, `tools`, `question` (cut at
+2,000 characters), `input_tokens`, `output_tokens` and `cost`. The answer,
+the evidence references and the decision trail are dropped server-side.
+
+- Only questions traced **after the person received the disclosure notice**
+  (`person.tracing_notice_at`) are returned as text. Earlier ones in the
+  window are reported as `hidden_before_notice`, a count. A person who never
+  received the notice has no readable text.
+- Every call writes a change-record entry, setting `usage.questions_viewed`,
+  against the viewer (`oidc:<sub>` and their email), naming the viewed person
+  as looked up server-side (person id and display name), their platform id,
+  the window and the page. It is written before Langfuse is read, so an
+  attempt is recorded even when Langfuse is down. The questions themselves are
+  never recorded.
+- The response is `Cache-Control: no-store`, and question text is never
+  cached in the server either.
+
+**Who never appears.** On every request, from our own database and never
+from the cache: people who opted out and people with an erasure in progress
+are removed entirely; for a person whose erasure completed, everything up to
+`person.erased_before` (counts by day, including that day; text by the exact
+time); and traces whose deletion was requested (still pending, or confirmed
+within the last day, since Langfuse deletes asynchronously). The pending
+traces are left out by Langfuse's own query (`none of` on the trace id) and
+are part of the cache key, so a new deletion request is a new read. This
+holds while Langfuse still holds those traces. A pending trace asked by
+someone already excluded whole is not listed again. The ids travel in the GET
+query, so more than 250 of them (a large retention sweep, say) makes both
+routes answer 503 on purpose until Langfuse confirms the deletions and they
+age out a day later, rather than counting traces that are going away.
+
+**Scope.** Every read filters on `LANGFUSE_ENVIRONMENT` and the tag
+`app:cyberfriend`, and each trace row is re-checked for both, for our trace
+names and for the asker, so another application or environment sharing the
+Langfuse project is never counted or shown. The aggregates group by asker and
+day (`GET /api/public/metrics`, v1); a result reaching the 1,000-row limit is
+split in halves until it fits, and a single day that still reaches it is a
+503 rather than a partial count. Tokens, cost and tool calls come from the
+observations view, which filters on each observation's own environment: the
+tracer sets it on every generation and span. Observations exported before
+that (per-call generations and spans from the tracing batch up to this
+change) were stored by Langfuse as `default` and are not counted; question
+counts are unaffected.
+
+**Keys.** The admin process now holds the Langfuse key pair, which is
+project-wide (ingest, read, delete). It uses it for these reads only, never
+sends it to the browser, and no response carries it. See docs/operations.md,
+"Langfuse keys".
 
 ## Signing in with CyberdyneAuth
 
