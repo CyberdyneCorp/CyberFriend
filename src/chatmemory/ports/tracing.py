@@ -104,3 +104,15 @@ class ExpiredTraceFinder(Protocol):
         Never another application's or environment's traces.
         """
         ...
+
+
+class TracingNoticeStore(Protocol):
+    async def claim_notice(self, person: PersonRef, version: int, now: datetime) -> bool:
+        """Record that `person` is being shown notice `version`, once.
+
+        True only for the call that recorded it: a person who already has this
+        version (or a later one), or who has opted out, gets False, and of two
+        concurrent calls only one gets True. Creates the person when nothing
+        has seen them yet, as a first question from a DM can be.
+        """
+        ...

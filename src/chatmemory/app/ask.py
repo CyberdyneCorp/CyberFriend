@@ -109,6 +109,7 @@ from chatmemory.app.suggestion_intent import (
     route_claiming,
     suggestion_intent,
 )
+from chatmemory.app.tracing_notice import TracingNotice
 from chatmemory.domain.audience import Audience
 from chatmemory.domain.chain import is_address, named_by_suffix, suffixes_named
 from chatmemory.domain.identity import ChannelRef, PersonRef, Viewer
@@ -303,6 +304,7 @@ class AskService:
         alerts: AlertRequests | None = None,
         said_by: SaidByService | None = None,
         tracer: RunTracer | None = None,
+        tracing_notice: TracingNotice | None = None,
     ) -> None:
         self._acl = acl
         self._audiences = audiences
@@ -334,6 +336,9 @@ class AskService:
         # before the answer chain and its `TracedAnswerService`, so their runs
         # are exported here -- or no trace would ever show either feature.
         self._tracer: RunTracer = tracer or NoRunTracer()
+        # Built only where tracing is on, so a deployment that records nothing
+        # never tells anyone it does. The notice rides on a traced reply.
+        self._tracing_notice = tracing_notice
         # Optional, and absent unless alerts are switched on with an Infura
         # key. An alert request is still recognised without it, and answered
         # that alerts are not available here -- never searched for.
@@ -499,6 +504,10 @@ class AskService:
         scoped = replace(scoped, answer=localised(scoped.answer, detect(request.text)))
 
         await self._remember(scope, location, request.text, answer, scoped, memory)
+        if metered:
+            # After remembering, so the notice never becomes part of a turn.
+            # Not on a scheduled run: its delivery shows the answer alone.
+            scoped = await self._with_tracing_notice(request, scoped)
 
         log.info(
             "ask.answered",
@@ -547,6 +556,23 @@ class AskService:
             self._withheld_channels(viewer, audience, request.text),
         )
         return answer, withheld
+
+    async def _with_tracing_notice(
+        self, request: AskRequest, scoped: ScopedAnswer
+    ) -> ScopedAnswer:
+        """`scoped`, carrying the one-time tracing notice if this person is due it.
+
+        Only replies that went through the answer path get here, and those are
+        the ones traced. The store records the notice as it grants it, and
+        refuses an opted-out person, whose runs are never exported.
+        """
+        notice = self._tracing_notice
+        if notice is None or not await notice.due(request.asker):
+            return scoped
+        language = detect(request.text)
+        if not language.known:
+            language = await self.reply_language(request.asker)
+        return replace(scoped, notice=notice.text(language))
 
     async def _routed(self, request: AskRequest, question: Question) -> RunOutcome | None:
         """A catch-up or a "what did X say", or None for the ordinary answer.
