@@ -144,6 +144,11 @@ def text(key: str, language: Language, **values: object) -> str:
     return _TEXT[key][_lang(language)].format(**values)
 
 
+def outcome_label(outcome: TaskOutcome, language: Language) -> str:
+    """What a run did, as its owner reads it."""
+    return _OUTCOMES[_lang(language)][outcome]
+
+
 def created_message(result: CreateResult, language: Language) -> str:
     if result.task is not None:
         start = discord.utils.format_dt(result.task.next_run_at, "R")
@@ -176,7 +181,7 @@ def task_state(task: ScheduledTask, language: Language) -> str:
     if task.last_run_at is None:
         when = discord.utils.format_dt(task.next_run_at, "R")
         return text("not_yet", language, when=when)
-    outcome = _OUTCOMES[_lang(language)].get(task.last_outcome or TaskOutcome.NOTHING, "")
+    outcome = outcome_label(task.last_outcome or TaskOutcome.NOTHING, language)
     return text(
         "last",
         language,

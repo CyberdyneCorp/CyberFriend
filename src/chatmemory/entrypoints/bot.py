@@ -166,6 +166,7 @@ from chatmemory.composition import (
     build_notification_delivery,
     build_notification_preferences,
     build_personal_facts,
+    build_privacy,
     build_said_by,
     build_schedules,
     build_task_runner,
@@ -347,11 +348,13 @@ def build_bot(
         # nothing gets.
         service = build_indexing_service(client, settings.discord_guild_id, indexing)
         client.attach_indexing(service)
+    listing = None
     if scope is not None:
         # `/channels` reads the same live scope `/index` writes, through the
         # same resolver the ask path scopes retrieval with. Without it the
         # command is registered and says listing is unavailable.
-        client.attach_channel_listing(build_channel_listing_service(client, settings, scope))
+        listing = build_channel_listing_service(client, settings, scope)
+        client.attach_channel_listing(listing)
 
     # `/schedule` and the sweep that runs what it creates. Built together, so a
     # deployment cannot end up with the commands and no runner -- which would
@@ -371,6 +374,11 @@ def build_bot(
         # `/suggest` and `/suggestions`. Without it both say suggestions cannot
         # be taken here.
         client.attach_feature_requests(build_feature_requests(notifications, clock))
+        # `/privacy`. Archive coverage is the `/channels` listing, so a channel
+        # the person cannot read is neither named nor counted; without a
+        # listing no channel is. Without the engine the command says it cannot
+        # show anything here.
+        client.attach_privacy(build_privacy(settings, notifications, listing, clock))
     # Position alerts: the chain read through `alert_transport` (the process's
     # edge), the message through the scheduled-task messenger with no heading
     # of its own, since an alert's text carries one in its own language.

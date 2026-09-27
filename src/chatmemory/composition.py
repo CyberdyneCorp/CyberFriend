@@ -117,6 +117,7 @@ from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
 from chatmemory.adapters.store.postgres import HybridSearch, PostgresStore
+from chatmemory.adapters.store.privacy_postgres import PostgresPrivacyStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.schedules_postgres import PostgresScheduleStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
@@ -172,6 +173,7 @@ from chatmemory.app.notifications import (
     NotificationPreferences,
     ObligationNotifier,
 )
+from chatmemory.app.privacy import PrivacyService, RetentionFacts
 from chatmemory.app.reasoning.capabilities import (
     LOOP_STAGES,
     MissingCapabilityError,
@@ -1088,6 +1090,29 @@ def build_feature_requests(engine: AsyncEngine, clock: Clock = utc_now) -> Featu
     purpose, and the command that takes them costs nothing to have.
     """
     return FeatureRequestService(PostgresFeatureRequestStore(engine), clock=clock)
+
+
+def build_privacy(
+    settings: Settings,
+    engine: AsyncEngine,
+    channels: ChannelListingService | None,
+    clock: Clock = utc_now,
+) -> PrivacyService:
+    """`/privacy`, over the answer stack's engine and the `/channels` listing.
+
+    The retention it states is read from the same settings that enforce it:
+    TRACE_RETENTION_DAYS drives the ingest sweep, MEMORY_RETENTION_DAYS the
+    memory sweep, and "tracing" is exactly the condition `build_tracer` exports
+    under. BACKUP_RETENTION_DAYS is the one period enforced elsewhere, where
+    backups run; unset, the reply says none are kept.
+    """
+    retention = RetentionFacts(
+        tracing=settings.tracing_enabled and bool(settings.langfuse_host),
+        trace_retention_days=settings.trace_retention_days,
+        memory_retention_days=settings.memory_retention_days,
+        backup_retention_days=settings.backup_retention_days,
+    )
+    return PrivacyService(PostgresPrivacyStore(engine), retention, channels, clock=clock)
 
 
 def build_schedules(settings: Settings, engine: AsyncEngine) -> ScheduleService | None:

@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.discord import alerts as discord_alerts
 from chatmemory.adapters.discord import bot as discord_bot
+from chatmemory.adapters.discord import privacy as discord_privacy
 from chatmemory.adapters.discord import suggestions as discord_suggestions
 from chatmemory.adapters.store.postgres import PostgresStore
 from chatmemory.app import alert_requests, ask, catchup, localise, voice
@@ -77,6 +78,7 @@ _FIXED_REPLY_MODULES: tuple[ModuleType, ...] = (
     discord_bot,
     discord_alerts,
     discord_suggestions,
+    discord_privacy,
     alert_requests,
     ask,
     catchup,
@@ -140,7 +142,7 @@ class Turn:
 
     @property
     def text(self) -> str:
-        return "\n".join(s.content for s in self.sent)
+        return "\n".join(s.text for s in self.sent)
 
     def edge(self) -> Edge:
         """Where the answer came from, judged by which edge was touched."""
@@ -333,12 +335,12 @@ class E2EBot:
         for sent in turn.sent:
             dm = self.discord.is_dm(sent.channel_id)
             offered = self.discord.offered(dm=dm)
-            for name in _COMMAND_MENTION.findall(sent.content):
+            for name in _COMMAND_MENTION.findall(sent.text):
                 if name not in offered:
                     where = "a DM" if dm else "the guild"
                     raise CommandMentionedButNotOffered(
                         f"the bot said /{name} in {where}, where Discord does not offer it: "
-                        f"{sent.content!r}"
+                        f"{sent.text!r}"
                     )
 
     async def chatter(

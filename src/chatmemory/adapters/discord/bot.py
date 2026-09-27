@@ -64,6 +64,12 @@ from chatmemory.adapters.discord.formatting import (
     sanitize_answer,
     split_message,
 )
+from chatmemory.adapters.discord.privacy import (
+    SendDetailsView,
+    channel_pages,
+    direct_pages,
+)
+from chatmemory.adapters.discord.privacy import text as privacy_text
 from chatmemory.adapters.discord.schedule_replies import (
     created_message,
     schedule_listing,
@@ -107,6 +113,7 @@ from chatmemory.app.indexing import (
 )
 from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
+from chatmemory.app.privacy import PrivacyReport, PrivacyService
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import ScheduleService
 from chatmemory.app.self_description import Capabilities
@@ -1018,6 +1025,7 @@ class CyberFriendClient(discord.Client):
         self._schedules: ScheduleService | None = None
         self._alerts: AlertRequests | None = None
         self._suggestions: FeatureRequestService | None = None
+        self._privacy: PrivacyService | None = None
         self._voice: VoiceQuestions | None = None
         self._described = Capabilities()
 
@@ -1083,6 +1091,15 @@ class CyberFriendClient(discord.Client):
         """
         self._suggestions = suggestions
 
+    def attach_privacy(self, privacy: PrivacyService) -> None:
+        """Give `/privacy` somewhere to read from.
+
+        Without it the command is still registered and says it cannot show
+        anything here: a person looking for what is held about them must find
+        the command on every deployment.
+        """
+        self._privacy = privacy
+
     def attach_notifications(self, notifications: NotificationPreferences) -> None:
         """Give `/notifications` somewhere to write.
 
@@ -1132,6 +1149,10 @@ class CyberFriendClient(discord.Client):
             # listing them is keyed on the interaction's user, like `/forget`.
             self._build_suggest_command(),
             self._build_suggestions_command(),
+            # What is held about the person, keyed on the interaction's user;
+            # unconditional like `/forget`, because it is how somebody finds
+            # out what there is to forget.
+            self._build_privacy_command(),
         ):
             self.tree.add_command(_in_guild_and_dm(command))
         # Guild only: these act on a channel. No `default_permissions`: Manage
@@ -1343,6 +1364,67 @@ class CyberFriendClient(discord.Client):
             )
 
         return suggestions
+
+    def _build_privacy_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/privacy`: what the assistant holds about the caller.
+
+        Private everywhere. In a server channel it shows counts and fact kinds
+        with a button that sends the values by direct message; in a direct
+        message it shows the values.
+        """
+
+        @app_commands.command(name="privacy", description="See what I hold about you")
+        async def privacy(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            language = await self._caller_language(interaction)
+            if self._privacy is None:
+                await interaction.followup.send(
+                    privacy_text("unavailable", language), ephemeral=True
+                )
+                return
+            report = await self._privacy.report(_person(interaction.user))
+            if interaction.guild_id is None:
+                intro = privacy_text("intro_direct", language)
+                await self._send_privacy_pages(interaction, intro, direct_pages(report, language))
+                return
+            await self._send_privacy_summary(interaction, report, language)
+
+        return privacy
+
+    async def _send_privacy_summary(
+        self, interaction: discord.Interaction, report: PrivacyReport, language: Language
+    ) -> None:
+        """The channel view, with [Send me the details] on its first page."""
+        privacy, person = self._privacy, _person(interaction.user)
+        assert privacy is not None
+
+        async def details() -> PrivacyReport:
+            return await privacy.report(person)
+
+        view = SendDetailsView(interaction.user.id, language, details)
+        first, *rest = channel_pages(report, language)
+        await interaction.followup.send(
+            privacy_text("intro_channel", language),
+            embeds=first,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        await self._send_privacy_pages(interaction, None, rest)
+
+    @staticmethod
+    async def _send_privacy_pages(
+        interaction: discord.Interaction,
+        intro: str | None,
+        pages: Sequence[Sequence[discord.Embed]],
+    ) -> None:
+        for index, embeds in enumerate(pages):
+            await interaction.followup.send(
+                intro if index == 0 and intro else discord.utils.MISSING,
+                embeds=list(embeds),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
     async def _confirm_alerts(self, proposal: AlertProposal) -> str:
         """What the Confirm button does: create what the prompt listed."""

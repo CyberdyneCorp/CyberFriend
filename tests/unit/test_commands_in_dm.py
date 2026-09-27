@@ -18,7 +18,7 @@ from chatmemory.adapters.discord.bot import CyberFriendClient
 GUILD_ID = 1
 PERSONAL = {
     "ask", "resolve", "forget", "notifications", "channels", "schedule", "alert",
-    "suggest", "suggestions",
+    "suggest", "suggestions", "privacy",
 }
 CHANNEL_ACTIONS = {"index", "unindex"}
 

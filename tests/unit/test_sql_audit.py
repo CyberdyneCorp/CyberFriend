@@ -43,6 +43,7 @@ SQL_MODULES = (
     "facts_sql",
     "media_sql",
     "feature_requests_sql",
+    "privacy_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -496,6 +497,58 @@ UNSCOPED: dict[str, str] = {
     "feature_requests_sql.SET_NOTIFY": (
         "write; the requester's answer to 'tell you when its status changes?', "
         "keyed on their person id as well as the row id. Returns no row"
+    ),
+    # --- privacy_sql: /privacy, the asker's own rows ------------------------
+    "privacy_sql.IS_OPTED_OUT": (
+        "the asker's own opt-out flag, keyed on their person id"
+    ),
+    "privacy_sql.PLATFORMS": (
+        "the platform names of the asker's own accounts, keyed on their person "
+        "id"
+    ),
+    "privacy_sql.FACTS": (
+        "returns fact values, but only the asker's own, keyed on the asker's "
+        "own person id, resolved from the interaction's user; the guild view "
+        "drops the values"
+    ),
+    "privacy_sql.MEMORY_COUNTS": (
+        "counts of the asker's own remembered turns and summaries, keyed on the"
+        " asker's own person id, resolved from the interaction's user. No "
+        "content"
+    ),
+    "privacy_sql.RECENT_QUESTIONS": (
+        "the asker's own questions to the assistant, keyed on the asker's own "
+        "person id, resolved from the interaction's user; shown in their DM "
+        "only"
+    ),
+    "privacy_sql.TASKS": (
+        "the asker's own scheduled questions, keyed on the asker's own person "
+        "id, resolved from the interaction's user"
+    ),
+    "privacy_sql.ALERTS": (
+        "the asker's own alerts, keyed on the asker's own person id, resolved "
+        "from the interaction's user"
+    ),
+    "privacy_sql.NOTIFICATIONS": (
+        "the asker's own notification setting and queued count, keyed on the "
+        "asker's own person id, resolved from the interaction's user. No "
+        "content"
+    ),
+    "privacy_sql.VOICE_SECONDS": (
+        "the asker's own voice seconds this month, keyed on the asker's own "
+        "person id, resolved from the interaction's user. No content"
+    ),
+    "privacy_sql.SUGGESTIONS": (
+        "the asker's own suggestions, keyed on the asker's own person id, "
+        "resolved from the interaction's user; a suggestion is their own words"
+    ),
+    "privacy_sql.TOKENS": (
+        "labels and dates of the asker's own live tokens, keyed on the asker's "
+        "own person id, resolved from the interaction's user. Never the hash"
+    ),
+    "privacy_sql.TRACES": (
+        "a count of traces of the asker's own questions, keyed on the asker's "
+        "own person id, resolved from the interaction's user. No content"
     ),
     "media_sql.LOCK_LEDGER": "advisory lock; reads no table",
     "media_sql.PERSON_OF": (

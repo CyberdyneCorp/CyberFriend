@@ -150,6 +150,12 @@ SUGGESTIONS = Command(
     "Mostrar suas sugestões e o status de cada uma",
 )
 
+PRIVACY = Command(
+    "privacy",
+    "See what I hold about you and what I keep",
+    "Ver o que eu guardo sobre você e o que eu mantenho",
+)
+
 CHANNELS = Command(
     "channels",
     "List the channels I archive that you can read",
@@ -195,7 +201,9 @@ ALERTS = (ALERT_LIST, ALERT_DELETE)
 asking ("tell me when my LP goes out of range") and pressing Confirm; these are
 how somebody sees and stops theirs."""
 
-ALWAYS_AVAILABLE = (ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE, SUGGEST, SUGGESTIONS)
+ALWAYS_AVAILABLE = (
+    ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE, SUGGEST, SUGGESTIONS, PRIVACY,
+)
 """Commands the bot registers unconditionally.
 
 `notifications` is not here: it is only registered when the feature is on, and
