@@ -12,6 +12,7 @@ import type { SessionPort } from "../services/session";
 import type { SessionApi } from "../services/sessionApi";
 import { AuditVM } from "./audit.svelte";
 import { ChannelsVM } from "./channels.svelte";
+import { FeatureRequestsVM } from "./featureRequests.svelte";
 import { FederationVM } from "./federation.svelte";
 import { RetentionVM } from "./retention.svelte";
 import { Router, type Route } from "./router.svelte";
@@ -62,6 +63,10 @@ export class ConsoleVM {
 
   tokens(): TokensVM {
     return new TokensVM(this.#api);
+  }
+
+  featureRequests(): FeatureRequestsVM {
+    return new FeatureRequestsVM(this.#api);
   }
 
   usage(): UsageVM {

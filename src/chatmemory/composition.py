@@ -114,7 +114,10 @@ from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
 from chatmemory.adapters.store.erasure_postgres import PostgresErasureStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
-from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestStore
+from chatmemory.adapters.store.feature_requests_postgres import (
+    PostgresFeatureRequestStore,
+    PostgresStatusNewsStore,
+)
 from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
@@ -169,6 +172,7 @@ from chatmemory.app.decisions.answering import DecisionAnswerService
 from chatmemory.app.decisions.model import DecisionPolicy
 from chatmemory.app.erasure import ErasureService
 from chatmemory.app.facts import PersonalFactsService
+from chatmemory.app.feature_request_news import StatusNewsRunner
 from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.notifications import (
@@ -1101,6 +1105,17 @@ def build_feature_requests(engine: AsyncEngine, clock: Clock = utc_now) -> Featu
     purpose, and the command that takes them costs nothing to have.
     """
     return FeatureRequestService(PostgresFeatureRequestStore(engine), clock=clock)
+
+
+def build_feature_request_news(
+    engine: AsyncEngine, messenger: TaskMessenger, clock: Clock = utc_now
+) -> StatusNewsRunner:
+    """The sweep that tells an author their suggestion's status changed.
+
+    Only people who answered Yes are ever messaged, so, like `/suggest`, it is
+    not behind a setting.
+    """
+    return StatusNewsRunner(PostgresStatusNewsStore(engine), messenger, clock=clock)
 
 
 def build_privacy(

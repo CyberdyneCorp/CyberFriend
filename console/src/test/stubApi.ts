@@ -171,6 +171,22 @@ function fixtures(): Json {
         revoked_at: null,
       },
     ],
+    featureRequests: [
+      {
+        id: 12,
+        text: "Tell me when someone mentions me",
+        language: "en",
+        status: "new",
+        admin_note: null,
+        duplicate_of: null,
+        source_kind: "command",
+        person: "Sam",
+        same_text_elsewhere: 2,
+        created_at: "2026-09-15T10:00:00+00:00",
+        updated_at: "2026-09-15T10:00:00+00:00",
+        updated_by: null,
+      },
+    ],
     usage: usageFixtures(),
     questions: questionFixtures(),
     audit: [
@@ -316,6 +332,13 @@ function allowTool(state: Json, body: Json): [number, unknown] {
 
 type Reply = [status: number, payload: unknown];
 
+/** GET /api/feature-requests, with its status filter, as the API pages it. */
+function featurePage(state: Json, url: string): Json {
+  const status = new URL(url, "http://stub").searchParams.get("status");
+  const items = (state.featureRequests as Json[]).filter((row) => status === null || row.status === status);
+  return { items, total: items.length, page: 1, page_size: 50 };
+}
+
 /** One write route: the method, the path prefix, and what it does to the state. */
 type WriteRoute = [method: string, prefix: string, handle: (state: Json, last: string, body: Json, path: string) => Reply];
 
@@ -364,6 +387,12 @@ const WRITES: WriteRoute[] = [
     const person = `${String(body.platform)}:${String(body.platform_user_id)}`;
     rows(state, "optouts").push({ person, since: "2026-09-16T10:00:00+00:00" });
     return [200, { changed: `opt_out:${person}`, detail: "the exclusion is enforced in the database", removed: {} }];
+  }],
+  ["PATCH", "/api/feature-requests/", (state, last, body) => {
+    const request = rows(state, "featureRequests").find((row) => String(row.id) === last);
+    if (request === undefined) return [404, { error: "no such suggestion" }];
+    Object.assign(request, body, { updated_by: "ana" });
+    return [200, { changed: `feature_request.${last}`, request }];
   }],
   ["DELETE", "/api/optouts/", (state, _last, _body, path) => {
     const [, , , platform, id] = path.split("/");
@@ -531,6 +560,7 @@ export async function startStubApi(): Promise<StubApi> {
           "/api/optouts": state.optouts,
           "/api/tokens": state.tokens,
           "/api/audit": state.audit,
+          "/api/feature-requests": featurePage(state, request.url ?? ""),
         };
         const found = reads[path];
         reply(found === undefined ? 404 : 200, found ?? { error: "no such route" });

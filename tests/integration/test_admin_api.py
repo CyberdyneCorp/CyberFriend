@@ -27,10 +27,13 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestStore
 from chatmemory.admin.auth import Operator
+from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints import admin
 from chatmemory.mcp.auth import PostgresTokenStore
+from chatmemory.ports.feature_requests import SourceKind, SuggestionSource
 from tests.integration.conftest import DB_URL
 
 ANA = Operator("ana")
@@ -55,6 +58,7 @@ READ_ONLY_PATHS = [
     "/api/optouts",
     "/api/tokens",
     "/api/audit",
+    "/api/feature-requests",
 ]
 
 
@@ -439,3 +443,44 @@ async def test_a_channel_added_through_the_api_is_in_force_for_the_agent(
     assert added.status_code == 200
     stored = {s.key: s.raw for s in await console.services.editor.store.load()}
     assert sorted(stored["indexed_channel_ids"].split()) == ["100", "200", "900"]
+
+
+async def test_a_triage_through_the_api_lands_in_the_audit_without_the_note(
+    console: admin.ConsoleProcess,
+) -> None:
+    submitted = await FeatureRequestService(PostgresFeatureRequestStore(console.engine)).submit(
+        PersonRef("discord", 42),
+        "dark mode for the console",
+        SuggestionSource(SourceKind.COMMAND, "discord"),
+        display_name="Sam",
+    )
+    token = await credential(console)
+
+    async with client(console, token) as http:
+        listed = (await http.get("/api/feature-requests?status=new")).json()
+        response = await http.patch(
+            f"/api/feature-requests/{submitted.request_id}",
+            json={"status": "planned", "admin_note": "Q4, after the Svelte work"},
+        )
+
+    assert [(i["person"], i["text"]) for i in listed["items"]] == [
+        ("Sam", "dark mode for the console")
+    ]
+    assert response.status_code == 200
+    async with console.engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT operator, setting, before_value, after_value FROM config_audit "
+                "WHERE setting LIKE 'feature_request.%' ORDER BY setting"
+            )
+        )
+        audited = [tuple(r) for r in rows]
+        stored = await conn.scalar(
+            text("SELECT updated_by FROM feature_request WHERE id = :i"),
+            {"i": submitted.request_id},
+        )
+    assert audited == [
+        ("ana", f"feature_request.{submitted.request_id}.admin_note", "empty", "set"),
+        ("ana", f"feature_request.{submitted.request_id}.status", "new", "planned"),
+    ]
+    assert stored == "ana"

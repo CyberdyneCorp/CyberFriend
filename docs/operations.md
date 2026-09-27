@@ -1204,9 +1204,30 @@ surrounding conversation is stored.
 - **Five a day**: at most five accepted per person in any rolling 24 hours,
   enforced inside the insert while holding a lock on the person's row, so
   parallel submissions are counted one after another.
+- **Triage**: the admin console's Feature requests screen lists every
+  suggestion, newest first, filterable by status (`new`, `triaged`,
+  `planned`, `done`, `declined`, `duplicate`), with the author's display name
+  and how many other people suggested the same text
+  (`GET /api/feature-requests`, operator). Admins set the status, a note for
+  the team and a duplicate-of link (`PATCH /api/feature-requests/{id}`,
+  admin; operators get 403). Each changed field is written to the change
+  record as `feature_request.<id>.status`, `.duplicate_of` or `.admin_note`,
+  with who made it; the status and link with their values before and after,
+  the note only as "set" or "empty", never its text. The suggestion's own
+  text cannot be edited.
 - **Status news is opt-in**: the acknowledgement asks whether to DM them when
-  the status changes; nothing is stored unless they press Yes. The sweep that
-  sends those DMs arrives with the admin triage screen.
+  the status changes; nothing is stored unless they press Yes. A sweep in the
+  bot process (every ten minutes, after the gateway connects) sends one DM
+  per status change, in the suggestion's language, naming the new status and
+  quoting their text; the admin note is never sent. A row is claimed before
+  its message is sent, so each change is announced once; a status changed and
+  changed back before the sweep sends nothing. Nobody is messaged who did not
+  press Yes, has opted out or erased their data (their rows are gone), has
+  turned `/notifications` off, or whose DMs are closed. A closed DM is
+  recorded like a notification's (`notification_preference.undeliverable_at`)
+  and the news waits until `/notifications on`; a transient Discord failure
+  is retried on the next sweep. The health endpoint reports
+  `suggestion_news.delivered` and `last_run_at`.
 - **Privacy**: nothing is written for an opted-out person, not even their
   name; an opt-out deletes a person's suggestions in the same
   transaction, and deleting the person cascades. The delete is in

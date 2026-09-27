@@ -11,21 +11,26 @@ and refusals that store nothing. Rows are read back by SQL.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 
 from chatmemory.adapters.discord.bot import PLATFORM
 from chatmemory.adapters.discord.suggestions import PROPOSAL_WINDOW_SECONDS
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestTriage
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.app.optout import OptOutService
 from chatmemory.domain.identity import PersonRef
+from chatmemory.ports.feature_requests import RequestStatus, TriageChange
 from tests.e2e.harness.conversation import Conversation, E2EBot, Turn
 from tests.e2e.harness.discord_wire import Sent
 from tests.e2e.harness.process import GENERAL, GUILD_ID
 from tests.e2e.test_alert_kinds import COINGECKO, Market, alerts_bot  # noqa: F401
 from tests.e2e.test_portfolio import BASE_HOST, base_chain, save_wallet
 from tests.e2e.test_preferred_currency import bitcoin, market_bot  # noqa: F401
+
+NOW = datetime(2026, 9, 26, 12, tzinfo=UTC)
 
 
 async def suggestion_rows(bot: E2EBot) -> list[Any]:
@@ -76,6 +81,33 @@ async def test_suggest_then_list_it_and_opt_into_status_news(bot: E2EBot) -> Non
     assert listing.ephemeral
     assert f"**#{row.id}** - new - Show a weekly digest of decisions" in listing.content
     assert "Show a weekly digest" not in (await bot.dm(ana).slash("suggestions")).text
+
+
+async def test_a_status_change_is_told_once_to_the_author_who_asked(bot: E2EBot) -> None:
+    """The console changes the status; the bot's sweep sends one DM, and none
+    to somebody who did not say Yes."""
+    leo, ana = bot.person("Leo"), bot.person("Ana")
+    asked = await bot.channel("general", leo).slash("suggest", text="Dark mode for the digest")
+    [ack] = asked.sent
+    await bot.channel("general", leo).press(ack, "Yes")
+    await bot.channel("general", ana).slash("suggest", text="Voice replies")
+    mine, theirs = [row.id for row in await suggestion_rows(bot)]
+    triage = PostgresFeatureRequestTriage(bot.engine)
+    for request_id in (mine, theirs):
+        await triage.triage(
+            request_id, TriageChange(status=RequestStatus.PLANNED), actor="ana", now=NOW
+        )
+    runner = bot.process.graph.suggestion_news
+    assert runner is not None
+
+    swept = await bot.turn(runner.run_due)
+    again = await bot.turn(runner.run_due)
+
+    [message] = swept.sent
+    assert message.via == "dm"
+    assert message.content.startswith(f"Your suggestion **#{mine}** is now **planned**.")
+    assert "> Dark mode for the digest" in message.content
+    assert again.sent == ()
 
 
 async def test_the_same_suggestion_twice_is_one_record(bot: E2EBot) -> None:

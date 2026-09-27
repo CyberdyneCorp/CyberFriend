@@ -32,6 +32,7 @@ from chatmemory.adapters.store.admin_session_postgres import (
     PostgresSessionStore,
 )
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestTriage
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
 from chatmemory.admin.auth import Operator
 from chatmemory.admin.handlers.queries import (
@@ -83,6 +84,8 @@ CONTRACT = [
     # too -- a screen that offered to issue one would have no server behind it.
     ("DELETE", "/api/tokens/{id}"),
     ("GET", "/api/audit"),
+    ("GET", "/api/feature-requests"),
+    ("PATCH", "/api/feature-requests/{id}"),
 ]
 
 
@@ -103,6 +106,7 @@ def test_the_service_is_built_from_the_postgres_adapters() -> None:
     assert isinstance(process.services.changes, PostgresChangeRecord)
     assert isinstance(process.services.mcp_tokens, PostgresTokenStore)
     assert isinstance(process.services.editor.store, PostgresConfigurationStore)
+    assert isinstance(process.services.feature_requests, PostgresFeatureRequestTriage)
 
 
 def test_the_opt_out_service_covers_documents() -> None:
