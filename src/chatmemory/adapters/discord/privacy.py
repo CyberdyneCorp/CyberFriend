@@ -39,9 +39,9 @@ import discord
 import structlog
 
 from chatmemory.adapters.discord.schedule_replies import outcome_label
-from chatmemory.adapters.discord.suggestions import status_label
 from chatmemory.adapters.discord.views import RequesterOnlyView
 from chatmemory.app.fact_replies import label, shown_line
+from chatmemory.app.feature_requests import status_label
 from chatmemory.app.language import Language
 from chatmemory.app.privacy import PrivacyReport, RetentionFacts
 from chatmemory.domain.chain import SUFFIX_CHARS

@@ -11,13 +11,13 @@ opt-out and "Delete everything" both remove it in the same transaction as the
 rest; a key saved by an opted-out person is dropped before it is stored, as
 0030 does for suggestions; and deleting the person cascades.
 
-Re-chaining: PURGES_0032 is the purge as of this revision's parent. If another
-revision that rewrites `purge_person_derived` lands first, this one must move
-after it and restate that revision's body plus the person_secret DELETE, or the
-later CREATE OR REPLACE drops one side's DELETE lines.
+Re-chaining: PURGES_0036 is the purge as of this revision's parent (0035 added
+the account tables, 0036 the user sessions). A later revision that rewrites
+`purge_person_derived` must restate this body, person_secret included, or its
+CREATE OR REPLACE drops the DELETE lines it leaves out.
 
 Revision ID: 0037
-Revises: 0033
+Revises: 0036
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0037"
-down_revision = "0033"
+down_revision = "0036"
 branch_labels = None
 depends_on = None
 
@@ -44,9 +44,9 @@ END;
 $$ LANGUAGE plpgsql
 """
 
-#: `purge_person_derived` as 0032 left it. Restated rather than imported so this
+#: `purge_person_derived` as 0036 left it. Restated rather than imported so this
 #: revision stays what it was when applied, whatever a later one does.
-PURGES_0032 = (
+PURGES_0036 = (
     "DELETE FROM conversation_turn WHERE person_id = p_person_id",
     "DELETE FROM conversation_summary WHERE person_id = p_person_id",
     "DELETE FROM person_fact WHERE person_id = p_person_id",
@@ -60,10 +60,18 @@ PURGES_0032 = (
           AND t.platform_user_id = p.platform_user_id""",
     "DELETE FROM feature_request WHERE person_id = p_person_id",
     "DELETE FROM erasure_request WHERE person_id = p_person_id AND completed_at IS NOT NULL",
+    """DELETE FROM user_session s
+        USING person_account_link l
+        WHERE l.person_id = p_person_id
+          AND s.sub = l.sub""",
+    "DELETE FROM person_account_link WHERE person_id = p_person_id",
+    "DELETE FROM account_link_code WHERE person_id = p_person_id",
+    "DELETE FROM account_provisioning_request WHERE person_id = p_person_id",
+    "DELETE FROM account_consent WHERE person_id = p_person_id",
 )
 
 PURGES = (
-    *PURGES_0032,
+    *PURGES_0036,
     "DELETE FROM person_secret WHERE person_id = p_person_id",
 )
 
@@ -109,7 +117,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(_purge_function(PURGES_0032))
+    op.execute(_purge_function(PURGES_0036))
     op.execute("DROP TRIGGER IF EXISTS trg_person_secret_opt_out ON person_secret")
     op.execute("DROP FUNCTION IF EXISTS reject_opted_out_person_secret()")
     op.drop_table("person_secret")

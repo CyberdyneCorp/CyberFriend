@@ -46,7 +46,9 @@ SQL_MODULES = (
     "privacy_sql",
     "erasure_sql",
     "tracing_notice_sql",
+    "accounts_sql",
     "personal_keys_sql",
+    "usage_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -383,6 +385,24 @@ UNSCOPED: dict[str, str] = {
     "admin_sql.REVOKE_ADMIN_SESSION": (
         "write; ends one session and returns it for sign-out. No content"
     ),
+    "admin_sql.INSERT_USER_SESSION": (
+        "write; a user-area session: its id hash, the account's subject and "
+        "email, encrypted tokens and when it last signed in afresh. No corpus table"
+    ),
+    "admin_sql.LIVE_USER_SESSION": (
+        "authentication; exchanges a user-session id hash for the session it "
+        "names. Establishes an identity, so it cannot be scoped to one; returns "
+        "a subject, an email and ciphertext, never corpus content"
+    ),
+    "admin_sql.REFRESH_USER_SESSION": "write; replaces one user session's tokens after a refresh",
+    "admin_sql.TOUCH_USER_SESSION": "write; marks one user session seen",
+    "admin_sql.REVOKE_USER_SESSION": (
+        "write; ends one user session and returns it for sign-out. No content"
+    ),
+    "admin_sql.REVOKE_USER_SESSIONS_OF": (
+        "write; ends every user session of one account after its erasure, "
+        "keyed on that account's own subject. Returns no row"
+    ),
     # --- config_sql ------------------------------------------------------
     "config_sql.LOAD_SETTINGS": (
         "operator configuration; the settings an operator has stored and who "
@@ -501,6 +521,37 @@ UNSCOPED: dict[str, str] = {
         "write; the requester's answer to 'tell you when its status changes?', "
         "keyed on their person id as well as the row id. Returns no row"
     ),
+    "feature_requests_sql.TRIAGE_PAGE": (
+        "the admin console's list of every suggestion, with the author's display "
+        "name and a count of others with the same text. A suggestion is the "
+        "person's own words given to the team with a disclosure, never channel "
+        "content, so there is no channel to scope by"
+    ),
+    "feature_requests_sql.TRIAGE_COUNT": (
+        "a count of suggestions for the console's pager, optionally one status. "
+        "No content"
+    ),
+    "feature_requests_sql.TRIAGE_ROW": (
+        "one suggestion by id for an admin's triage, locked so the change is "
+        "recorded against the row it was applied to; the person's own words, "
+        "never channel content"
+    ),
+    "feature_requests_sql.TRIAGE_EXISTS": (
+        "a flag: whether the suggestion an admin names as the original exists"
+    ),
+    "feature_requests_sql.TRIAGE_UPDATE": (
+        "write; an admin's status, note and duplicate link on one suggestion, "
+        "keyed on its id. Returns no row"
+    ),
+    "feature_requests_sql.CLAIM_STATUS_NEWS": (
+        "write and read; claims status changes to announce to authors who opted "
+        "in, returning each author's own suggestion and platform id so the bot "
+        "can message them their own words. Never channel content"
+    ),
+    "feature_requests_sql.RELEASE_STATUS_NEWS": (
+        "write; puts back a claim whose message was not sent, keyed on the row "
+        "id and the status it claimed. Returns no row"
+    ),
     # --- privacy_sql: /privacy, the asker's own rows ------------------------
     "privacy_sql.IS_OPTED_OUT": (
         "the asker's own opt-out flag, keyed on their person id"
@@ -609,6 +660,130 @@ UNSCOPED: dict[str, str] = {
     "tracing_notice_sql.CLAIM_NOTICE": (
         "write; a notice version and time on the asker's own person row, "
         "refused for an opted-out person. No content"
+    ),
+    # --- accounts_sql: the requester's own provisioning records -------------
+    #
+    # No email is ever stored: only an HMAC of it. Nothing here is content.
+    "accounts_sql.LOCK_PERSON": (
+        "row lock on the requester's own person row, keyed on their person id, "
+        "so the provisioning limits' count holds. Returns the id only"
+    ),
+    "accounts_sql.REQUESTS_SINCE": (
+        "times of the requester's own provisioning requests, keyed on their "
+        "person id, for the limits. No content"
+    ),
+    "accounts_sql.INSERT_CONSENT": (
+        "write; the requester's own consent: a version, a time and an email "
+        "HMAC, keyed on their person id. Returns no row"
+    ),
+    "accounts_sql.INSERT_REQUEST": (
+        "write; one counted request of the requester's own, keyed on their "
+        "person id. Returns the id only"
+    ),
+    "accounts_sql.DELETE_REQUEST": (
+        "write; uncounts a request this process reserved moments earlier and "
+        "the provider refused, by its own id. Returns no row"
+    ),
+    "accounts_sql.LATEST_CONSENT": (
+        "the email HMAC of the requester's own latest consent, keyed on their "
+        "person id. A keyed hash, never an address"
+    ),
+    "accounts_sql.CODES_SINCE": (
+        "how many link codes the requester was issued today and when the "
+        "first was, keyed on their person id. No content"
+    ),
+    "accounts_sql.SUPERSEDE_CODES": (
+        "write; ends the requester's own earlier link codes, keyed on their "
+        "person id. Returns no row"
+    ),
+    "accounts_sql.INSERT_CODE": (
+        "write; a link code's sha256 for the requester's own person id. "
+        "Returns no row"
+    ),
+    "accounts_sql.REDEEM_CODE": (
+        "keyed on the sha256 of a single-use code only its holder has; "
+        "returns the person id and email HMAC it was issued for. No content"
+    ),
+    "accounts_sql.DELETE_OLD_REQUESTS": (
+        "ingest maintenance; deletes requests past the 30 days they count "
+        "for, by age. Returns no row"
+    ),
+    "accounts_sql.LOCK_LIVE_CODE": (
+        "keyed on the sha256 of a single-use code only its holder has, after "
+        "a verified sign-in; locks it and returns the person id and email HMAC "
+        "it was issued for. No content"
+    ),
+    "accounts_sql.USE_CODE": "write; marks that code used, by its sha256. Returns no row",
+    "accounts_sql.SUBJECT_OWNER": (
+        "which person id a signed-in account's own subject is linked to, so "
+        "one account cannot be linked to two people. No content"
+    ),
+    "accounts_sql.LINKED_SUBJECT": (
+        "the subject the code's own person is linked to now, keyed on that "
+        "person id, so a relink ends the old account's sessions. No content"
+    ),
+    "accounts_sql.UPSERT_LINK": (
+        "write; links the code's own person to the signed-in subject, with the "
+        "masked email the bot names. Returns no row"
+    ),
+    "accounts_sql.END_USER_SESSIONS": (
+        "write; ends every user session of one unlinked subject. Returns no row"
+    ),
+    "accounts_sql.LINKED_PERSON": (
+        "identity lookup; the platform id a signed-in account's own subject is "
+        "linked to. The only way a /me request finds its person. No content"
+    ),
+    "accounts_sql.LINKED_PROFILE": (
+        "identity lookup; the platform id and name of the person a signed-in "
+        "account's own subject is linked to, shown to that account on /me. "
+        "No content"
+    ),
+    "accounts_sql.CODE_HOLDER": (
+        "keyed on the sha256 of a single-use code only its holder has; the "
+        "platform id and name it was issued to, shown before sign-in so the "
+        "browser knows which Discord account it would link. Uses nothing"
+    ),
+    "accounts_sql.DELETE_LINK": (
+        "write; [Unlink] by the presser's own person id. Returns the subject only"
+    ),
+    "accounts_sql.UNANNOUNCED_LINKS": (
+        "bot maintenance; links nobody was told about yet: platform id, subject "
+        "and masked email, to DM each person about their own link. No content"
+    ),
+    "accounts_sql.MARK_ANNOUNCED": (
+        "write; records that one link was announced, by its subject. Returns no row"
+    ),
+    "accounts_sql.DELETE_OLD_CODES": (
+        "ingest maintenance; deletes link codes past their day, by age. "
+        "Returns no row"
+    ),
+    # --- usage_sql: who the admin usage view must not show ---------------
+    "usage_sql.EXCLUDED_PEOPLE": (
+        "platform ids of opted-out people and people being erased, so the "
+        "usage view can drop them. Ids only, no content"
+    ),
+    "usage_sql.ERASED_PEOPLE": (
+        "platform ids and erasure times, so the usage view drops everything "
+        "up to an erasure. No content"
+    ),
+    "usage_sql.PENDING_TRACES": (
+        "ids of exported traces whose deletion was requested, so the usage "
+        "view leaves them out. No content"
+    ),
+    "usage_sql.NAMES": (
+        "display names for the platform ids in an operator's usage summary; "
+        "a name, never anything the person wrote"
+    ),
+    "usage_sql.PERSON": (
+        "one person's id, name and tracing-notice time, for the audited "
+        "admin questions view. No content"
+    ),
+    "usage_sql.VOICE_BY_PERSON": (
+        "transcribed seconds per person from the voice ledger, excluded "
+        "people left out. Numbers only"
+    ),
+    "usage_sql.VOICE_ANONYMOUS": (
+        "the anonymous voice seconds total folded from erased people. A number"
     ),
 }
 

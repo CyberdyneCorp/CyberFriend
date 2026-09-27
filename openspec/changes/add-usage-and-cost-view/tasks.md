@@ -12,7 +12,7 @@
 - [x] 2.4 Move the tracer seam to the outermost answer service; capabilities/obligations/decisions traced; catch-up/said-by (answered before that chain) traced through the same tracer
 - [x] 2.5 `ModelUsage` in `BudgetLedger`; thread completion tokens and model through `Plan`/`Grounded`
 - [x] 2.6 `generation-create` per model call; `span-create` per federated tool call, no arguments
-- [x] 2.7 `scripts/langfuse_models.py` + checked-in price table; docs
+- [x] 2.7 `scripts/langfuse_models.py` + checked-in price table; docs; also checks the configured `CHAT_MODEL`, `EXTRACTION_MODEL`, `EMBEDDING_MODEL` and `MEDIA_AUDIO_MODEL`, requiring `--price` for one nobody prices
 - [x] 2.8 Tests: batch shape, no tool arguments exported, opted-out asker still not exported (batch shape without generations/spans and opted-out asker done with 2.1-2.4; generation/span shape and tool arguments land with 2.5-2.6)
 
 ## 3. Retention
@@ -30,14 +30,14 @@
 
 ## 5. Admin API (live Langfuse reads)
 
-- [ ] 5.1 `ports/usage.py` `UsageSource`; `adapters/tracing/langfuse_usage.py` (metrics + traces, admin transport, env and tag filters, row-limit split)
-- [ ] 5.2 `UsageExclusions` from Postgres on every request (opt-out, open erasure, completed erasure up to `erased_before`, deletion-requested trace ids)
-- [ ] 5.3 `GET /api/usage/summary` (operator), window cap 90 days, 5-minute in-process cache of pre-exclusion rows, 503 "usage unavailable", names joined at read time, voice from `media_usage` + anonymous total
-- [ ] 5.4 `GET /api/usage/people/{id}/questions` (`admin_oidc`), trimmed fields, only traces after the person's notice, page size 50, no-store, audited per `sub` with the viewed person looked up
-- [ ] 5.5 Tests: operator 403 and `cfa_` token 403 on questions; response never contains answer/evidence keys; audit entry names the viewer sub and viewed person; opted-out, erased and pending-deletion traces absent from counts and text (trace still present in FakeLangfuse); traces before the notice counted but not shown; Langfuse down -> 503
+- [x] 5.1 `ports/usage.py` `UsageSource`; `adapters/tracing/langfuse_usage.py` (metrics + traces, admin transport, env and tag filters, row-limit split)
+- [x] 5.2 `UsageExclusions` from Postgres on every request (opt-out, open erasure, completed erasure up to `erased_before`, deletion-requested trace ids)
+- [x] 5.3 `GET /api/usage/summary` (operator), window cap 90 days, 5-minute in-process cache of pre-exclusion rows, 503 "usage unavailable", names joined at read time, voice from `media_usage` + anonymous total
+- [x] 5.4 `GET /api/usage/people/{id}/questions` (`admin_oidc`), trimmed fields, only traces after the person's notice, page size 50, no-store, audited per `sub` with the viewed person looked up
+- [x] 5.5 Tests: operator 403 and `cfa_` token 403 on questions; response never contains answer/evidence keys; audit entry names the viewer sub and viewed person; opted-out, erased and pending-deletion traces absent from counts and text (trace still present in FakeLangfuse); traces before the notice counted but not shown; Langfuse down -> 503
 
 ## 6. Screen
 
-- [ ] 6.1 Svelte `UsageVM` + Usage screen; text section only for OIDC admin; "traced question runs" label; "usage unavailable" state
-- [ ] 6.2 e2e: FakeLangfuse behind the admin transport; operator vs admin views
-- [ ] 6.3 Docs: `docs/admin-console.md`, `docs/operations.md` (Langfuse keys rating for the admin process)
+- [x] 6.1 Svelte `UsageVM` + Usage screen; text section only for OIDC admin; "traced question runs" label; "usage unavailable" state
+- [x] 6.2 e2e: FakeLangfuse behind the admin transport; operator vs admin views
+- [x] 6.3 Docs: `docs/admin-console.md`, `docs/operations.md` (Langfuse keys rating for the admin process)

@@ -25,6 +25,10 @@ What is authenticated and what is not:
     a CyberdyneAuth session is obtained and ended (see `admin.oidc`). With
     sign-in off they answer 404. `/auth/config` is open too: it tells the
     console, before anybody is signed in, whether to offer sign-in.
+*   The user area (`admin.user`): `/link` and `/auth/user/*` are open, and
+    start a user sign-in; `/me/*` is `user`, reached only with the user
+    area's own cookie, which no console route accepts. With the user area off
+    they answer 404.
 *   Every response carries the security headers in `headers.py`.
 
 The last route is a refusal. Anything under `/api` that no handler claimed
@@ -51,17 +55,23 @@ from chatmemory.admin.auth import AdminAuthenticator, AdminAuthMiddleware, Opera
 from chatmemory.admin.handlers import (
     changes,
     channels,
+    feature_requests,
     federation,
     optouts,
     settings,
     status,
     tokens,
+    usage,
 )
 from chatmemory.admin.handlers.services import AdminServices
 from chatmemory.admin.handlers.support import Refused, refusal
 from chatmemory.admin.headers import SecurityHeaders
 from chatmemory.admin.oidc import routes as sign_in_routes
 from chatmemory.admin.oidc.service import SignIn
+from chatmemory.admin.oidc.store import LoginRecord
+from chatmemory.admin.user import routes as user_routes
+from chatmemory.admin.user.auth import UserAuthMiddleware
+from chatmemory.admin.user.routes import UserArea
 
 log = structlog.get_logger()
 
@@ -110,12 +120,16 @@ def api_routes(services: AdminServices) -> list[Route]:
         *optouts.routes(services),
         *tokens.routes(services),
         *changes.routes(services),
+        *feature_requests.routes(services),
+        *usage.routes(services),
     ]
 
 
 _PUBLIC = Access.PUBLIC
+_USER = Access.USER
 _OPERATOR = Access.OPERATOR
 _ADMIN = Access.ADMIN
+_ADMIN_OIDC = Access.ADMIN_OIDC
 
 NO_CORPUS_PATH = f"{API_PREFIX}/{{rest:path}}"
 
@@ -132,6 +146,20 @@ ROUTE_ACCESS: Mapping[RouteKey, Access] = {
     ("GET", "/auth/login"): _PUBLIC,
     ("GET", "/auth/callback"): _PUBLIC,
     ("POST", "/auth/logout"): _PUBLIC,
+    # The user area. Starting a user sign-in is open, like `/auth/login`;
+    # everything under /me needs the user cookie and nothing else will do.
+    ("GET", "/link"): _PUBLIC,
+    # The confirmation page's form: same-origin only, checked in the handler.
+    ("POST", "/link"): _PUBLIC,
+    ("GET", "/auth/user/login"): _PUBLIC,
+    ("GET", "/auth/user/fresh"): _PUBLIC,
+    ("GET", "/me/session"): _USER,
+    ("GET", "/me/privacy"): _USER,
+    ("GET", "/me/feature-requests"): _USER,
+    ("POST", "/me/feature-requests"): _USER,
+    ("POST", "/me/unlink"): _USER,
+    ("POST", "/me/erase"): _USER,
+    ("POST", "/me/logout"): _USER,
     # Who is signed in, and with which role: any console principal.
     ("GET", "/api/session"): _OPERATOR,
     # Status and the change record.
@@ -158,6 +186,13 @@ ROUTE_ACCESS: Mapping[RouteKey, Access] = {
     # MCP credentials: review and revoke only.
     ("GET", "/api/tokens"): _OPERATOR,
     ("DELETE", "/api/tokens/{id}"): _ADMIN,
+    # Feature requests: operators read them, admins triage (audited).
+    ("GET", "/api/feature-requests"): _OPERATOR,
+    ("PATCH", "/api/feature-requests/{id}"): _ADMIN,
+    # Usage: counts for operators; a person's own questions only for an admin
+    # signed in as a person, never for a token (see handlers/usage.py).
+    ("GET", "/api/usage/summary"): _OPERATOR,
+    ("GET", "/api/usage/people/{id}/questions"): _ADMIN_OIDC,
     # The refusal for anything unclaimed under /api. Its non-read verbs are
     # admin like every other write, so an operator's POST is a 403 rather than
     # a tour of which paths exist.
@@ -179,7 +214,13 @@ exists.
 
 
 LOGOUT: RouteKey = ("POST", "/auth/logout")
-"""The only non-read route that is not `admin`, named so the test can say so."""
+"""The only non-read console route that is not `admin`, named so the test can say so."""
+
+LINK_START: RouteKey = ("POST", "/link")
+"""The `/link` page's form: public, since it starts a sign-in, and same-origin only."""
+
+USER_PREFIX = "/me"
+"""The user area's own routes: `user` rows, never console ones."""
 
 
 def build_app(
@@ -190,6 +231,7 @@ def build_app(
     oidc_configured: bool = False,
     sign_in: SignIn | None = None,
     route_access: Mapping[RouteKey, Access] = ROUTE_ACCESS,
+    user_area: UserArea | None = None,
 ) -> Starlette:
     """The console application: ports in, one ASGI app out.
 
@@ -201,8 +243,11 @@ def build_app(
     `oidc_configured` is whether CyberdyneAuth sign-in is configured; it
     downscopes `cfa_` tokens from admin to operator, and is implied by
     `sign_in`. `route_access` is injectable so a test can prove that a route
-    without a row is refused.
+    without a row is refused. `user_area` is the web user area, None when it
+    is off; it needs `sign_in`, whose client and callback it shares.
     """
+    if user_area is not None and sign_in is None:
+        raise ValueError("the user area signs in through the console's sign-in")
     oidc_configured = oidc_configured or sign_in is not None
 
     async def health(_: Request) -> JSONResponse:
@@ -224,7 +269,8 @@ def build_app(
     routes: list[Route | Mount] = [
         Route("/health", health, methods=["GET"], name="health"),
         Route("/ready", ready, methods=["GET"], name="ready"),
-        *sign_in_routes.routes(sign_in),
+        *sign_in_routes.routes(sign_in, _user_callback(user_area)),
+        *user_routes.routes(user_area),
         *api_routes(services),
         # Last under /api, so it claims only what no handler did. It also
         # answers a wrong method with this refusal rather than a 405, which
@@ -244,6 +290,16 @@ def build_app(
     ]
 
     app = Starlette(routes=routes, exception_handlers={Refused: refusal})
+    public_origin = sign_in.settings.public_origin if sign_in else None
+    # Inside the console's guard. Each accepts only its own cookie: this one
+    # guards /me and every `user` row, and the console's opens those to it.
+    app.add_middleware(
+        UserAuthMiddleware,
+        sign_in=user_area.sign_in if user_area else None,
+        access=RouteAccess(route_access, app.router.routes),
+        public_origin=public_origin,
+        prefix=USER_PREFIX,
+    )
     # Added after the routes and around the whole app: every path under /api
     # is authenticated and checked against its row before a handler sees the
     # request, and the handlers read the principal the middleware bound. The
@@ -255,7 +311,7 @@ def build_app(
             tokens_store,
             oidc_configured=oidc_configured,
             sessions=sign_in,
-            public_origin=sign_in.settings.public_origin if sign_in else None,
+            public_origin=public_origin,
         ),
         access=RouteAccess(route_access, app.router.routes),
         protected_prefix=API_PREFIX,
@@ -263,6 +319,16 @@ def build_app(
     # Outermost, so the refusals the guard writes carry the headers too.
     app.add_middleware(SecurityHeaders, issuer=sign_in.settings.issuer if sign_in else None)
     return app
+
+
+def _user_callback(area: UserArea | None) -> sign_in_routes.UserCallback | None:
+    if area is None:
+        return None
+
+    async def finish(login: LoginRecord, request: Request) -> Response:
+        return await user_routes.user_callback(area, login, request)
+
+    return finish
 
 
 def _console(console_dir: Path | None) -> Sequence[Route | Mount]:

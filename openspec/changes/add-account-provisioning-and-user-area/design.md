@@ -31,14 +31,19 @@ purged through `purge_person_derived` (add-privacy-dashboard).
   `client_credentials` client whose only scope is `users:provision`. It is not
   the admin BFF client.
 - Body `{email, name?, locale?}`. Nothing else.
-- Response: always 202 `{"status": "accepted"}`. No `sub`, no "exists" flag.
-  The response is the same whether the account was created, already existed,
-  or was silently throttled.
+- Response to a valid request: 202 `{"status": "accepted"}`. No `sub`, no
+  "exists" flag. The response is the same whether the account was created,
+  already existed, or was silently throttled.
+- 422 when the `name` is refused by CyberdyneAuth's name rules. It judges the
+  name alone, before any lookup, so it is the same for a known and an unknown
+  email.
 - CyberdyneAuth creates an unverified, passwordless account with
   `created_via = client:<client_id>` and sends an invitation email. Accepting
   the invitation sets a password and verifies the email.
 - An existing email gets a neutral notice at most once per 24 hours.
 - Per-client rate limit: 429. Per-email throttle: silent (still 202).
+- Neither 422 nor 429 depends on whether the email has an account, so no
+  answer the contract allows can reveal one.
 
 **The invitation goes to the email's owner, who must accept it.** A Discord
 person who enters someone else's address causes, at most, one invitation (or
@@ -50,11 +55,17 @@ accepts leaves nothing behind.
 
 ### Consent in DM only
 
-In a guild, the command replies ephemerally with "I'll DM you". In the DM, the
-bot shows the exact values that will be sent:
+The command is a group, `/account create` and `/account link` (Discord cannot
+have both a `/account` command and `/account link`). In a guild, it replies
+ephemerally with "I'll DM you". In the DM, the bot shows the exact values that
+will be sent:
 
-- email from the `email` fact, or asked for;
-- name from `full_name`, else `preferred_name`, else the display name;
+- email from the `email` fact, or asked for in a form ([Enter email]); a typed
+  address is checked like an email fact and not saved as one;
+- name from `full_name`, else `preferred_name`, else the display name: the
+  first that passes the full-name fact rule and is not domain-like (no links,
+  `<`, `>`, control or bidi characters, as CyberdyneAuth checks names); if
+  none passes, no name is sent;
 - locale from the person's answer language.
 
 The consent text, in the person's language, also states:
@@ -87,7 +98,8 @@ time.
   the call; over the limit the reply says when they can try again and nothing
   is sent;
 - a 429 from CyberdyneAuth is reported as "try again later" and is not counted
-  as a request;
+  as a request (the request row is written under the person lock before the
+  call, with the consent, and deleted again when the call fails);
 - these rows are purged by `purge_person_derived` and by a 30-day cleanup.
 
 ### The port
@@ -97,10 +109,16 @@ class AccountProvisioner(Protocol):
     async def request_account(self, request: ProvisioningRequest) -> None: ...
 ```
 
-- Returns nothing on 202. Raises `ProvisioningRateLimited` on 429 and
+- Returns nothing on 202. Raises `ProvisioningRateLimited` on 429,
+  `ProvisioningInvalidName` on 422 (our name rule drifted from the provider's:
+  reported as "try again later", uncounted, and logged as a warning) and
   `ProvisioningUnavailable` on anything else.
 - The adapter obtains a `client_credentials` token (scope `users:provision`)
-  and uses `edges.http_transport`.
+  from the token endpoint in `ACCOUNT_PROVISIONING_ISSUER`'s discovery,
+  caches it until shortly before expiry, retries once with a new token on a
+  401, and uses `edges.http_transport`. It exists only when
+  `ACCOUNT_PROVISIONING_CLIENT_ID` and `_SECRET` are both set (bot only; a
+  partial client refuses to start).
 - `ACCOUNT_PROVISIONING_ENABLED` defaults to false, and the command is hidden
   while it is off.
 
@@ -120,9 +138,14 @@ The email typed in Discord is unverified, so a link is never made on it.
    `account_link_code(code_sha256, person_id, email_hmac, expires_at = +15 min,
    used_at)`. Issuing a new code invalidates earlier unused ones; at most 5
    codes per person per day.
-2. `/link` stores the code hash in the login record (browser-bound by
-   `__Host-cf_login`, as in the console login) and starts OIDC with
-   `prompt=login`.
+2. `GET /link` starts nothing. It shows a page naming the Discord account the
+   code was issued to ("Leo (Discord user 123)"), telling the reader to
+   continue only if they asked for the link themselves. Its form posts the
+   code to `POST /link`, which is refused unless `Origin` is present and is
+   the console's own (a form cannot carry the CSRF header, and browsers
+   always send `Origin` on a form POST). That stores the code hash in the
+   login record (browser-bound by `__Host-cf_login`, as in the console login)
+   and starts OIDC with `prompt=login`.
 3. On callback, after the standard checks (state, browser binding, id-token
    nonce, `userinfo.sub == id_token.sub == access_token.sub`), the code must be
    unused and unexpired. Userinfo must have `email_verified = true` and an
@@ -130,10 +153,26 @@ The email typed in Discord is unverified, so a link is never made on it.
    `person_account_link(person_id UNIQUE, issuer, sub UNIQUE, linked_at)` and
    marks the code used.
 4. The bot DMs "Linked to a***@domain, not you? [Unlink]". Unlink deletes the
-   link and revokes user sessions.
+   link and revokes user sessions. The link row keeps only the masked address
+   (`email_hint`) for this message, and `notified_at`; the bot looks for links
+   with no `notified_at` every 30 seconds. [Unlink] is a persistent button
+   that acts on whoever presses it (only they can see their DM).
+
+All user sign-ins share the console's redirect URI: the login record's
+`purpose` (`admin`, `user`, `link`, `fresh`) decides which callback finishes
+it. A CyberdyneAuth account already linked to another person is refused;
+relinking a person to a new account ends the old account's user sessions.
 
 A forwarded or leaked code is useless without signing in as the consented,
-verified email.
+verified email. That does not stop a Discord person who typed somebody
+else's email from sending them the link: the consented email is theirs to
+choose, so the email match proves only that the signer owns it, not that they
+asked. Against that link CSRF: the `/link` page names the Discord account
+before any sign-in, only its same-origin form starts one, `/me` names the
+linked Discord account, and `POST /me/unlink` lets the CyberdyneAuth side undo
+a link (the DM's [Unlink] reaches only the Discord side, which is the
+attacker's in this case). The refusal page for an account already linked
+elsewhere points there.
 
 ### User session
 
@@ -152,6 +191,15 @@ verified email.
   profile is linked to this account. Link one from Discord with /account."
 - CSRF protection is the same as the admin console (custom header, Origin
   check, SameSite=Strict).
+
+Besides the routes above, the user area has `GET /me/session` (email, linked,
+the linked Discord account, fresh), `POST /me/unlink`, `POST /me/logout`, and two public starts, `GET /auth/user/login` and
+`GET /auth/user/fresh` (`max_age=300`). A web suggestion is stored with
+`source_kind = 'web'`.
+
+The web dashboard names and counts no archived channel: which channels a
+person may read is the Discord ACL, which the admin process cannot ask, so it
+fails closed and `/privacy` in Discord remains where channel counts are shown.
 
 ### Web erasure
 
@@ -192,7 +240,8 @@ imports between the admin and user view-models.
   there is nothing to leak.
 - [Wrong person linked] -> Verified email equal to the consented one (by
   HMAC), a single-use 15-minute code, a browser-bound login, a subject check,
-  and a post-link DM with Unlink.
+  a post-link DM with Unlink, a pre-sign-in page naming the Discord account,
+  the linked account shown on `/me`, and Unlink on the web too.
 - [A user session reaches admin routes] -> Separate cookies, middlewares and
   route-table levels, with a cross-test.
 - [The account outlives erasure] -> Stated before consent and after erasure.

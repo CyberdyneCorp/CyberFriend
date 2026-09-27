@@ -54,6 +54,11 @@ be the same in every outcome.
 - THEN the assistant SHALL tell the person to try again later
 - AND SHALL NOT count it against the person's own limit
 
+#### Scenario: Provider refuses the name
+- WHEN the provider rejects the request as an invalid name
+- THEN the assistant SHALL tell the person to try again later, SHALL NOT count
+  it, and SHALL warn the operator that the name rules differ
+
 ### Requirement: Provisioning is limited per person
 
 The system SHALL allow each person at most one provisioning request in any 24
@@ -79,13 +84,26 @@ The system SHALL link an identity-provider account to a person only when the
 person follows a single-use link, valid for 15 minutes, from their direct
 message, signs in in the same browser, the provider reports a verified email
 equal to the consented email, and the userinfo subject equals the token
-subject. The person SHALL be told when a link is made and SHALL be able to
-undo it.
+subject. Before any sign-in starts, whoever follows the link SHALL be shown
+which Discord account it links to. The person SHALL be told when a link is
+made, and the link SHALL be undoable both from Discord and from the user area.
 
 #### Scenario: Link code forwarded to someone else
 - WHEN someone other than the person uses the link and signs in with a
   different email
 - THEN no link SHALL be made
+
+#### Scenario: Link sent to someone who did not ask for it
+- WHEN someone opens a link they were sent
+- THEN they SHALL be shown which Discord account it would link to before any
+  sign-in starts
+- AND a sign-in SHALL start only from that page, not from a cross-site request
+
+#### Scenario: Link made by someone else's code
+- WHEN a signed-in account is linked to a Discord account that is not the
+  person's own
+- THEN the user area SHALL name the linked Discord account
+- AND the person SHALL be able to unlink it from the user area
 
 #### Scenario: Unverified email
 - WHEN the provider reports the email as unverified
@@ -108,3 +126,9 @@ only call the identity provider through the provisioning port.
 #### Scenario: Not enabled
 - WHEN provisioning is not enabled
 - THEN the account command SHALL NOT be offered
+
+#### Scenario: No provisioning client configured
+- WHEN provisioning is enabled but the provisioning client's id and secret are
+  not both configured
+- THEN no provisioner SHALL exist, the account command SHALL NOT be offered,
+  and nothing SHALL be sent to the provider

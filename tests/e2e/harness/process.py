@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from chatmemory.composition import Edges
 from chatmemory.config import Settings
 from chatmemory.entrypoints.bot import assemble
+from chatmemory.ports.accounts import AccountProvisioner
 from tests.e2e.harness.conversation import E2EBot
 from tests.e2e.harness.discord_wire import ChannelSpec, FakeDiscord, GuildLayout
 from tests.e2e.harness.ingest import Ingest
@@ -81,7 +82,12 @@ def e2e_settings(database_url: str) -> Settings:
     )
 
 
-async def start(settings: Settings, engine: AsyncEngine, seal: NetworkSeal) -> E2EBot:
+async def start(
+    settings: Settings,
+    engine: AsyncEngine,
+    seal: NetworkSeal,
+    provisioner: AccountProvisioner | None = None,
+) -> E2EBot:
     """Assemble the process over fakes, and connect it to the fake guild.
 
     The ingest half shares the bot's model script and database, so what a
@@ -97,6 +103,7 @@ async def start(settings: Settings, engine: AsyncEngine, seal: NetworkSeal) -> E
         engine=engine,
         http_transport=web.transport,
         clock=FakeClock(),
+        account_provisioner=provisioner,
     )
     process = await assemble(settings, edges)
     wire = FakeDiscord(process.graph.client, layout())

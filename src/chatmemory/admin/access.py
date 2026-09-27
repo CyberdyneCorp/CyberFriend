@@ -109,6 +109,10 @@ class Rule:
     def is_public(self) -> bool:
         return self.access is Access.PUBLIC
 
+    @property
+    def is_user(self) -> bool:
+        return self.access is Access.USER
+
     def permits(self, principal: Principal) -> bool:
         return permits(principal, self.access)
 
