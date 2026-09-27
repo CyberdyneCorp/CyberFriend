@@ -33,26 +33,32 @@
         Everything said in an indexed channel is kept until then.
       </p>
     {:else}
-      <SettingsTable settings={vm.retention} editor={vm.settings.editor} />
+      <SettingsTable
+        settings={vm.retention}
+        editor={vm.settings.editor}
+        canChange={app.session.canChange}
+      />
     {/if}
   </Loaded>
 </Panel>
 
 <Panel title="Opt-outs" description="People whose messages are not recorded and not retrievable.">
-  <form class="form-row" onsubmit={add}>
-    <label class="field">
-      <span>Platform</span>
-      <input bind:value={vm.platform} />
-    </label>
-    <label class="field">
-      <span>Platform user id</span>
-      <input bind:value={vm.userId} spellcheck={false} placeholder="e.g. 1234567890" />
-    </label>
-    <button type="submit" class="button" disabled={!vm.canAdd}>
-      {vm.adding.busy ? "Saving…" : "Opt this person out"}
-    </button>
-    <ActionResult action={vm.adding} />
-  </form>
+  {#if app.session.canChange}
+    <form class="form-row" onsubmit={add}>
+      <label class="field">
+        <span>Platform</span>
+        <input bind:value={vm.platform} />
+      </label>
+      <label class="field">
+        <span>Platform user id</span>
+        <input bind:value={vm.userId} spellcheck={false} placeholder="e.g. 1234567890" />
+      </label>
+      <button type="submit" class="button" disabled={!vm.canAdd}>
+        {vm.adding.busy ? "Saving…" : "Opt this person out"}
+      </button>
+      <ActionResult action={vm.adding} />
+    </form>
+  {/if}
   <ActionResult action={vm.action} />
   <Loaded resource={vm.optOuts} empty="Nobody has opted out.">
     <table class="table">
@@ -71,7 +77,7 @@
             <td class="cell-actions">
               {#if row.person === null}
                 <span class="muted">this row cannot be read as a person</span>
-              {:else}
+              {:else if app.session.canChange}
                 <ConfirmButton
                   label="Opt back in"
                   confirmLabel="Record them again"

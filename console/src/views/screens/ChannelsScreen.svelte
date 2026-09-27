@@ -32,16 +32,18 @@
   {#snippet actions()}
     <button type="button" class="button button--quiet" onclick={vm.load}>Refresh</button>
   {/snippet}
-  <form class="form-row" onsubmit={add}>
-    <label class="field">
-      <span>Channel id</span>
-      <input bind:value={vm.id} spellcheck={false} placeholder="e.g. 1234567890" />
-    </label>
-    <button type="submit" class="button" disabled={!vm.canAdd}>
-      {vm.adding.busy ? "Checking…" : "Index this channel"}
-    </button>
-    <ActionResult action={vm.adding} />
-  </form>
+  {#if app.session.canChange}
+    <form class="form-row" onsubmit={add}>
+      <label class="field">
+        <span>Channel id</span>
+        <input bind:value={vm.id} spellcheck={false} placeholder="e.g. 1234567890" />
+      </label>
+      <button type="submit" class="button" disabled={!vm.canAdd}>
+        {vm.adding.busy ? "Checking…" : "Index this channel"}
+      </button>
+      <ActionResult action={vm.adding} />
+    </form>
+  {/if}
   <ActionResult action={vm.action} />
   <Loaded resource={vm.channels} empty="No channels are indexed.">
     {#snippet children(rows)}
@@ -68,12 +70,14 @@
                 {#if channel.evidence}<p class="muted">{channel.evidence}</p>{/if}
               </td>
               <td class="cell-actions">
-                <ConfirmButton
-                  label="Stop indexing"
-                  confirmLabel="Stop indexing it"
-                  busy={vm.action.busy}
-                  onConfirm={() => void vm.remove(channel)}
-                />
+                {#if app.session.canChange}
+                  <ConfirmButton
+                    label="Stop indexing"
+                    confirmLabel="Stop indexing it"
+                    busy={vm.action.busy}
+                    onConfirm={() => void vm.remove(channel)}
+                  />
+                {/if}
               </td>
             </tr>
           {/each}

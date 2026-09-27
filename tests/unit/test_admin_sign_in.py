@@ -86,6 +86,25 @@ def test_without_sign_in_configured_the_auth_routes_are_not_there() -> None:
     assert plain.client.get("/auth/callback?code=x&state=y").status_code == 404
 
 
+def test_the_console_is_told_sign_in_is_offered_without_a_credential(console: Console) -> None:
+    response = console.client.get("/auth/config")
+
+    assert response.status_code == 200
+    assert response.json() == {"sign_in": True}
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_without_sign_in_configured_the_console_is_told_it_is_not_offered() -> None:
+    async def build() -> Console:
+        return await build_console()
+
+    plain = asyncio.run(build())
+
+    response = plain.client.get("/auth/config")
+    assert response.status_code == 200
+    assert response.json() == {"sign_in": False}
+
+
 # --- completing it ----------------------------------------------------------
 
 

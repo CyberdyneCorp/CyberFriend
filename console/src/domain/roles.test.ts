@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { allows } from "./roles";
+import { allows, roleOf } from "./roles";
 
 describe("allows", () => {
   it("lets admin do what operator may", () => {
@@ -12,5 +12,17 @@ describe("allows", () => {
   it("refuses a lower role and no role at all", () => {
     expect(allows("operator", "admin")).toBe(false);
     expect(allows(null, "operator")).toBe(false);
+  });
+});
+
+describe("roleOf", () => {
+  it("takes the highest role the API reported", () => {
+    expect(roleOf(["operator", "admin"])).toBe("admin");
+    expect(roleOf(["operator"])).toBe("operator");
+  });
+
+  it("gives no role for none, or for names it does not know", () => {
+    expect(roleOf([])).toBeNull();
+    expect(roleOf(["cyberfriend:admin", "owner"])).toBeNull();
   });
 });

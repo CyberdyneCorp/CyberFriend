@@ -2,7 +2,8 @@
  * The admin API, one call per route.
  *
  * Nothing here calls `fetch` directly: `http.ts` is the only file that does,
- * so the credential and the 401 rule live in one place.
+ * so the credential and the 401 rule live in one place. Signing in and out
+ * is `sessionApi.ts`.
  */
 
 import type {
@@ -19,12 +20,9 @@ import type {
   TokenRecord,
   ToolAllowed,
 } from "../domain/types";
-import { apiPath, send, verifyCredential } from "./http";
+import { apiPath, send } from "./http";
 
 export const adminApi = {
-  /** Check a credential before it becomes the session's. */
-  verifyCredential,
-
   status: () => send<Status>("GET", apiPath("status")),
 
   settings: () => send<Setting[]>("GET", apiPath("settings")),
