@@ -12,7 +12,7 @@
  * refusal recorded. A console that guessed would hide the mistake instead.
  */
 
-import type { JsonValue, Setting, SettingSource } from "../api/types";
+import type { JsonValue, Setting, SettingSource } from "./types";
 
 export type Provenance = "database" | "environment" | "default" | "unknown";
 

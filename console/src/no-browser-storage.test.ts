@@ -8,21 +8,23 @@
  * pasted it, and this console can widen what the agent may do.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { codeOf as code, sourceFiles } from "./test/sourceScan";
 
 const SRC = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURES = fileURLToPath(new URL("../fixtures/storage-guard/", import.meta.url));
 
 /**
  * The one module, besides the session module, allowed to read the token.
- * One constant so a move (to `services/http.ts`, say) changes the location
- * without loosening the rule.
+ * One constant so a move (to `services/breakGlassHttp.ts`, with the login
+ * change) changes the location without loosening the rule.
  */
-const TOKEN_READER = "api/client.ts";
+const TOKEN_READER = "services/http.ts";
+const SESSION_MODULE = "services/session.ts";
 
 const FORBIDDEN = [
   "localStorage",
@@ -33,43 +35,13 @@ const FORBIDDEN = [
 ];
 
 /**
- * Every file type the console may be written in: `.ts` and `.tsx` today,
- * `.svelte` and `.svelte.ts` (covered by `.ts`) after the port. A guard that
- * did not know about a file type would pass while checking nothing.
+ * `.ts`, `.svelte` and `.svelte.ts` under `dir`, except this file: it names
+ * every API it forbids, so it would fail its own scan. Comments are stripped
+ * before matching (see `codeOf`), so prose about why the token is not in
+ * `localStorage` does not count.
  */
-const SOURCE = /\.(ts|tsx|svelte)$/;
-
 function sources(dir: string): string[] {
-  // Sorted, so a report's order does not depend on the filesystem.
-  return readdirSync(dir).sort().flatMap((entry) => {
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) return sources(path);
-    // This file names every API it forbids, so it would fail its own scan.
-    if (entry === "no-browser-storage.test.ts") return [];
-    return SOURCE.test(entry) ? [path] : [];
-  });
-}
-
-/**
- * The code, without the prose about it.
- *
- * Several files explain *why* the token is not in `localStorage`, and a scan
- * that read those comments as violations would be one nobody could keep
- * green. HTML comments (Svelte markup), block comments and whole-line `//`
- * comments go; an inline trailing comment is left alone rather than risk
- * truncating the code before it.
- */
-function code(path: string): string {
-  const source = readFileSync(path, "utf8");
-  // HTML comments exist only in Svelte markup. In TypeScript `<!--` and `-->`
-  // are ordinary characters (a string, `x-->0`), and stripping between them
-  // would hide real code from the scan.
-  const markup = path.endsWith(".svelte") ? source.replace(/<!--[\s\S]*?-->/g, "") : source;
-  return markup
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("//"))
-    .join("\n");
+  return sourceFiles(dir, (name) => name === "no-browser-storage.test.ts");
 }
 
 /** `relative/path: api` for every forbidden storage API used under `root`. */
@@ -98,9 +70,9 @@ describe("credential handling", () => {
 
   it("reads the credential in exactly one place outside the session module", () => {
     // `currentToken` feeding the fetch client is the whole surface. A second
-    // reader is how a token ends up in a log line or a React prop.
+    // reader is how a token ends up in a log line or a component prop.
     const readers = sources(SRC).filter(
-      (path) => !path.endsWith("auth/session.ts") && code(path).includes("currentToken"),
+      (path) => !path.endsWith(SESSION_MODULE) && code(path).includes("currentToken"),
     );
     expect(readers.map((p) => p.slice(SRC.length))).toEqual([TOKEN_READER]);
   });

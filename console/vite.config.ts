@@ -1,5 +1,6 @@
-/// <reference types="vitest" />
-import react from "@vitejs/plugin-react";
+/// <reference types="vitest/config" />
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { svelteTesting } from "@testing-library/svelte/vite";
 import { defineConfig } from "vite";
 
 // The admin API in development. Overridable because the API's port is its
@@ -8,7 +9,7 @@ import { defineConfig } from "vite";
 const ADMIN_API_ORIGIN = process.env.ADMIN_API_ORIGIN ?? "http://127.0.0.1:8083";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [svelte(), svelteTesting()],
   // Relative asset URLs, so the bundle works wherever the API chooses to
   // mount it -- "/", "/console/", anywhere. An absolute base is a second
   // thing that has to be kept in step with the server, and the failure is
@@ -28,10 +29,10 @@ export default defineConfig({
     },
   },
   test: {
-    // Node by default: most of what is worth testing here is pure. The one
-    // test that needs a DOM -- the gate in front of a state-changing tool --
-    // asks for jsdom in its own first line.
+    // Node by default: domain and view-model tests need no DOM, and that is
+    // the point of the view-models. A test that renders a view asks for
+    // jsdom in its own first line.
     environment: "node",
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.ts"],
   },
 });
