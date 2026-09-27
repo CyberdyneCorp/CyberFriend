@@ -522,7 +522,7 @@ class AdminAuthMiddleware:
         outcome, scope = await self._authenticate(scope)
         if isinstance(outcome, Denied):
             log.info("admin.refused", path=scope.get("path"), status=outcome.status)
-            await _refuse(send, outcome.status, outcome.body)
+            await refuse(send, outcome.status, outcome.body)
             return
 
         if not rule.permits(outcome):
@@ -532,7 +532,7 @@ class AdminAuthMiddleware:
                 principal=outcome.subject,
                 required=rule.access.value if rule.access else None,
             )
-            await _refuse(send, 403, _REQUIRES_ADMIN_BODY if rule.access else _NO_RULE_BODY)
+            await refuse(send, 403, _REQUIRES_ADMIN_BODY if rule.access else _NO_RULE_BODY)
             return
 
         # Note what is *not* read here: no header, query parameter or body
@@ -562,8 +562,9 @@ class AdminAuthMiddleware:
         if get_route_path(scope).startswith(self._prefix):
             return False
         # A public row, or nothing claims it (the router answers 404 and no
-        # handler runs).
-        return rule.is_public or not rule.matched
+        # handler runs), or a user-area row: those are `admin.user.auth`'s to
+        # guard, with the user cookie, and this middleware never grants one.
+        return rule.is_public or rule.is_user or not rule.matched
 
     async def _authenticate(self, scope: Scope) -> tuple[Principal | Denied, Scope]:
         """The principal, and the scope the handler will see.
@@ -612,7 +613,7 @@ class AdminAuthMiddleware:
         return await sessions.authenticate(session_id)
 
 
-async def _refuse(send: Send, status: int, body: bytes) -> None:
+async def refuse(send: Send, status: int, body: bytes) -> None:
     headers = [
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode()),

@@ -12,6 +12,12 @@
  *
  * The domain imports no packages either, only other domain files.
  *
+ * Two applications share the bundle: the console, and the user area at `#/me`
+ * (`USER_AREA` below). Neither may import the other's files -- the user area
+ * has its own API, session and screens, and a user-area view-model that
+ * reached `adminApi` would be a way from a user session towards console
+ * routes. Only the shared building blocks (`SHARED`) are imported by both.
+ *
  * Files at the top of `src/` (the composition root `main.ts`) are outside the
  * import rule, because they are where the layers are wired together, but not
  * outside the network rule. `*.test.ts` files and the helpers in `test/` are
@@ -105,6 +111,52 @@ function violations(root: string): string[] {
   });
 }
 
+/** The user area's files, by path without extension; a trailing `/` is a folder. */
+const USER_AREA = ["domain/me", "services/userApi", "viewmodels/me/", "views/me/"];
+
+/** What both applications may import. Everything else in a layer is the console's. */
+const SHARED = [
+  "domain/",
+  "services/http",
+  "services/hashLocation",
+  "viewmodels/resource",
+  "viewmodels/action",
+  "views/components/",
+];
+
+type Zone = "console" | "user" | "shared";
+
+function withoutExtension(path: string): string {
+  return path.replace(/\.ts$/, "").replace(/\.svelte$/, "");
+}
+
+function inAny(path: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => (prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix));
+}
+
+function zoneOf(path: string): Zone {
+  const bare = withoutExtension(path);
+  if (inAny(bare, USER_AREA)) return "user";
+  return inAny(bare, SHARED) ? "shared" : "console";
+}
+
+/** Every import between the console and the user area under `root`. */
+function crossings(root: string): string[] {
+  const files = sourceFiles(root, (name) => name.endsWith(".test.ts"))
+    .map((path) => relative(root, path))
+    .filter((file) => !file.startsWith(TEST_HELPERS) && layerOf(file) !== null);
+  return files.flatMap((file) => {
+    const from = zoneOf(file);
+    if (from === "shared") return [];
+    return factsOf(join(root, file)).imports.flatMap(({ specifier }) => {
+      if (specifier === null || !specifier.startsWith(".")) return [];
+      const target = relative(root, resolve(dirname(join(root, file)), specifier));
+      const to = zoneOf(target);
+      return to === "shared" || to === from ? [] : [`${file} -> ${specifier}: ${from} may not import ${to}`];
+    });
+  });
+}
+
 describe("the layer rule", () => {
   it("holds for the console", () => {
     expect(violations(SRC)).toEqual([]);
@@ -119,6 +171,25 @@ describe("the layer rule", () => {
       "services",
       "viewmodels",
       "views",
+    ]);
+  });
+});
+
+describe("the console and the user area", () => {
+  it("do not import each other", () => {
+    expect(crossings(SRC)).toEqual([]);
+  });
+
+  it("are both there, so a green run means something", () => {
+    const zones = new Set(sourceFiles(SRC).map((path) => zoneOf(relative(SRC, path))));
+    expect([...zones].sort()).toEqual(["console", "shared", "user"]);
+  });
+
+  it("the rule catches a crossing either way, and allows the shared blocks", () => {
+    expect(crossings(join(FIXTURES, "zones"))).toEqual([
+      "services/userApi.ts -> ./session: user may not import console",
+      "viewmodels/me/usesAdmin.svelte.ts -> ../../services/adminApi: user may not import console",
+      "viewmodels/usesUser.svelte.ts -> ./me/privacy.svelte: console may not import user",
     ]);
   });
 });

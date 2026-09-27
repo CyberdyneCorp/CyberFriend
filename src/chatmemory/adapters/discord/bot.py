@@ -51,6 +51,7 @@ import discord
 import structlog
 from discord import app_commands
 
+from chatmemory.adapters.discord.accounts import LinkAnnouncer, UnlinkView, account_group
 from chatmemory.adapters.discord.alerts import (
     alert_listing,
     follow_up_with_confirmation,
@@ -85,6 +86,7 @@ from chatmemory.adapters.discord.suggestions import (
 )
 from chatmemory.adapters.discord.suggestions import text as suggestion_text
 from chatmemory.adapters.discord.views import RequesterOnlyView
+from chatmemory.app.accounts import AccountService, LinkAnnouncements
 from chatmemory.app.alert_requests import AlertProposal, AlertRequests
 from chatmemory.app.ask import (
     AskOutcome,
@@ -1029,6 +1031,7 @@ class CyberFriendClient(discord.Client):
         self._alerts: AlertRequests | None = None
         self._suggestions: FeatureRequestService | None = None
         self._privacy: PrivacyService | None = None
+        self._accounts: AccountService | None = None
         self._voice: VoiceQuestions | None = None
         self._described = Capabilities()
 
@@ -1103,6 +1106,31 @@ class CyberFriendClient(discord.Client):
         """
         self._privacy = privacy
 
+    def attach_accounts(self, accounts: AccountService) -> None:
+        """Offer `/account create|link`, and [Unlink] on link notices.
+
+        Unlike the commands above, not registered without it: account
+        provisioning is off unless enabled, and a command that could only say
+        so is not offered at all. [Unlink] is registered as a persistent view,
+        so a notice sent before a restart still unlinks.
+        """
+        self._accounts = accounts
+        self.add_view(UnlinkView(accounts, self._person_language))
+
+    def link_announcer(self, announcements: LinkAnnouncements) -> LinkAnnouncer | None:
+        """The sweep that DMs "Linked to a***@..., not you? [Unlink]", or None
+        without `/account`."""
+        if self._accounts is None:
+            return None
+        return LinkAnnouncer(
+            announcements, self._accounts, self.fetch_user, self._person_language
+        )
+
+    async def _person_language(self, person: PersonRef) -> Language:
+        """A person's saved language, for a message they did not prompt."""
+        saved = await self._asks.reply_language(person)
+        return Language.PORTUGUESE if saved is Language.PORTUGUESE else Language.ENGLISH
+
     def attach_notifications(self, notifications: NotificationPreferences) -> None:
         """Give `/notifications` somewhere to write.
 
@@ -1158,6 +1186,11 @@ class CyberFriendClient(discord.Client):
             self._build_privacy_command(),
         ):
             self.tree.add_command(_in_guild_and_dm(command))
+        if self._accounts is not None:
+            # Global like `/privacy`: the consent itself happens in a DM.
+            self.tree.add_command(
+                _in_guild_and_dm(account_group(self._accounts, self._caller_language))
+            )
         # Guild only: these act on a channel. No `default_permissions`: Manage
         # Channels granted by a channel overwrite, and not guild-wide, must
         # still see the command. The permission is checked when it runs.

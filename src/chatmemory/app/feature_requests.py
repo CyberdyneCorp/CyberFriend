@@ -39,12 +39,38 @@ from chatmemory.ports.feature_requests import (
     FeatureRequest,
     FeatureRequestStore,
     NewSuggestion,
+    RequestStatus,
     StoreVerdict,
     SuggestionSource,
 )
 
 LISTING_LIMIT = 20
 """How many of their own suggestions `/suggestions` shows, newest first."""
+
+_STATUS_LABELS: dict[Language, dict[RequestStatus, str]] = {
+    Language.ENGLISH: {
+        RequestStatus.NEW: "new",
+        RequestStatus.TRIAGED: "triaged",
+        RequestStatus.PLANNED: "planned",
+        RequestStatus.DONE: "done",
+        RequestStatus.DECLINED: "declined",
+        RequestStatus.DUPLICATE: "duplicate",
+    },
+    Language.PORTUGUESE: {
+        RequestStatus.NEW: "nova",
+        RequestStatus.TRIAGED: "em análise",
+        RequestStatus.PLANNED: "planejada",
+        RequestStatus.DONE: "feita",
+        RequestStatus.DECLINED: "recusada",
+        RequestStatus.DUPLICATE: "duplicada",
+    },
+}
+
+
+def status_label(status: RequestStatus, language: Language) -> str:
+    """A status as the person reads it: Portuguese, else English."""
+    shown = language if language is Language.PORTUGUESE else Language.ENGLISH
+    return _STATUS_LABELS[shown][status]
 
 
 class ContactKind(StrEnum):

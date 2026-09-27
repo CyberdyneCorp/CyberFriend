@@ -27,13 +27,17 @@ import discord
 import structlog
 
 from chatmemory.adapters.discord.views import RequesterOnlyView
-from chatmemory.app.feature_requests import ContactKind, SubmitOutcome, SubmitResult
+from chatmemory.app.feature_requests import (
+    ContactKind,
+    SubmitOutcome,
+    SubmitResult,
+    status_label,
+)
 from chatmemory.app.language import Language
 from chatmemory.ports.feature_requests import (
     DEFAULT_DAILY_LIMIT,
     MAX_TEXT_CHARS,
     FeatureRequest,
-    RequestStatus,
 )
 
 log = structlog.get_logger()
@@ -153,36 +157,12 @@ _CONTACTS: dict[Language, dict[ContactKind, str]] = {
     },
 }
 
-_STATUSES: dict[Language, dict[RequestStatus, str]] = {
-    EN: {
-        RequestStatus.NEW: "new",
-        RequestStatus.TRIAGED: "triaged",
-        RequestStatus.PLANNED: "planned",
-        RequestStatus.DONE: "done",
-        RequestStatus.DECLINED: "declined",
-        RequestStatus.DUPLICATE: "duplicate",
-    },
-    PT: {
-        RequestStatus.NEW: "nova",
-        RequestStatus.TRIAGED: "em análise",
-        RequestStatus.PLANNED: "planejada",
-        RequestStatus.DONE: "feita",
-        RequestStatus.DECLINED: "recusada",
-        RequestStatus.DUPLICATE: "duplicada",
-    },
-}
-
-
 def _lang(language: Language) -> Language:
     return PT if language is PT else EN
 
 
 def text(key: str, language: Language, **values: object) -> str:
     return _TEXT[key][_lang(language)].format(**values)
-
-
-def status_label(status: RequestStatus, language: Language) -> str:
-    return _STATUSES[_lang(language)][status]
 
 
 _OUTCOME_KEYS = {

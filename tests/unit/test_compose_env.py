@@ -121,6 +121,44 @@ DEPLOYMENT_SETTINGS = {
 }
 
 
+@pytest.mark.parametrize(
+    ("setting", "default"),
+    [
+        ("ACCOUNT_PROVISIONING_ENABLED", "false"),
+        ("PROVISIONING_EMAIL_KEY", ""),
+        ("ADMIN_PUBLIC_URL", ""),
+        ("ACCOUNT_PROVISIONING_ISSUER", ""),
+        ("ACCOUNT_PROVISIONING_CLIENT_ID", ""),
+        ("ACCOUNT_PROVISIONING_CLIENT_SECRET", ""),
+    ],
+)
+def test_account_provisioning_settings_reach_the_bot(setting: str, default: str) -> None:
+    """`/account` runs in the bot: the switch, the email HMAC key, the URL
+    the sign-in link points at and the provisioning client must all reach it,
+    or turning it on in the platform silently leaves it off."""
+    assert f"{setting}=${{{setting}:-{default}}}" in service_block("bot")
+
+
+@pytest.mark.parametrize(
+    ("setting", "default"),
+    [
+        ("ACCOUNT_PROVISIONING_ENABLED", "false"),
+        ("PROVISIONING_EMAIL_KEY", ""),
+        ("TRACING_ENABLED", "false"),
+        ("TRACE_RETENTION_DAYS", "90"),
+    ],
+)
+def test_the_user_area_settings_reach_the_admin_service(setting: str, default: str) -> None:
+    """The user area runs in the admin service: its switch, the key `/link`
+    compares emails with, and the retention `/me/privacy` states."""
+    assert f"{setting}=${{{setting}:-{default}}}" in service_block("admin")
+
+
+@pytest.mark.parametrize("setting", ["MEMORY_RETENTION_DAYS", "BACKUP_RETENTION_DAYS"])
+def test_the_retention_the_user_area_states_reaches_the_admin_service(setting: str) -> None:
+    assert f"{setting}=${{{setting}}}" in service_block("admin")
+
+
 def service_block(name: str) -> str:
     match = re.search(rf"^  {name}:$(.*?)(?=^  \w+:$|\Z)", COMPOSE, re.M | re.S)
     assert match, f"service {name} missing from docker-compose.yml"
@@ -141,10 +179,11 @@ def test_setting_reaches_every_service_that_reads_it(
         )
 
 
-@pytest.mark.parametrize("service", ["ingest", "bot"])
+@pytest.mark.parametrize("service", ["ingest", "bot", "admin"])
 def test_trace_retention_reaches_the_sweep_and_the_privacy_statement(service: str) -> None:
     """Ingest deletes traces after it; the bot tells people the same period in
-    `/privacy`. Set for one alone, the statement and the sweep disagree."""
+    `/privacy` and the console states it on the usage screen. Set for one
+    alone, the statements and the sweep disagree."""
     assert "TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}" in service_block(service)
 
 
@@ -292,9 +331,27 @@ def admin_service(compose_text: str = COMPOSE) -> dict[str, Any]:
     return service
 
 
-# Non-secret values the console reads for its own sake: the Langfuse host
-# (never its keys) lets it warn at startup when Langfuse is not on v3.
-CONSOLE_EXTRAS = frozenset({"DATABASE_URL", "LANGFUSE_HOST"})
+# Values the console reads for its own sake: the database; Langfuse for the
+# usage view (host, the project-wide key pair used server-side only, and the
+# environment every read is scoped to) and the trace retention period the usage
+# screen and `/me/privacy` state. The user area adds its switch, the HMAC key
+# `/link` compares a signed-in email with (a keyed hash, not a credential for
+# anything), and the other retention periods `/me/privacy` states.
+CONSOLE_EXTRAS = frozenset(
+    {
+        "DATABASE_URL",
+        "TRACE_RETENTION_DAYS",
+        "LANGFUSE_HOST",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_ENVIRONMENT",
+        "ACCOUNT_PROVISIONING_ENABLED",
+        "PROVISIONING_EMAIL_KEY",
+        "TRACING_ENABLED",
+        "MEMORY_RETENTION_DAYS",
+        "BACKUP_RETENTION_DAYS",
+    }
+)
 
 
 def unexpected_console_variables(service: dict[str, Any]) -> list[str]:
@@ -326,6 +383,12 @@ def test_the_console_environment_is_the_database_its_own_settings_and_nothing_el
     )
 
 
+def test_the_provisioning_client_is_the_bots_alone() -> None:
+    """Only the bot requests accounts: the console never gets the client that
+    can create them, whatever the platform injects besides."""
+    assert "ACCOUNT_PROVISIONING_CLIENT" not in service_block("admin")
+
+
 def test_the_console_reads_no_env_file() -> None:
     """An `env_file:` hands the container every variable in the file -- the
     bot token, the model key and the search key included -- without one of
@@ -337,7 +400,7 @@ def test_the_console_reads_no_env_file() -> None:
     "environment",
     [
         '      - "SENTRY_DSN=${SENTRY_DSN}"\n',
-        "      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}\n",
+        "      - SERPAPI_KEY=${SERPAPI_KEY}\n",
     ],
 )
 def test_the_allowlist_sees_quoted_and_plain_list_items(environment: str) -> None:
@@ -444,9 +507,9 @@ def test_voice_settings_reach_the_bot_and_nothing_else(setting: str) -> None:
     assert "VOICE_QUESTIONS_ENABLED=${VOICE_QUESTIONS_ENABLED:-false}" in service_block("bot")
 
 
-def test_the_console_gets_the_langfuse_host_and_not_its_keys() -> None:
-    """The host alone is enough to warn at startup that Langfuse left v3."""
+def test_the_console_gets_langfuse_for_the_usage_view() -> None:
+    """The usage view reads Langfuse live; without all three it says so."""
     block = service_block("admin")
-    assert "LANGFUSE_HOST=" in block
-    for variable in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
-        assert variable not in block
+    for variable in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        assert f"{variable}=${{{variable}:-}}" in block
+    assert "LANGFUSE_ENVIRONMENT=${LANGFUSE_ENVIRONMENT:-production}" in block

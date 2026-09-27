@@ -343,7 +343,7 @@ project is never touched.
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
 | `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
-| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, and by `bot`, which states it in `/privacy`, the one-time tracing notice and the capabilities reply |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, by `bot`, which states it in `/privacy`, the one-time tracing notice and the capabilities reply, and by `admin`, which states it on the console's usage screen |
 
 Turning it on with a host but no keys is refused at startup rather than
 silently disabled. A deployment that believes it is recording and is not finds
@@ -419,8 +419,8 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   (`fixed`, `loop`):
   another app's or environment's traces in a shared project are never
   deleted. The same sweep then deletes everything pending. The console only
-  marks: it holds no Langfuse keys, and `bot` and `ingest` are the processes
-  that hold the pair. A search or deletion Langfuse refuses or cannot receive
+  marks: it reads Langfuse for the usage view and never deletes; `ingest` is
+  the process that deletes. A search or deletion Langfuse refuses or cannot receive
   (a 400 included) stays pending and is retried every five minutes. The
   migration queues a search for everyone who had already opted out, which
   finds the traces of questions they asked. It cannot find the traces that
@@ -458,20 +458,38 @@ checked-in table `scripts/langfuse_model_prices.json` (USD per million
 tokens, reviewed like code). AminiLLM is on-prem and is listed at zero, so its
 calls are matched and counted without inventing a cost.
 
-Applying the table is a manual ops step, not run at startup. It is idempotent:
+The script also checks the **configured** models: `CHAT_MODEL`,
+`EXTRACTION_MODEL`, `EMBEDDING_MODEL` and `MEDIA_AUDIO_MODEL` (their defaults
+when unset), read from its own environment, so export them as the deployment
+has them. Each must be priced by a table row, by a Langfuse-managed
+definition, by `--price NAME=INPUT,OUTPUT` (USD per million input and
+output tokens, from the provider's price list), or by a definition an earlier
+`--price` left in Langfuse (reported as "priced by an earlier --price" and
+left as it is). A configured model with none of those is named and **nothing
+is written**: prices are never guessed. A `--price` registers the model with
+the pattern `(?i)^(openai/)?(<name>)(-YYYY-MM-DD)?$` and replaces a table row
+of the same name; add it to the table so a changed price is reviewed like code.
+
+Production runs `gpt-5.4-mini` (chat and extraction) and
+`text-embedding-3-small`. Langfuse prices the embedding model; whether it
+prices `gpt-5.4-mini` depends on its version, and the script says so. If it
+does not, pass the price from OpenAI's price list.
+
+Applying prices is a manual ops step, not run at startup. It is idempotent:
 a second run reports every model `unchanged`. A changed price deletes our
 definition for that model and creates a new one; models Langfuse manages
 itself are never touched.
 
 ```bash
-LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
-  uv run python scripts/langfuse_models.py --dry-run   # report only
-LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
-  uv run python scripts/langfuse_models.py
+export LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=...
+export CHAT_MODEL=gpt-5.4-mini EXTRACTION_MODEL=gpt-5.4-mini \
+       EMBEDDING_MODEL=text-embedding-3-small
+uv run python scripts/langfuse_models.py --dry-run   # report only
+uv run python scripts/langfuse_models.py --price gpt-5.4-mini=<input>,<output>
 ```
 
-Run it after changing the table or pointing the chat model at a new name.
-Costs are estimates from these tables, not a bill.
+Run it after changing the table or pointing any of those settings at a new
+model. Costs are estimates from these tables, not a bill.
 
 ### Langfuse version: stay on v3
 
@@ -961,12 +979,17 @@ person asked or which trace quoted them.
 `media_usage`, so a person who erases and keeps using the bot starts the
 month's personal allowance again. The server-wide ceiling is unaffected.
 
-**Langfuse keys.** The key pair is project-wide (ingest, read and delete).
-Two processes hold it: `bot` (it exports traces, and states retention in
-`/privacy`) and `ingest` (withdrawal, the asker search and retention). The
-admin console holds none; it and the bot's erasure only mark traces in
-`trace_export`, and ingest deletes. Rotating the pair means updating both
-services.
+**Langfuse keys.** The key pair is project-wide (ingest, read and delete):
+Langfuse has no read-only key, so every holder could also write and delete.
+Three processes hold it: `bot` (it exports traces, and states retention in
+`/privacy`), `ingest` (withdrawal, the asker search and retention) and
+`admin`, which only reads, server-side, for the usage view (`GET
+/api/public/metrics` and `/api/public/traces`; see docs/admin-console.md,
+"Usage"). Rate the admin process accordingly: holding the pair is equivalent
+to holding the trace store, so its environment is as sensitive as the bot's.
+The keys are never sent to a browser and no console response carries them.
+The console and the bot's erasure still only mark traces in `trace_export`;
+ingest deletes. Rotating the pair means updating all three services.
 
 **Open ops check: Langfuse blobs.** Langfuse v3 deletes a trace
 asynchronously (a worker purges ClickHouse). Whether that also removes the
@@ -1239,14 +1262,126 @@ surrounding conversation is stored.
 - **Five a day**: at most five accepted per person in any rolling 24 hours,
   enforced inside the insert while holding a lock on the person's row, so
   parallel submissions are counted one after another.
+- **Triage**: the admin console's Feature requests screen lists every
+  suggestion, newest first, filterable by status (`new`, `triaged`,
+  `planned`, `done`, `declined`, `duplicate`), with the author's display name
+  and how many other people suggested the same text
+  (`GET /api/feature-requests`, operator). Admins set the status, a note for
+  the team and a duplicate-of link (`PATCH /api/feature-requests/{id}`,
+  admin; operators get 403). Each changed field is written to the change
+  record as `feature_request.<id>.status`, `.duplicate_of` or `.admin_note`,
+  with who made it; the status and link with their values before and after,
+  the note only as "set" or "empty", never its text. The suggestion's own
+  text cannot be edited.
 - **Status news is opt-in**: the acknowledgement asks whether to DM them when
-  the status changes; nothing is stored unless they press Yes. The sweep that
-  sends those DMs arrives with the admin triage screen.
+  the status changes; nothing is stored unless they press Yes. A sweep in the
+  bot process (every ten minutes, after the gateway connects) sends one DM
+  per status change, in the suggestion's language, naming the new status and
+  quoting their text; the admin note is never sent. A row is claimed before
+  its message is sent, so each change is announced once; a status changed and
+  changed back before the sweep sends nothing. Nobody is messaged who did not
+  press Yes, has opted out or erased their data (their rows are gone), has
+  turned `/notifications` off, or whose DMs are closed. A closed DM is
+  recorded like a notification's (`notification_preference.undeliverable_at`)
+  and the news waits until `/notifications on`; a transient Discord failure
+  is retried on the next sweep. The health endpoint reports
+  `suggestion_news.delivered` and `last_run_at`.
 - **Privacy**: nothing is written for an opted-out person, not even their
   name; an opt-out deletes a person's suggestions in the same
   transaction, and deleting the person cascades. The delete is in
   `purge_person_derived` (added by 0030), so self-service erasure reaches
   suggestions as well.
+
+## CyberdyneAuth accounts
+
+`/account create` asks CyberdyneAuth for an account for the person; `/account
+link` (or [Link my account]) DMs them a single-use sign-in link. Both exist
+only when `ACCOUNT_PROVISIONING_ENABLED=true` **and** a provisioner is wired,
+which in a deployment means the provisioning client below is configured;
+without it, a deployment that turns the switch on logs
+`composition.accounts_without_provisioner` and keeps the command hidden.
+Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
+(`ports/accounts.py`).
+
+| Bot variable | |
+|---|---|
+| `ACCOUNT_PROVISIONING_ISSUER` | The CyberdyneAuth issuer, https (e.g. `https://auth.backend.coolify.cyberdynecorp.ai`). Its discovery document names the token endpoint; requests go to `{issuer}/api/v1/users/provision` |
+| `ACCOUNT_PROVISIONING_CLIENT_ID` | A `client_credentials` client CyberdyneAuth issues for this bot, scope `users:provision` only. **Not** the console's `ADMIN_OIDC_CLIENT_ID` |
+| `ACCOUNT_PROVISIONING_CLIENT_SECRET` | Its secret. Never logged; the admin service is not given it |
+
+The adapter (`adapters/accounts/cyberdyneauth.py`) exists only while the id
+and secret are both set; one without the other, or either without the
+issuer, or an issuer that is not https, refuses to start. It fetches a
+`client_credentials` token (scope `users:provision`, `client_secret_basic`
+unless the issuer offers only `client_secret_post`), keeps it until 30 seconds
+before `expires_in`, and on a 401 fetches one new token and retries once. It
+sends `{email, name?, locale?}` and reads only the status: **202** is accepted
+(whatever CyberdyneAuth did), **429** (per-client limit) and any other answer
+or no answer say "try again later" and are not counted, and **422** (the name
+was refused) does the same but logs `accounts.provisioning_name_rejected` as a
+warning: the name rule here (below) has drifted from CyberdyneAuth's and must
+be brought back in line. Only statuses are logged, never the email, the name
+or a token. Its HTTP goes through the bot's `Edges.http_transport`.
+
+To turn it on once CyberdyneAuth has deployed the endpoint and issued the
+client: set the three variables on the bot, then
+`ACCOUNT_PROVISIONING_ENABLED=true` with `PROVISIONING_EMAIL_KEY` and
+`ADMIN_PUBLIC_URL`, and redeploy. To turn it off, set
+`ACCOUNT_PROVISIONING_ENABLED=false` (or unset the client).
+
+- **Consent in a DM, to exact values.** Asked in a channel, the reply is
+  private and the rest continues in a DM. The DM shows the name (full name,
+  else preferred name, else Discord display name, the first that passes the
+  full-name rule — letters, marks, digits, spaces and `'-.’`, at most 128
+  characters, nothing domain-like such as `www.x.com` — so no link, `<`, `>`,
+  control or bidi character is sent or shown; if none passes, no name is
+  sent), the email (the email fact,
+  or one typed into a form, which is not saved as a fact) and the language,
+  says CyberdyneAuth will email an invitation and the account works only once
+  it is accepted, and that the CyberdyneAuth account is **not** deleted by
+  `/privacy` -> Delete everything (CyberdyneAuth has no deletion API yet; a
+  server admin asks their team). Nothing is sent before [Confirm], and only
+  `email`, `name` and `locale` (`en` or `pt-BR`) are: `ProvisioningRequest`
+  has no other field.
+- **One reply for every outcome.** CyberdyneAuth answers 202 whether it
+  created the account, it already existed, or it throttled the address, so the
+  reply is always "If this address doesn't have a CyberdyneAuth account yet,
+  it will receive an invitation...".
+- **Limits per person**: 1 request in 24 hours and 3 in 30 days, decided under
+  a lock on the person row before CyberdyneAuth is called. Over the limit
+  nothing is sent and the reply says when to try again. A 429, a 422 or any
+  other failure from CyberdyneAuth says "try again later" and is not counted.
+- **Emails are stored only as `HMAC-SHA256(PROVISIONING_EMAIL_KEY, lowercased
+  email)`** (`account_consent`, `account_provisioning_request`,
+  `account_link_code`; migration 0035). A plain hash could be reversed by
+  trying likely addresses. The key is at least 32 characters, never logged;
+  changing it orphans every stored consent and link code. The admin service
+  holds the same key to match a signed-in email at `/link`.
+- **Link codes**: 32 random bytes in `ADMIN_PUBLIC_URL/link?code=...`
+  (`ADMIN_PUBLIC_URL` must be https with no query or fragment, as the console
+  requires; the bot refuses to start otherwise), stored
+  only as sha256, single use, valid 15 minutes; a new code ends the earlier
+  ones, and at most 5 are issued per person per day.
+- **Redeeming a code** (`/link`, on the admin service): the page first names
+  the Discord account the code belongs to and starts a sign-in only from its
+  own same-origin form; the person then signs in
+  to CyberdyneAuth in the browser that opened the link, with `prompt=login`.
+  The link is made only if CyberdyneAuth reports the email verified and its
+  HMAC equals the consented one, and `userinfo.sub` equals the token subject
+  (`person_account_link`). The bot then DMs "Linked to a***@domain, not you?
+  [Unlink]" (checked every 30 seconds; `notified_at`, migration 0036), and
+  [Unlink] ends the link and every web session of that account; **Unlink**
+  in the user area does the same from the CyberdyneAuth side. The person's
+  web user area is `ADMIN_PUBLIC_URL/#/me` (see `docs/admin-console.md`, "The
+  user area"). The admin service needs `ACCOUNT_PROVISIONING_ENABLED` and
+  `PROVISIONING_EMAIL_KEY` too, and states the same retention as `/privacy`
+  from `TRACING_ENABLED`, `TRACE_RETENTION_DAYS`, `MEMORY_RETENTION_DAYS` and
+  `BACKUP_RETENTION_DAYS`.
+- **Retention**: ingest deletes requests older than 30 days and link codes
+  older than a day, hourly. Consent rows stay until opt-out or erasure.
+  `purge_person_derived` deletes every account row (consent, requests, codes,
+  links, and the linked account's web sessions), so opt-out and Delete
+  everything reach them, and deleting the person cascades.
 
 ## Position alerts
 

@@ -86,6 +86,11 @@ and sends through the same `DiscordTaskMessenger`, and `main` runs
 without `ALERTS_ENABLED` (and an Infura key) `BotGraph.alerts` is None and
 nothing starts.
 
+Suggestion status messages take the same messenger: `build_bot` builds a
+`StatusNewsRunner` over the answer stack's engine beside `/suggest`, and
+`main` runs `suggestion_news_loop` every ten minutes. The admin console
+changes a status; this is the process that tells the authors who asked.
+
 Voice questions take the same edges: `assemble` ->
 `build_voice_questions(settings, engine, edges.http_transport, edges.clock)`
 -> `build_bot(voice=...)` -> `CyberFriendClient.attach_voice`. The CDN
@@ -115,6 +120,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory import logging as log_setup
+from chatmemory.adapters.discord.accounts import LinkAnnouncer
 from chatmemory.adapters.discord.acl import LiveGuild, PermissionCaches, _Guild
 from chatmemory.adapters.discord.bot import (
     CyberFriendClient,
@@ -142,6 +148,8 @@ from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.configuration import ConfigurationEditor
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
+from chatmemory.app.feature_request_news import SWEEP_INTERVAL_SECONDS as SUGGESTION_SWEEP_SECONDS
+from chatmemory.app.feature_request_news import StatusNewsRunner
 from chatmemory.app.indexing import ChannelPurge, IndexingService
 from chatmemory.app.notifications import NotificationDelivery
 from chatmemory.app.reasoning.contract import RunTracer
@@ -155,6 +163,8 @@ from chatmemory.composition import (
     AnswerStack,
     Edges,
     ask_policy,
+    build_account_provisioner,
+    build_accounts,
     build_alert_requests,
     build_alert_runner,
     build_answer_stack,
@@ -162,7 +172,9 @@ from chatmemory.composition import (
     build_catch_up,
     build_channel_listing,
     build_conversations,
+    build_feature_request_news,
     build_feature_requests,
+    build_link_announcements,
     build_live_scope,
     build_notification_delivery,
     build_notification_preferences,
@@ -242,6 +254,9 @@ class BotGraph:
     #: The position-alert sweep. None unless `ALERTS_ENABLED` with an Infura
     #: key; alerts are created by asking and confirming, under the same switch.
     alerts: AlertRunner | None = None
+    #: The suggestion status sweep: one direct message per status change to
+    #: authors who asked for it. None when no engine was handed in.
+    suggestion_news: StatusNewsRunner | None = None
     #: The queue drain. None when no engine was handed in, or when an
     #: operator has switched notifications off -- in which case nothing in
     #: this process sends anything, which is the safe half.
@@ -375,10 +390,17 @@ def build_bot(
         runner = build_task_runner(
             settings, notifications, asks, DiscordTaskMessenger(client.fetch_user)
         )
+    suggestion_news = None
     if notifications is not None:
         # `/suggest` and `/suggestions`. Without it both say suggestions cannot
         # be taken here.
         client.attach_feature_requests(build_feature_requests(notifications, clock))
+        # And the other half: the console changes a status and cannot message
+        # anybody, so this process tells the authors who asked to be told.
+        # Without it the Yes under an acknowledgement promises nothing.
+        suggestion_news = build_feature_request_news(
+            notifications, DiscordTaskMessenger(client.fetch_user, prefix=""), clock
+        )
         # `/privacy`. Archive coverage is the `/channels` listing, so a channel
         # the person cannot read is neither named nor counted; without a
         # listing no channel is. Without the engine the command says it cannot
@@ -406,6 +428,7 @@ def build_bot(
         notifications=delivery,
         tasks=runner,
         alerts=alerts,
+        suggestion_news=suggestion_news,
     )
 
 
@@ -513,6 +536,8 @@ async def scope_loop(scope: LiveScope, state: HealthState) -> None:
 #: long after that window it takes to notice. A pass over an empty queue is
 #: one indexed scan that finds nothing.
 NOTIFICATION_DRAIN_INTERVAL_SECONDS = 15.0
+LINK_NOTICE_INTERVAL_SECONDS = 30.0
+"""How soon after linking on the web the person is DMed about it."""
 
 
 async def scheduled_task_loop(
@@ -612,6 +637,52 @@ async def alert_loop(
         await asyncio.sleep(interval)
 
 
+async def link_notice_loop(
+    announcer: LinkAnnouncer,
+    state: HealthState,
+    interval: float = LINK_NOTICE_INTERVAL_SECONDS,
+    ready: asyncio.Event | None = None,
+) -> None:
+    """DM each person whose CyberdyneAuth account was just linked on the web.
+
+    The admin process makes the link; only this process can reach the person,
+    so it looks for links nobody has been told about. Absorbs everything: an
+    unsent notice stays unannounced and is tried next pass.
+    """
+    if ready is not None:
+        await ready.wait()
+    while True:
+        try:
+            sent = await announcer.announce()
+            state.details["link_notices"] = {"sent": sent, "last_run_at": time.time()}
+        except Exception:
+            log.exception("accounts.link_notices_failed")
+        await asyncio.sleep(interval)
+
+
+async def suggestion_news_loop(
+    runner: StatusNewsRunner,
+    state: HealthState,
+    interval: float = SUGGESTION_SWEEP_SECONDS,
+    ready: asyncio.Event | None = None,
+) -> None:
+    """Tell authors who asked that their suggestion's status changed.
+
+    Waits for the gateway, since a direct message is all it produces. Absorbs
+    everything like the other sweeps: a claim whose message was not sent is
+    put back, so a failed pass is retried by the next one.
+    """
+    if ready is not None:
+        await ready.wait()
+    while True:
+        try:
+            sent = await runner.run_due()
+            state.details["suggestion_news"] = {"delivered": sent, "last_run_at": time.time()}
+        except Exception:
+            log.exception("suggestions.status_sweep_failed")
+        await asyncio.sleep(interval)
+
+
 async def run_beside_scope(
     work: Coroutine[Any, Any, None],
     scope: LiveScope,
@@ -658,6 +729,9 @@ class Process:
     conversations: Conversations
     facts: PersonalFactsService
     edges: Edges
+    #: "Linked to a***@..., not you? [Unlink]" for links made on the web.
+    #: None unless `/account` is offered.
+    link_announcer: LinkAnnouncer | None = None
 
 
 async def assemble(settings: Settings, edges: Edges) -> Process:
@@ -734,6 +808,20 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # describes only what every deployment has.
         capabilities=stack.capabilities,
     )
+    # `/account`, offered only when ACCOUNT_PROVISIONING_ENABLED and a
+    # provisioner is at the edge: the harness's fake, or the CyberdyneAuth
+    # adapter over the edges' transport when its client is configured.
+    # Nothing reaches CyberdyneAuth otherwise.
+    provisioner = edges.account_provisioner or build_account_provisioner(
+        settings, edges.http_transport
+    )
+    accounts = build_accounts(settings, stack.engine, provisioner, edges.clock)
+    link_announcer = None
+    if accounts is not None:
+        graph.client.attach_accounts(accounts)
+        link_announcer = graph.client.link_announcer(
+            build_link_announcements(stack.engine, edges.clock)
+        )
     return Process(
         graph=graph,
         stack=stack,
@@ -741,6 +829,7 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         conversations=conversations,
         facts=facts,
         edges=edges,
+        link_announcer=link_announcer,
     )
 
 
@@ -814,6 +903,14 @@ async def main() -> None:
                 clock=process.edges.clock,
             )
         )
+    # "Linked to a***@..., not you? [Unlink]", for links the admin process
+    # made. Only with `/account`, and here because this process reaches people.
+    if process.link_announcer is not None:
+        drains.append(link_notice_loop(process.link_announcer, state, ready=gateway_ready))
+    # Suggestion status messages, for the same reason: the console changes a
+    # status, and only this process can tell the author.
+    if graph.suggestion_news is not None:
+        drains.append(suggestion_news_loop(graph.suggestion_news, state, ready=gateway_ready))
     await run_beside_scope(
         client.start(settings.discord_token.get_secret_value()), scope, state, drains
     )

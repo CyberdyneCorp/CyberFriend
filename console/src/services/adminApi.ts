@@ -12,13 +12,21 @@ import type {
   Changed,
   Channel,
   ChannelAdded,
+  FeatureRequestPage,
+  FeatureRequestPatch,
+  FeatureRequestStatus,
+  FeatureRequestTriaged,
   FederationServer,
   OptOut,
+  PersonQuestions,
   ServerAdded,
   Setting,
   Status,
   TokenRecord,
   ToolAllowed,
+  UsageGroup,
+  UsageSummary,
+  UsageWindow,
 } from "../domain/types";
 import { apiPath, send } from "./http";
 
@@ -69,7 +77,35 @@ export const adminApi = {
   revokeToken: (id: string) => send<Changed>("DELETE", apiPath("tokens", id)),
 
   audit: () => send<AuditEntry[]>("GET", apiPath("audit")),
+
+  featureRequests: (status: FeatureRequestStatus | null, page: number) => {
+    const query = new URLSearchParams({ page: String(page) });
+    if (status !== null) query.set("status", status);
+    return send<FeatureRequestPage>("GET", `${apiPath("feature-requests")}?${query.toString()}`);
+  },
+  /** Admin only; the API records every change with who made it. */
+  triageFeatureRequest: (id: number, patch: FeatureRequestPatch) =>
+    send<FeatureRequestTriaged>("PATCH", apiPath("feature-requests", String(id)), patch),
+  usageSummary: (window: UsageWindow, group: UsageGroup) =>
+    send<UsageSummary>("GET", withQuery(apiPath("usage", "summary"), { ...window, group })),
+  /**
+   * A person's questions, for an admin signed in with CyberdyneAuth; the API
+   * refuses anybody else and records every call. The answer is `no-store`, and
+   * nothing here keeps it: it lives in the view-model until the panel closes.
+   */
+  personQuestions: (platformUserId: string, window: UsageWindow, page: number) =>
+    send<PersonQuestions>(
+      "GET",
+      withQuery(apiPath("usage", "people", platformUserId, "questions"), {
+        ...window,
+        page: String(page),
+      }),
+    ),
 };
+
+function withQuery(path: string, params: Record<string, string>): string {
+  return `${path}?${new URLSearchParams(params).toString()}`;
+}
 
 /** What a view-model is handed: the real client, or a fake with the same shape. */
 export type AdminApi = typeof adminApi;

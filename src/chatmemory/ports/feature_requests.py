@@ -30,6 +30,8 @@ class SourceKind(StrEnum):
     COMMAND = "command"
     DM = "dm"
     CHANNEL = "channel"
+    WEB = "web"
+    """Typed in the web user area (0036)."""
 
 
 class RequestStatus(StrEnum):
@@ -108,4 +110,126 @@ class FeatureRequestStore(Protocol):
 
     async def set_notify(self, person: PersonRef, request_id: int, notify: bool) -> bool:
         """Whether to message them on a status change; False when not theirs."""
+        ...
+
+
+# --- triage: the team's side -------------------------------------------------------
+
+MAX_NOTE_CHARS = 2000
+"""The longest admin note the console keeps."""
+
+
+@dataclass(frozen=True, slots=True)
+class TriageEntry:
+    """One suggestion as the team sees it in the console.
+
+    The person's name is read from their person row when the list is asked
+    for, so a rename shows and nothing about them is copied onto the row.
+    `same_text_elsewhere` counts the *other* people who suggested the same
+    normalised text.
+    """
+
+    id: int
+    text: str
+    language: str | None
+    status: RequestStatus
+    admin_note: str | None
+    duplicate_of: int | None
+    source_kind: SourceKind
+    person_name: str
+    same_text_elsewhere: int
+    created_at: datetime
+    updated_at: datetime
+    updated_by: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TriagePage:
+    entries: Sequence[TriageEntry]
+    total: int
+    """How many suggestions the filter matches, across every page."""
+
+
+@dataclass(frozen=True, slots=True)
+class TriageChange:
+    """What an admin asked to change. A field left None is left as it is.
+
+    The note and the duplicate link can be cleared, so each has its own flag
+    saying it was given: `set_note` with `admin_note=None` clears the note.
+    """
+
+    status: RequestStatus | None = None
+    set_note: bool = False
+    admin_note: str | None = None
+    set_duplicate: bool = False
+    duplicate_of: int | None = None
+
+    @property
+    def empty(self) -> bool:
+        return self.status is None and not self.set_note and not self.set_duplicate
+
+
+class TriageRefusal(StrEnum):
+    NOT_FOUND = "not_found"
+    UNKNOWN_DUPLICATE = "unknown_duplicate"
+    """`duplicate_of` names a suggestion that does not exist."""
+
+
+@dataclass(frozen=True, slots=True)
+class TriageResult:
+    before: TriageEntry | None = None
+    after: TriageEntry | None = None
+    refusal: TriageRefusal | None = None
+
+
+class FeatureRequestTriage(Protocol):
+    """The console's port: every suggestion, and the admin's changes to one."""
+
+    async def triage_page(
+        self, status: RequestStatus | None, *, offset: int, limit: int
+    ) -> TriagePage:
+        """Newest first, optionally one status only."""
+        ...
+
+    async def triage(
+        self, request_id: int, change: TriageChange, *, actor: str, now: datetime
+    ) -> TriageResult:
+        """Apply `change`, recording who made it; the row before and after."""
+        ...
+
+
+# --- status news: telling the author ------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class StatusNews:
+    """A status change the author asked to hear about and has not been told.
+
+    Claimed means `notified_status` already holds `status`; `previous` is what
+    it held, so an unsent message can be put back.
+    """
+
+    request_id: int
+    person: PersonRef
+    status: RequestStatus
+    previous: str
+    language: str | None
+    text: str
+
+
+class StatusNewsStore(Protocol):
+    async def claim_status_news(self, limit: int) -> Sequence[StatusNews]:
+        """Claim changes to tell, for people who opted in to hearing them.
+
+        Skips people who opted out, turned notifications off, or whose direct
+        messages are known to be closed; their rows stay unclaimed.
+        """
+        ...
+
+    async def release(self, news: StatusNews) -> None:
+        """Put back a claim whose message was not sent, unless it moved on."""
+        ...
+
+    async def record_undeliverable(self, person: PersonRef, now: datetime) -> None:
+        """Their direct messages are closed: stop trying until they reopen them."""
         ...

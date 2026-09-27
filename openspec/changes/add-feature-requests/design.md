@@ -137,10 +137,12 @@ feature_request(
 
 The admin process cannot DM. A sweep in the bot process (every 10 minutes)
 selects rows where `notify_on_change` is true and `status <> notified_status`,
-and sends a localised DM. It skips people whose
-`notification_preference.undeliverable_at` is set, and then sets
-`notified_status`. Before the admin triage endpoint exists, the sweep has
-nothing to send.
+claims them by setting `notified_status` to the status, and sends a localised
+DM. It skips people who opted out, turned notifications off, or whose
+`notification_preference.undeliverable_at` is set; their rows stay unclaimed.
+An unsent message puts the claim back: a closed DM also records
+`undeliverable_at` (cleared by `/notifications on`), and a transient failure is
+retried on the next sweep.
 
 ## Risks / Trade-offs
 

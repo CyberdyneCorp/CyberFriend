@@ -136,6 +136,8 @@ credential issue as an escalation.
 | Retention | How long anything is kept, and who has opted out. |
 | Settings | Every setting, its value, and **where that value came from**. |
 | Tokens | Review and revoke MCP credentials. Issuing one is not possible from here; see below. |
+| Feature requests | What people suggested (`/suggest`), in their own words, with their display name and how many others suggested the same. Filter by status; admins triage a row (status, a note for the team, duplicate of #) and each changed field lands in the audit — the note as "set" or "empty", never its text. Authors who asked are told of a status change by the bot, not from here. |
+| Usage | Traced question runs, tokens, estimated cost, tool calls and voice time per person, feature, model and tool, for up to 90 days. An admin signed in with CyberdyneAuth can open one person's questions (their own words, paged, audited); everybody else sees counts only. See "Usage" below. |
 | Audit | Who changed what, when, from what to what. |
 
 ## The four rules this interface is built around
@@ -292,7 +294,11 @@ cd console && npm test
 - `viewmodels/*.test.ts` — every screen's behaviour without a DOM: the typed
   gate and the read-only fast path, the note a save gives when the environment
   still wins, the unreadable-channel note, opt-outs that cannot be parsed,
-  tokens without an id, the audit filter, the two-click `Confirmation`.
+  tokens without an id, the audit filter, the two-click `Confirmation`, and
+  the usage view (every grouping read for one window, a window over 90 days
+  never sent, "usage unavailable" on a 503, question text never requested for
+  a principal who may not read it, paging, and the text dropped when its panel
+  closes or the window changes).
 - `views/components/TypedConfirm.test.ts` and `ConfirmButton.test.ts` — the
   enable button and the two-click removal, in a DOM.
 - `views/Shell.test.ts` — the navigation leaves out a route the role may not
@@ -310,7 +316,11 @@ cd console && npm test
   readability and adding an unreadable channel, settings provenance and a save
   the environment overrides, the retention message, saving a retention setting
   under its own key, adding an opt-out, two-click removals of a channel, an
-  opt-out and a token, and the audit's refusals and filter. With CyberdyneAuth
+  opt-out and a token, the audit's refusals and filter, and the usage screen
+  (an operator's counts with no question control, an admin paging one
+  person's questions with the window and page in the request, an admin token
+  offered no question text, and "usage unavailable" with no figures when the
+  stub's Langfuse is down). With CyberdyneAuth
   offered: the sign-in link first and the token form behind "Use an operator
   token"; a cookie session opening the console with no credential header; an
   operator seeing every screen with no control that changes anything; an admin
@@ -426,16 +436,17 @@ rebuild the oracle the server refuses to be.
 ## Roles, and which route needs which
 
 The API has two console roles. **Operator** is read-only: status, settings,
-federation, channels, opt-outs, tokens and the audit, and nothing that changes
-them. **Admin** implies operator and is required for every write — a setting,
-a federated server or tool, a channel, an opt-out (which purges), an MCP token
-revocation.
+federation, channels, opt-outs, tokens, feature requests, the audit and the
+usage summary, and nothing that changes them. **Admin** implies operator and
+is required for every write — a setting, a federated server or tool, a
+channel, an opt-out (which purges), an MCP token revocation, a feature
+request's triage.
 
 Which role a route needs is decided in one place, `ROUTE_ACCESS` in
 `src/chatmemory/admin/server.py`, with one explicit row per mounted
 `(method, path)`: `public` (probes and the static bundle), `user` (the user
-area, later), `operator`, `admin`, or `admin_oidc` (personal content: admin
-and signed in as a person, never a token). There is no default by method; HEAD
+area's `/me/*`, see below), `operator`, `admin`, or `admin_oidc` (personal
+content: admin and signed in as a person, never a token). There is no default by method; HEAD
 is looked up under its route's GET row. The middleware resolves each request
 against the router's own route list, so:
 
@@ -454,8 +465,8 @@ claims it, so `GET /api` or `GET /apix` without a credential is the same 401
 as any API route.
 
 `tests/unit/test_admin_roles.py` walks every mounted route and fails on a
-route without a row, a row without a route, a write below admin, or anything
-under `/api` marked public. Adding a route means adding its row in the same
+route without a row, a row without a route, a console write below admin, a
+`user` row outside `/me`, or anything under `/api` marked public or `user`. Adding a route means adding its row in the same
 diff.
 
 ### What a `cfa_` token is
@@ -468,6 +479,184 @@ only from the CyberdyneAuth role. A token never reads personal content
 break-glass rollback: tokens are admin again on the next start, and sessions
 stop being accepted. The other four sign-in variables may stay set; without an
 issuer they are ignored, with a warning naming them.
+
+## The user area (`#/me`)
+
+A person's own data on the web: their `/privacy` dashboard, "delete
+everything" and their suggestions. It is in the same process and bundle as the
+console and shares only the OIDC client and callback with it. The code is in
+`src/chatmemory/admin/user/` and `console/src/{services/userApi.ts,
+viewmodels/me/, views/me/}`; `architecture.test.ts` fails on any import
+between the user area and the console's API, session or screens.
+
+It is on when CyberdyneAuth sign-in is configured **and**
+`ACCOUNT_PROVISIONING_ENABLED=true`, which also needs `PROVISIONING_EMAIL_KEY`
+(the bot's key, at least 32 characters; the admin service refuses to start
+without it). Off, `/link` and `/auth/user/*` answer 404 and `/me/*` 401.
+
+| Route | Access | What it does |
+|---|---|---|
+| `GET /link?code=...` | public | The link the bot DMs. Starts nothing: a page names the Discord account the code was issued to ("Leo (Discord user 123)") and says to continue only if you asked for the link yourself. An unknown, used or expired code gets the "did not work" page. |
+| `POST /link` | public, same origin | That page's form (`code`). Refused unless `Origin` is sent and is the console's own (and `Sec-Fetch-Site`, when sent, is `same-origin`): a form cannot send the CSRF header. Stores the code's sha256 in a browser-bound login record (`__Host-cf_login`) and signs in with `prompt=login` (303). |
+| `GET /auth/user/login` | public | A plain user sign-in. |
+| `GET /auth/user/fresh` | public | A sign-in with `max_age=300`, which "delete everything" needs. |
+| `GET /me/session` | user | `{"email", "linked", "discord", "fresh"}`; `discord` names the linked Discord account, so a link to somebody else's is visible. |
+| `GET /me/privacy` | user | The `/privacy` inventory at DM detail, what is kept and for how long (`BACKUP_RETENTION_DAYS` unset says no backups are kept), and that the CyberdyneAuth account is not deleted. |
+| `GET`, `POST /me/feature-requests` | user, CSRF on POST | The person's suggestions, and a new one under the same rules as `/suggest` (no contact details, deduplicated, 5 a day); stored with source `web`. |
+| `POST /me/erase` | user, CSRF | `{"mode": "erase" \| "erase_and_opt_out", "confirm": "DELETE"}`. Needs a fresh sign-in; ends the link and every session of the account, clears the cookie and revokes the refresh token. |
+| `POST /me/unlink` | user, CSRF | Removes the link, as [Unlink] in the DM does; ends every session of the account, clears the cookie and revokes the refresh token. |
+| `POST /me/logout` | user, CSRF | Ends the user session. |
+
+- **Linking is by proof.** `/auth/callback` finishes a user sign-in when the
+  login record's purpose says so. After the console's checks (state, browser
+  binding, id-token nonce, `userinfo.sub == id_token.sub ==
+  access_token.sub`), a link is made only if userinfo says `email_verified`
+  and `HMAC(PROVISIONING_EMAIL_KEY, email)` equals the consented email's, for
+  an unused, unexpired, unsuperseded code, in one transaction
+  (`person_account_link`, 0035). An unverified email, another email, a used or
+  expired code, a callback in another browser or a subject mismatch link
+  nothing. A CyberdyneAuth account already linked to another person is
+  refused; relinking a person to a new account ends the old account's user
+  sessions.
+- **Whose link it is, before and after.** The consented email is whatever the
+  Discord person typed, so a link alone does not prove that whoever follows
+  it asked for it: somebody could run `/account` with your email and send you
+  their link. `/link` therefore names the Discord account before anything
+  starts, only its same-origin form starts the sign-in, the user area names
+  the linked Discord account, and **Unlink** there undoes a link from the
+  CyberdyneAuth side (the DM's [Unlink] reaches only the Discord side).
+- **The bot says so.** It DMs "Linked to a***@example.com, not you?
+  [Unlink]" within 30 seconds (`person_account_link.notified_at`, 0036).
+  [Unlink] is persistent and ends every user session of that account.
+- **Sessions** live in `user_session` (0036), shaped like `admin_session`
+  without roles and with `fresh_auth_at`, behind `__Host-cf_user`
+  (`HttpOnly; Secure; SameSite=Strict`). Any valid `cyberfriend` access
+  token may open one; roles are not consulted. The `/me` middleware accepts
+  only that cookie (a bearer header is 401), and the console's middleware
+  never accepts it, so each session is 401 on the other's routes.
+- **Whose data** comes only from the session's `sub` through
+  `person_account_link`. No `/me` route reads a person or platform id from
+  the request. An unlinked account and an unknown one both get 404 "No
+  CyberFriend profile is linked to this account. Link one from Discord with
+  /account."
+- **Fresh sign-in.** OIDC requires `auth_time` in the id token when `max_age`
+  is requested. The callback requires it, verified and within 5 minutes, and
+  stores it as `fresh_auth_at`; erase is refused (403 with
+  `"reauth": "/auth/user/fresh"`) unless it is within 5 minutes. An id token
+  without `auth_time` after `max_age` gives no session.
+- **Channel counts.** Which archived channels a person may read is Discord's
+  ACL, which this process cannot ask, so the web dashboard names and counts
+  no channel (it fails closed); `/privacy` in Discord shows them. "Delete
+  everything" deletes messages in every channel either way.
+- **Erasure** runs the same `ErasureService` steps as the bot, and the ingest
+  sweep resumes it if the admin process stops half way. `purge_person_derived`
+  deletes the account's user sessions (through the link) and the link.
+
+## Usage: what traced questions cost, and who asked what
+
+Two routes read the trace store (Langfuse) live, server-side, with a
+five-minute in-process cache. There is no usage table of our own. Both answer
+`503 {"error": "usage unavailable"}` when Langfuse cannot be read or is not
+configured (`LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`
+in the admin service; `LANGFUSE_ENVIRONMENT` scopes every read, default
+`production`), never stale or partial figures.
+
+**`GET /api/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&group=person|feature|model|tool`**
+(operator). Both dates inclusive, the last 30 days by default, at most 90
+days (400 otherwise). Each row has `key`, `name` (a person's current display
+name, or null when none is known: the key is then their platform id),
+`questions`, `input_tokens`, `output_tokens`, `cost` (USD, an estimate from
+Langfuse's price table, see docs/operations.md "Model prices"), `tool_calls`,
+`tools` and `voice_seconds`; a figure that does not apply to the grouping is
+null. Voice seconds come from the `media_usage` ledger by month, shown per
+person, and as the feature `voice` together with the anonymous total folded
+out of erased people's rows. `totals` sums everything, and `label` is
+"traced question runs": background work and opted-out askers are never
+traced, so the totals are an undercount by design. Counts only, no text.
+
+**`GET /api/usage/people/{platform_user_id}/questions?from&to&page`**
+(`admin_oidc`: an admin signed in through CyberdyneAuth; an operator or any
+`cfa_` token, whatever its role, gets 403). The id must be ASCII digits that
+fit a bigint and `page` a whole number from 1 to 1,000 (400 otherwise).
+Returns 50 per page, newest first, each with only `timestamp`, `feature`, `tools`, `question` (cut at
+2,000 characters), `input_tokens`, `output_tokens` and `cost`. The answer,
+the evidence references and the decision trail are dropped server-side.
+
+- Only questions traced **after the person received the disclosure notice**
+  (`person.tracing_notice_at`) are returned as text. Earlier ones in the
+  window are reported as `hidden_before_notice`, a count. A person who never
+  received the notice has no readable text.
+- Every call writes a change-record entry, setting `usage.questions_viewed`,
+  against the viewer (`oidc:<sub>` and their email), naming the viewed person
+  as looked up server-side (person id and display name), their platform id,
+  the window and the page. It is written before Langfuse is read, so an
+  attempt is recorded even when Langfuse is down. The questions themselves are
+  never recorded.
+- The response is `Cache-Control: no-store`, and question text is never
+  cached in the server either.
+
+**Who never appears.** On every request, from our own database and never
+from the cache: people who opted out and people with an erasure in progress
+are removed entirely; for a person whose erasure completed, everything up to
+`person.erased_before` (counts by day, including that day; text by the exact
+time); and traces whose deletion was requested (still pending, or confirmed
+within the last day, since Langfuse deletes asynchronously). The pending
+traces are left out by Langfuse's own query (`none of` on the trace id) and
+are part of the cache key, so a new deletion request is a new read. This
+holds while Langfuse still holds those traces. A pending trace asked by
+someone already excluded whole is not listed again. The ids travel in the GET
+query, so more than 250 of them (a large retention sweep, say) makes both
+routes answer 503 on purpose until Langfuse confirms the deletions and they
+age out a day later, rather than counting traces that are going away.
+
+**Scope.** Every read filters on `LANGFUSE_ENVIRONMENT` and the tag
+`app:cyberfriend`, and each trace row is re-checked for both, for our trace
+names and for the asker, so another application or environment sharing the
+Langfuse project is never counted or shown. The aggregates group by asker and
+day (`GET /api/public/metrics`, v1); a result reaching the 1,000-row limit is
+split in halves until it fits, and a single day that still reaches it is a
+503 rather than a partial count. Tokens, cost and tool calls come from the
+observations view, which filters on each observation's own environment: the
+tracer sets it on every generation and span. Observations exported before
+that (per-call generations and spans from the tracing batch up to this
+change) were stored by Langfuse as `default` and are not counted; question
+counts are unaffected.
+
+`retention_days` in the summary is `TRACE_RETENTION_DAYS` as the admin
+service reads it (default 90, the same variable, default and parsing as
+`bot` and `ingest`, so `+30` or `1_000` read the same everywhere), for the
+screen to state; it is null when the value is one `bot` and `ingest` refuse,
+and the screen then says it could not read the period rather than stating a
+default the sweep is not enforcing.
+
+**The screen** (`#/usage`, operator). The last 30 days by default, with
+7/30/90-day presets and a date range checked before it is sent (90 days at
+most). The person, feature, model and tool groupings are read together for the
+same window and shown as four tables; totals are labelled "traced question
+runs". A preset or **Show** chosen while a window is still loading replaces
+that load, and only the newest answer is shown. A person is shown by display name with their platform id beneath, or by
+the platform id alone. A figure that does not apply to a grouping is a dash,
+not a zero. A note on the screen says the totals undercount by design, that
+opted-out, erased and pending-deletion data is never shown, and how long traces
+are kept. When the API answers 503 the screen says usage is unavailable and
+shows no figures, with a retry -- also when an earlier window loaded fine, so
+no stale table stays up.
+
+Only an admin signed in with CyberdyneAuth (`via == "oidc"`) gets a
+**Questions** button per person; an operator and any `cfa_` token, even an
+admin one, see counts only, and the screen says so. The button opens a panel
+with that person's questions for the window the person table was read for
+(not dates typed but not yet shown), and is not offered while a new window is
+loading, 50 a page (newer
+and older), the count of questions traced before their notice, and a line
+saying the viewing is recorded in the audit. The text lives only in that
+panel's view-model: closing it, changing the window or leaving the screen
+drops it, and nothing is written to browser storage.
+
+**Keys.** The admin process now holds the Langfuse key pair, which is
+project-wide (ingest, read, delete). It uses it for these reads only, never
+sends it to the browser, and no response carries it. See docs/operations.md,
+"Langfuse keys".
 
 ## Signing in with CyberdyneAuth
 

@@ -158,11 +158,11 @@ class LangfuseTracer:
         }
         events = [_event("trace-create", now, body)]
         events.extend(
-            _event("generation-create", now, _generation(trace_id, usage))
+            _event("generation-create", now, _generation(trace_id, usage, self._environment))
             for usage in run.record.spend.models
         )
         events.extend(
-            _event("span-create", now, _span(trace_id, usage))
+            _event("span-create", now, _span(trace_id, usage, self._environment))
             for usage in run.record.spend.tools
         )
         # One batch, one POST: the answer path pays no extra round-trip for
@@ -412,11 +412,17 @@ def _event(kind: str, now: str, body: dict[str, Any]) -> dict[str, Any]:
     return {"id": str(uuid.uuid4()), "type": kind, "timestamp": now, "body": body}
 
 
-def _generation(trace_id: str, usage: ModelUsage) -> dict[str, Any]:
-    """One model call. Langfuse prices it from `model` and `usageDetails`."""
+def _generation(trace_id: str, usage: ModelUsage, environment: str) -> dict[str, Any]:
+    """One model call. Langfuse prices it from `model` and `usageDetails`.
+
+    `environment` is set on every observation, not only on the trace: Langfuse
+    stores an observation without one as "default", and the usage view's
+    token, cost and tool queries filter observations by our environment.
+    """
     body: dict[str, Any] = {
         "id": str(uuid.uuid4()),
         "traceId": trace_id,
+        "environment": environment,
         "name": usage.stage or "model",
         "startTime": usage.started_at.isoformat(),
         "endTime": usage.ended_at.isoformat(),
@@ -431,11 +437,12 @@ def _generation(trace_id: str, usage: ModelUsage) -> dict[str, Any]:
     return body
 
 
-def _span(trace_id: str, usage: ToolUsage) -> dict[str, Any]:
+def _span(trace_id: str, usage: ToolUsage, environment: str) -> dict[str, Any]:
     """One federated tool call: name, outcome and latency, never its arguments."""
     return {
         "id": str(uuid.uuid4()),
         "traceId": trace_id,
+        "environment": environment,
         "name": usage.name,
         "startTime": usage.started_at.isoformat(),
         "endTime": usage.ended_at.isoformat(),

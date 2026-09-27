@@ -67,6 +67,10 @@ import httpx2
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from chatmemory.adapters.accounts.cyberdyneauth import (
+    CyberdyneAuthProvisioner,
+    ProvisioningClient,
+)
 from chatmemory.adapters.chain.alert_targets import ChainTargets
 from chatmemory.adapters.chain.registration import ChainToolsConfig, build_chain_tools
 from chatmemory.adapters.chain.watch import ChainWatcher
@@ -115,13 +119,17 @@ from chatmemory.adapters.mcp_client.service_auth import (
     authenticated_session_factory,
     service_credentials,
 )
+from chatmemory.adapters.store.accounts_postgres import PostgresAccountStore
 from chatmemory.adapters.store.alerts_postgres import PostgresAlertStore
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
 from chatmemory.adapters.store.erasure_postgres import PostgresErasureStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
-from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestStore
+from chatmemory.adapters.store.feature_requests_postgres import (
+    PostgresFeatureRequestStore,
+    PostgresStatusNewsStore,
+)
 from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
@@ -140,6 +148,11 @@ from chatmemory.adapters.web.limits import CallBudget
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
+from chatmemory.app.accounts import (
+    AccountRecordsRetention,
+    AccountService,
+    LinkAnnouncements,
+)
 from chatmemory.app.alert_requests import AlertRequests
 from chatmemory.app.alerts import AlertRunner, AlertService
 from chatmemory.app.ask import AskService
@@ -176,6 +189,7 @@ from chatmemory.app.decisions.answering import DecisionAnswerService
 from chatmemory.app.decisions.model import DecisionPolicy
 from chatmemory.app.erasure import ErasureService
 from chatmemory.app.facts import PersonalFactsService
+from chatmemory.app.feature_request_news import StatusNewsRunner
 from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.app.limits import RateLimiter
 from chatmemory.app.notifications import (
@@ -238,6 +252,7 @@ from chatmemory.app.tracing_notice import TracingNotice
 from chatmemory.app.voice import VoiceLimits, VoiceQuestions
 from chatmemory.config import Settings, federation_auth_environment
 from chatmemory.domain.identity import PersonRef
+from chatmemory.ports.accounts import AccountProvisioner
 from chatmemory.ports.answers import AnswerService
 from chatmemory.ports.notifications import NotificationSender
 from chatmemory.ports.sources import EmbeddingClient
@@ -1200,6 +1215,78 @@ def build_feature_requests(engine: AsyncEngine, clock: Clock = utc_now) -> Featu
     return FeatureRequestService(PostgresFeatureRequestStore(engine), clock=clock)
 
 
+def build_accounts(
+    settings: Settings,
+    engine: AsyncEngine,
+    provisioner: AccountProvisioner | None,
+    clock: Clock = utc_now,
+) -> AccountService | None:
+    """`/account`, or None when it is not offered.
+
+    None while ACCOUNT_PROVISIONING_ENABLED is off, and also when it is on
+    with no provisioner to send through: the command stays hidden rather than
+    offering a Confirm that could only fail.
+    """
+    if not settings.account_provisioning_enabled:
+        return None
+    key, url = settings.provisioning_email_key, settings.admin_public_url
+    if provisioner is None or key is None or url is None:
+        log.warning("composition.accounts_without_provisioner")
+        return None
+    return AccountService(
+        PostgresAccountStore(engine),
+        provisioner,
+        PostgresFactStore(engine),
+        email_key=key.get_secret_value().encode(),
+        link_base_url=url,
+        clock=clock,
+    )
+
+
+def build_account_provisioner(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> AccountProvisioner | None:
+    """The CyberdyneAuth adapter, or None while its client is not configured.
+
+    Only ACCOUNT_PROVISIONING_CLIENT_ID and _SECRET (with the issuer) wire it:
+    without them nothing in the process can reach the provisioning endpoint.
+    `transport` is the process's `Edges.http_transport`.
+    """
+    secret = settings.account_provisioning_client_secret
+    issuer = settings.account_provisioning_issuer
+    client_id = (settings.account_provisioning_client_id or "").strip()
+    if not client_id or secret is None or issuer is None:
+        return None
+    return CyberdyneAuthProvisioner(
+        ProvisioningClient(
+            issuer=issuer, client_id=client_id, client_secret=secret.get_secret_value()
+        ),
+        transport=transport,
+    )
+
+
+def build_link_announcements(engine: AsyncEngine, clock: Clock = utc_now) -> LinkAnnouncements:
+    """Links made on the web that the bot has yet to announce, with [Unlink]."""
+    return LinkAnnouncements(PostgresAccountStore(engine), clock=clock)
+
+
+def build_account_retention(engine: AsyncEngine) -> AccountRecordsRetention:
+    """The account-records cleanup, for the ingest process. Runs whether or
+    not provisioning is on: rows written while it was on must still age out."""
+    return AccountRecordsRetention(PostgresAccountStore(engine))
+
+
+def build_feature_request_news(
+    engine: AsyncEngine, messenger: TaskMessenger, clock: Clock = utc_now
+) -> StatusNewsRunner:
+    """The sweep that tells an author their suggestion's status changed.
+
+    Only people who answered Yes are ever messaged, so, like `/suggest`, it is
+    not behind a setting.
+    """
+    return StatusNewsRunner(PostgresStatusNewsStore(engine), messenger, clock=clock)
+
+
 def build_privacy(
     settings: Settings,
     engine: AsyncEngine,
@@ -1815,6 +1902,10 @@ class Edges:
     engine: AsyncEngine
     http_transport: httpx.AsyncBaseTransport | None = None
     clock: Clock = utc_now
+    #: Where `/account` requests a CyberdyneAuth account, in place of the
+    #: CyberdyneAuth adapter `assemble` builds over `http_transport` when the
+    #: provisioning client is configured. The end-to-end harness hands a fake.
+    account_provisioner: AccountProvisioner | None = None
 
     @classmethod
     def production(cls, settings: Settings) -> Edges:

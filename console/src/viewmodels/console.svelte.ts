@@ -12,6 +12,7 @@ import type { SessionPort } from "../services/session";
 import type { SessionApi } from "../services/sessionApi";
 import { AuditVM } from "./audit.svelte";
 import { ChannelsVM } from "./channels.svelte";
+import { FeatureRequestsVM } from "./featureRequests.svelte";
 import { FederationVM } from "./federation.svelte";
 import { RetentionVM } from "./retention.svelte";
 import { Router, type Route } from "./router.svelte";
@@ -19,6 +20,7 @@ import { SessionVM } from "./session.svelte";
 import { SettingsVM } from "./settings.svelte";
 import { StatusVM } from "./status.svelte";
 import { TokensVM } from "./tokens.svelte";
+import { UsageVM } from "./usage.svelte";
 
 /** Where an unknown address lands. */
 export const HOME = "/status";
@@ -61,6 +63,14 @@ export class ConsoleVM {
 
   tokens(): TokensVM {
     return new TokensVM(this.#api);
+  }
+
+  featureRequests(): FeatureRequestsVM {
+    return new FeatureRequestsVM(this.#api);
+  }
+
+  usage(): UsageVM {
+    return new UsageVM(this.#api, () => this.session.canReadQuestions);
   }
 
   audit(): AuditVM {

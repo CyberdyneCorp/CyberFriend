@@ -11,11 +11,15 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Annotated
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+MIN_EMAIL_KEY_CHARS = 32
+"""PROVISIONING_EMAIL_KEY is an HMAC key: shorter is guessable."""
 
 FEDERATION_AUTH_PREFIX = "FEDERATION_AUTH_"
 
@@ -409,6 +413,39 @@ class Settings(BaseSettings):
     on (a channel's first backfill, edits, messages missed while down): history
     already imported is never re-read, so it records nothing of it."""
 
+    # --- CyberdyneAuth accounts --------------------------------------------
+    account_provisioning_enabled: bool = False
+    """`/account`: a person asks for a CyberdyneAuth account in a DM.
+
+    Off by default, and the command is not offered while it is off. On, it
+    needs PROVISIONING_EMAIL_KEY and ADMIN_PUBLIC_URL, and a provisioner: the
+    CyberdyneAuth adapter exists only while ACCOUNT_PROVISIONING_CLIENT_ID and
+    _SECRET are set, so a deployment that turns this on without them keeps the
+    command hidden and says so in the log.
+    """
+
+    provisioning_email_key: SecretStr | None = None
+    """The key of `HMAC-SHA256(key, lowercased email)`, the only form an email
+    is stored in. At least 32 characters; never logged. Changing it orphans
+    every stored consent and link code."""
+
+    admin_public_url: str | None = None
+    """The admin console's public URL; link codes are DMed as `{this}/link?code=...`."""
+
+    account_provisioning_issuer: str | None = None
+    """The CyberdyneAuth issuer URL the provisioning client belongs to. Its
+    discovery document names the token endpoint, and the provisioning endpoint
+    is `{this}/api/v1/users/provision`. Required with the client below."""
+
+    account_provisioning_client_id: str | None = None
+    """The `client_credentials` client scoped `users:provision` -- only that,
+    and never the admin console's sign-in client. Set together with its
+    secret, it wires the CyberdyneAuth adapter; unset, nothing can reach the
+    provisioning endpoint."""
+
+    account_provisioning_client_secret: SecretStr | None = None
+    """That client's secret. Never logged."""
+
     # --- Time ----------------------------------------------------------
     answer_timezone: str = "America/Sao_Paulo"
     """The zone whose calendar a question's "ontem" or "last week" means.
@@ -616,6 +653,63 @@ class Settings(BaseSettings):
         it would read as "I couldn't understand the audio"."""
         if self.voice_questions_enabled and self.media_api_key is None:
             raise ValueError("voice_questions_enabled needs media_api_key")
+        return self
+
+    @field_validator("provisioning_email_key")
+    @classmethod
+    def _long_enough_email_key(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is not None and len(v.get_secret_value()) < MIN_EMAIL_KEY_CHARS:
+            raise ValueError(f"must be at least {MIN_EMAIL_KEY_CHARS} characters")
+        return v
+
+    @field_validator("admin_public_url")
+    @classmethod
+    def _https_public_url(cls, v: str | None) -> str | None:
+        """The same rule the console applies to this variable: the link code
+        appended to it is a bearer secret, so https, a host, no query or fragment."""
+        if v is None:
+            return None
+        parts = urlsplit(v)
+        if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment:
+            raise ValueError("admin_public_url must be an https URL without query or fragment")
+        return v.rstrip("/")
+
+    @field_validator("account_provisioning_issuer")
+    @classmethod
+    def _https_issuer(cls, v: str | None) -> str | None:
+        """The client secret is sent to it: https and a host, nothing else."""
+        if v is None or not v.strip():
+            return None
+        parts = urlsplit(v.strip())
+        if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment:
+            raise ValueError("account_provisioning_issuer must be an https URL")
+        return v.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def _provisioning_client_is_whole(self) -> Settings:
+        """An id without its secret, or a client without an issuer, is refused
+        at boot rather than read as "provisioning is off"."""
+        client_id = (self.account_provisioning_client_id or "").strip() or None
+        secret = self.account_provisioning_client_secret
+        has_secret = secret is not None and bool(secret.get_secret_value())
+        if (client_id is not None) != has_secret:
+            raise ValueError(
+                "account_provisioning_client_id and account_provisioning_client_secret"
+                " are set together"
+            )
+        if client_id is not None and self.account_provisioning_issuer is None:
+            raise ValueError("account_provisioning_client_id needs account_provisioning_issuer")
+        return self
+
+    @model_validator(mode="after")
+    def _provisioning_needs_a_key_and_url(self) -> Settings:
+        """Refused at boot rather than on somebody's first Confirm."""
+        if self.account_provisioning_enabled and (
+            self.provisioning_email_key is None or self.admin_public_url is None
+        ):
+            raise ValueError(
+                "account_provisioning_enabled needs provisioning_email_key and admin_public_url"
+            )
         return self
 
     @field_validator("media_enabled_at")

@@ -9,6 +9,8 @@ access" does not say whether the account exists.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -27,6 +29,13 @@ from chatmemory.admin.oidc.service import (
     SignedIn,
     SignIn,
 )
+from chatmemory.admin.oidc.store import ADMIN_PURPOSE, LoginRecord
+
+UserCallback = Callable[[LoginRecord, Request], Awaitable[Response]]
+"""Finishes a sign-in the user area started (`admin.user.routes.user_callback`).
+
+One redirect URI serves both: the login record's `purpose`, written when the
+sign-in began, decides which finishes it."""
 
 NO_STORE = {"Cache-Control": "no-store"}
 
@@ -43,7 +52,7 @@ SIGN_IN_FAILED = (
 NO_ACCESS = ("No access.", "This account has no access to the CyberFriend console.")
 
 
-def routes(sign_in: SignIn | None) -> list[Route]:
+def routes(sign_in: SignIn | None, user_callback: UserCallback | None = None) -> list[Route]:
     async def config(_: Request) -> JSONResponse:
         # Whether to offer "Sign in with CyberdyneAuth". Open, because the
         # console asks before anybody is signed in, and it says nothing
@@ -71,31 +80,10 @@ def routes(sign_in: SignIn | None) -> list[Route]:
     async def callback(request: Request) -> Response:
         if sign_in is None:
             return _not_found()
-        result = await sign_in.complete(
-            state=request.query_params.get("state"),
-            code=request.query_params.get("code"),
-            binding=cookie_value(request.scope, LOGIN_COOKIE),
-        )
-        home = sign_in.settings.public_url + "/"
-        response: Response
-        if isinstance(result, SignedIn):
-            response = RedirectResponse(
-                sign_in.settings.console_url, status_code=302, headers=NO_STORE
-            )
-            response.set_cookie(
-                SESSION_COOKIE,
-                result.session_id,
-                path="/",
-                secure=True,
-                httponly=True,
-                samesite="strict",
-            )
-        elif isinstance(result, NoAccess):
-            response = _page(NO_ACCESS, home, 403)
-        else:
-            response = _page(SIGN_IN_FAILED, home, 400)
-        response.delete_cookie(LOGIN_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
-        return response
+        login = await sign_in.consume(request.query_params.get("state"))
+        if login is not None and login.purpose != ADMIN_PURPOSE and user_callback is not None:
+            return await user_callback(login, request)
+        return await _console_callback(sign_in, login, request)
 
     async def logout(request: Request) -> Response:
         if sign_in is None:
@@ -131,6 +119,35 @@ def routes(sign_in: SignIn | None) -> list[Route]:
         Route("/auth/logout", logout, methods=["POST"], name="auth_logout"),
         Route("/api/session", session, methods=["GET"], name="session"),
     ]
+
+
+async def _console_callback(
+    sign_in: SignIn, login: LoginRecord | None, request: Request
+) -> Response:
+    """Finish a console sign-in: the admin cookie, or one fixed page."""
+    result = await sign_in.complete_login(
+        login,
+        code=request.query_params.get("code"),
+        binding=cookie_value(request.scope, LOGIN_COOKIE),
+    )
+    home = sign_in.settings.public_url + "/"
+    response: Response
+    if isinstance(result, SignedIn):
+        response = RedirectResponse(sign_in.settings.console_url, status_code=302, headers=NO_STORE)
+        response.set_cookie(
+            SESSION_COOKIE,
+            result.session_id,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="strict",
+        )
+    elif isinstance(result, NoAccess):
+        response = _page(NO_ACCESS, home, 403)
+    else:
+        response = _page(SIGN_IN_FAILED, home, 400)
+    response.delete_cookie(LOGIN_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
 
 
 def _not_found() -> JSONResponse:
