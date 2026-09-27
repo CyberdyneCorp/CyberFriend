@@ -31,10 +31,17 @@ origin's `/api` until 3.5).
 
 ## 3. Screens and the swap
 
-- [ ] 3.1 SignIn, Status, Settings (+ SettingsTable), Audit
-- [ ] 3.2 Channels, Tokens, Retention
-- [ ] 3.3 Federation (ServersVM, AllowlistVM, TypedConfirmVM, ServerCard, TypedConfirm)
-- [ ] 3.4 Port `console.e2e.test.tsx` to @testing-library/svelte against the same stub
-- [ ] 3.5 Replace `console/` with the Svelte tree; delete React dependencies; the CI `console` job gains the lint step and 2.7's `console-svelte/` job is folded into it
-- [ ] 3.6 Rewrite `docs/admin-console.md`; drop the stale "bundle is not built" notes
-- [ ] 3.7 Add `chatmemory.entrypoints.admin` to the Dockerfile import smoke check
+- [x] 3.1 SignIn, Status, Settings (+ SettingsTable), Audit
+- [x] 3.2 Channels, Tokens, Retention
+- [x] 3.3 Federation (ServersVM, AllowlistVM, TypedConfirmVM, ServerCard, TypedConfirm)
+- [x] 3.4 Port `console.e2e.test.tsx` to @testing-library/svelte against the same stub
+- [x] 3.5 Replace `console/` with the Svelte tree; delete React dependencies; the CI `console` job gains the lint step and 2.7's `console-svelte/` job is folded into it
+- [x] 3.6 Rewrite `docs/admin-console.md`; drop the stale "bundle is not built" notes
+- [x] 3.7 Add `chatmemory.entrypoints.admin` to the Dockerfile import smoke check
+
+The swap moved `console-svelte/` to `console/` (so the Dockerfile's path did
+not change) and deleted the React tree. The two-click removal is a
+`Confirmation` view-model rather than component state, and `domain/allowlist.ts`
+holds the pure allowlist-key rule the federation view-models and `ServerCard`
+share. The stub API gained the write routes the other screens' scenarios need
+(channels, settings, tokens, opt-outs) and records each request.
