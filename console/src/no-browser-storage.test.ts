@@ -19,12 +19,21 @@ const SRC = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURES = fileURLToPath(new URL("../fixtures/storage-guard/", import.meta.url));
 
 /**
- * The one module, besides the session module, allowed to read the token.
- * One constant so a move (to `services/breakGlassHttp.ts`, with the login
- * change) changes the location without loosening the rule.
+ * The one module, besides the session module, allowed to read the token: it
+ * hands a held break-glass token to `breakGlassHttp.ts` for the request.
  */
 const TOKEN_READER = "services/http.ts";
 const SESSION_MODULE = "services/session.ts";
+
+/**
+ * Where a credential header may be written, and where the browser may be told
+ * to attach cookies. Two files, two modes, so a cookie request can never carry
+ * a token and a token request can never carry a cookie.
+ */
+const CREDENTIAL_HEADER_WRITER = "services/breakGlassHttp.ts";
+const COOKIE_SENDER = "services/http.ts";
+const CREDENTIAL_HEADER = /authorization|bearer/i;
+const COOKIE_MODE = "same-origin";
 
 const FORBIDDEN = [
   "localStorage",
@@ -75,6 +84,45 @@ describe("credential handling", () => {
       (path) => !path.endsWith(SESSION_MODULE) && code(path).includes("currentToken"),
     );
     expect(readers.map((p) => p.slice(SRC.length))).toEqual([TOKEN_READER]);
+  });
+});
+
+/**
+ * `relative/path: what` for every source under `root` that writes a credential
+ * header or asks for cookies outside the one file allowed to. Tests and their
+ * helpers are outside it: they read those headers to assert on them.
+ */
+function credentialModeUses(root: string): string[] {
+  const files = sourceFiles(root, (name) => name.endsWith(".test.ts")).filter(
+    (path) => !path.slice(root.length).startsWith("test/"),
+  );
+  return files.flatMap((path) => {
+    const relative = path.slice(root.length);
+    const text = code(path);
+    const found: string[] = [];
+    if (relative !== CREDENTIAL_HEADER_WRITER && CREDENTIAL_HEADER.test(text)) {
+      found.push(`${relative}: credential header`);
+    }
+    if (relative !== COOKIE_SENDER && text.includes(COOKIE_MODE)) found.push(`${relative}: ${COOKIE_MODE}`);
+    return found;
+  });
+}
+
+describe("the two request modes", () => {
+  it("writes a credential header only in the break-glass module, and asks for cookies only in http.ts", () => {
+    expect(credentialModeUses(SRC)).toEqual([]);
+  });
+
+  it("sees both modes where they are allowed, so a green run means something", () => {
+    expect(CREDENTIAL_HEADER.test(code(join(SRC, CREDENTIAL_HEADER_WRITER)))).toBe(true);
+    expect(code(join(SRC, COOKIE_SENDER))).toContain(COOKIE_MODE);
+  });
+
+  it("catches either mode in the wrong file", () => {
+    expect(credentialModeUses(join(FIXTURES, "../credential-guard/"))).toEqual([
+      "services/http.ts: credential header",
+      "views/Screen.svelte: same-origin",
+    ]);
   });
 });
 

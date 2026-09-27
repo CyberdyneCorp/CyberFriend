@@ -9,6 +9,7 @@
 import type { AdminApi } from "../services/adminApi";
 import type { HashPort } from "../services/hashLocation";
 import type { SessionPort } from "../services/session";
+import type { SessionApi } from "../services/sessionApi";
 import { AuditVM } from "./audit.svelte";
 import { ChannelsVM } from "./channels.svelte";
 import { FederationVM } from "./federation.svelte";
@@ -28,14 +29,14 @@ export class ConsoleVM {
   readonly #api: AdminApi;
   readonly #hash: HashPort;
 
-  constructor(api: AdminApi, session: SessionPort, hash: HashPort) {
+  constructor(api: AdminApi, sessionApi: SessionApi, session: SessionPort, hash: HashPort) {
     this.#api = api;
     this.#hash = hash;
-    this.session = new SessionVM(session, (token) => api.verifyCredential(token));
+    this.session = new SessionVM(session, sessionApi);
   }
 
   router<V>(routes: readonly Route<V>[]): Router<V> {
-    return new Router(routes, this.#hash, HOME);
+    return new Router(routes, this.#hash, HOME, () => this.session.role);
   }
 
   status(): StatusVM {

@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { Principal } from "../domain/types";
 import { send } from "./http";
-import { isSignedIn, signIn, signOut, subscribe } from "./session";
+import { currentPrincipal, signIn, signOut, subscribe } from "./session";
 
 const realFetch = globalThis.fetch;
+
+const SAM: Principal = { subject: "sam", display: "sam", roles: ["operator"], via: "token" };
 
 afterEach(() => {
   globalThis.fetch = realFetch;
@@ -24,18 +27,31 @@ async function sentAuthorization(): Promise<string | undefined> {
 }
 
 describe("session", () => {
-  it("holds the credential without the whitespace it was pasted with", async () => {
-    signIn("  cfa_x \n");
+  it("holds a break-glass token without the whitespace it was pasted with", async () => {
+    signIn(SAM, "  cfa_x \n");
     expect(await sentAuthorization()).toBe("Bearer cfa_x");
   });
 
-  it("ignores a blank credential rather than signing in with it", async () => {
+  it("ignores a blank token rather than signing in with it", async () => {
     let announced = 0;
     const unsubscribe = subscribe(() => (announced += 1));
-    signIn(" \n\t");
+    signIn(SAM, " \n\t");
     unsubscribe();
-    expect(isSignedIn()).toBe(false);
+    expect(currentPrincipal()).toBeNull();
     expect(announced).toBe(0);
+    expect(await sentAuthorization()).toBeUndefined();
+  });
+
+  it("holds a cookie session's principal with no token at all", async () => {
+    signIn({ ...SAM, via: "oidc" });
+    expect(currentPrincipal()?.via).toBe("oidc");
+    expect(await sentAuthorization()).toBeUndefined();
+  });
+
+  it("forgets the principal and the token together", async () => {
+    signIn(SAM, "cfa_x");
+    signOut();
+    expect(currentPrincipal()).toBeNull();
     expect(await sentAuthorization()).toBeUndefined();
   });
 });

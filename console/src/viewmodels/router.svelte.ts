@@ -8,7 +8,9 @@
  *
  * Every route states the role it needs. There is no default on purpose,
  * mirroring the server's deny-by-default table; the server stays the
- * authority, and this only decides what the navigation offers.
+ * authority, and this only decides what the navigation offers and which
+ * screen an address may open. An address naming a screen above the signed-in
+ * role is treated like an unknown one.
  */
 
 import { allows, type Role } from "../domain/roles";
@@ -27,14 +29,21 @@ export class Router<V> {
 
   readonly #hash: HashPort;
   readonly #fallback: Route<V>;
+  readonly #role: () => Role | null;
   #unlisten: (() => void) | null = null;
 
-  constructor(routes: readonly Route<V>[], hash: HashPort, fallbackPath: string) {
+  constructor(
+    routes: readonly Route<V>[],
+    hash: HashPort,
+    fallbackPath: string,
+    role: () => Role | null,
+  ) {
     const fallback = routes.find((route) => route.path === fallbackPath);
     if (fallback === undefined) throw new Error(`no route for the fallback ${fallbackPath}`);
     this.routes = routes;
     this.#hash = hash;
     this.#fallback = fallback;
+    this.#role = role;
     this.current = $state.raw(this.#resolve());
   }
 
@@ -55,11 +64,11 @@ export class Router<V> {
     return this.routes.filter((route) => allows(role, route.minRole));
   }
 
-  /** The route the address names; an unknown one is rewritten to the fallback. */
+  /** The route the address names; an unknown or out-of-role one is rewritten to the fallback. */
   #resolve(): Route<V> {
     const path = this.#hash.read();
     const found = this.routes.find((route) => route.path === path);
-    if (found !== undefined) return found;
+    if (found !== undefined && allows(this.#role(), found.minRole)) return found;
     this.#hash.replace(this.#fallback.path);
     return this.#fallback;
   }

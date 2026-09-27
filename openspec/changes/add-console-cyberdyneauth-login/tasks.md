@@ -31,13 +31,13 @@
 
 ## 3. Console sign-in (after the Svelte swap)
 
-- [ ] 3.1 `sessionApi` (me, login, logout); `services/http.ts` uses `credentials: "same-origin"`, the CSRF header on writes, and never sets `Authorization`
-- [ ] 3.2 SessionVM; route `minRole`; hide mutating controls for operator
-- [ ] 3.3 Move the token sign-in behind "Use an operator token" into `services/breakGlassHttp.ts` (bearer, `credentials: "omit"`)
-- [ ] 3.4 Storage guard: `Authorization`/`Bearer` allowed only in `services/breakGlassHttp.ts`; `same-origin` only in `services/http.ts`
-- [ ] 3.5 Tests: cookie mode sends no `Authorization`; token mode sends `credentials: "omit"`
+- [x] 3.1 `sessionApi` (me, login, logout); `services/http.ts` uses `credentials: "same-origin"`, the CSRF header on writes, and never sets `Authorization`
+- [x] 3.2 SessionVM; route `minRole`; hide mutating controls for operator
+- [x] 3.3 Move the token sign-in behind "Use an operator token" into `services/breakGlassHttp.ts` (bearer, `credentials: "omit"`)
+- [x] 3.4 Storage guard: `Authorization`/`Bearer` allowed only in `services/breakGlassHttp.ts`; `same-origin` only in `services/http.ts`
+- [x] 3.5 Tests: cookie mode sends no `Authorization`; token mode sends `credentials: "omit"`
 
 ## 4. Docs and ops
 
-- [ ] 4.1 `docs/admin-console.md`: login, roles, token downscoping, CyberdyneAuth client registration, break-glass by rollback
+- [x] 4.1 `docs/admin-console.md`: login, roles, token downscoping, CyberdyneAuth client registration, break-glass by rollback
 - [x] 4.2 `docker-compose.yml` admin env; `docs/operations.md` secret list

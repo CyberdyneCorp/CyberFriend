@@ -28,7 +28,7 @@
   </p>
   <Loaded resource={vm.settings} empty="The API reports no settings.">
     {#snippet children(rows)}
-      <SettingsTable settings={rows} editor={vm.editor} />
+      <SettingsTable settings={rows} editor={vm.editor} canChange={app.session.canChange} />
     {/snippet}
   </Loaded>
 </Panel>

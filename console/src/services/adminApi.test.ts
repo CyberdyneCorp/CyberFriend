@@ -1,29 +1,26 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { adminApi } from "./adminApi";
 import { apiPath, apiRoot, requestInit } from "./http";
-import { signIn, signOut } from "./session";
-
-afterEach(() => signOut());
-
 describe("requestInit", () => {
-  it("carries the credential and nothing that could name an operator", () => {
-    const init = requestInit("POST", "cfa_secret", { server: "s", tool: "t" });
+  it("carries the cookie and nothing that could name an operator", () => {
+    const init = requestInit("POST", { server: "s", tool: "t" });
     const headers = init.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer cfa_secret");
     // The operator comes from the credential alone. Any header or body field
     // that could assert one would make the audit trail a claim.
-    expect(Object.keys(headers).sort()).toEqual(["accept", "authorization", "content-type"]);
+    expect(Object.keys(headers).sort()).toEqual(["accept", "content-type", "x-cyberfriend-console"]);
     expect(String(init.body)).not.toContain("operator");
-    expect(init.credentials).toBe("omit");
+    expect(init.credentials).toBe("same-origin");
   });
 
-  it("sends no Authorization header when nobody is signed in", () => {
-    const headers = requestInit("GET", null).headers as Record<string, string>;
-    expect("authorization" in headers).toBe(false);
+  it("sends the console header on writes only", () => {
+    expect(requestInit("GET").headers).not.toHaveProperty("x-cyberfriend-console");
+    for (const method of ["POST", "PUT", "DELETE"] as const) {
+      expect(requestInit(method).headers).toHaveProperty("x-cyberfriend-console", "1");
+    }
   });
 });
 
@@ -43,16 +40,6 @@ describe("apiPath", () => {
   it("targets /api under the prefix the console is mounted behind", () => {
     expect(apiRoot("https://ops.example/cyberfriend/")).toBe("/cyberfriend/api");
     expect(apiRoot("https://ops.example/cyberfriend/index.html#/tokens")).toBe("/cyberfriend/api");
-  });
-});
-
-describe("session", () => {
-  it("holds the token only in memory", () => {
-    signIn("cfa_x");
-    const headers = requestInit("GET", "cfa_x").headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer cfa_x");
-    signOut();
-    expect(requestInit("GET", null).headers).not.toHaveProperty("authorization");
   });
 });
 
