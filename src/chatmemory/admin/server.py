@@ -56,6 +56,7 @@ from chatmemory.admin.handlers import (
     settings,
     status,
     tokens,
+    usage,
 )
 from chatmemory.admin.handlers.services import AdminServices
 from chatmemory.admin.handlers.support import Refused, refusal
@@ -110,12 +111,14 @@ def api_routes(services: AdminServices) -> list[Route]:
         *optouts.routes(services),
         *tokens.routes(services),
         *changes.routes(services),
+        *usage.routes(services),
     ]
 
 
 _PUBLIC = Access.PUBLIC
 _OPERATOR = Access.OPERATOR
 _ADMIN = Access.ADMIN
+_ADMIN_OIDC = Access.ADMIN_OIDC
 
 NO_CORPUS_PATH = f"{API_PREFIX}/{{rest:path}}"
 
@@ -158,6 +161,10 @@ ROUTE_ACCESS: Mapping[RouteKey, Access] = {
     # MCP credentials: review and revoke only.
     ("GET", "/api/tokens"): _OPERATOR,
     ("DELETE", "/api/tokens/{id}"): _ADMIN,
+    # Usage: counts for operators; a person's own questions only for an admin
+    # signed in as a person, never for a token (see handlers/usage.py).
+    ("GET", "/api/usage/summary"): _OPERATOR,
+    ("GET", "/api/usage/people/{id}/questions"): _ADMIN_OIDC,
     # The refusal for anything unclaimed under /api. Its non-read verbs are
     # admin like every other write, so an operator's POST is a 403 rather than
     # a tour of which paths exist.

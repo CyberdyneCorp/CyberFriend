@@ -11,9 +11,14 @@ corpus or the bot's accounts: one lets this process act as the `cyberfriend`
 client at CyberdyneAuth, the other decrypts the tokens in `admin_session`.
 Both are in `admin.oidc.config.SECRET_VARS` and are never logged or shown.
 
+With `LANGFUSE_HOST` and the Langfuse key pair set it also holds those keys,
+for the usage view's live reads (`GET /api/public/metrics` and
+`/api/public/traces`). The pair is project-wide -- Langfuse has no read-only
+key -- so it is used server-side only and never reaches a browser.
+
 Its only outbound HTTP is to CyberdyneAuth (discovery, keys, token, userinfo,
-revocation), through the transport `build` is given, like the bot's
-`Edges.http_transport`.
+revocation) and to Langfuse's read APIs, through the transport `build` is
+given, like the bot's `Edges.http_transport`.
 
 Two consequences shape this file:
 
@@ -63,7 +68,12 @@ from chatmemory.adapters.store.admin_session_postgres import (
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
+from chatmemory.adapters.store.usage_postgres import PostgresUsageDirectory
 from chatmemory.adapters.tracing.langfuse import warn_unless_supported
+from chatmemory.adapters.tracing.langfuse_usage import (
+    LangfuseUsageSource,
+    UnconfiguredUsageSource,
+)
 from chatmemory.admin.handlers.federation import make_probe
 from chatmemory.admin.handlers.queries import (
     PostgresChannelDirectory,
@@ -85,9 +95,11 @@ from chatmemory.app.configuration import (
     RuntimeConfiguration,
 )
 from chatmemory.app.optout import OptOutService
+from chatmemory.app.usage import UsageService
 from chatmemory.config import Settings
 from chatmemory.mcp.auth import PostgresTokenStore
 from chatmemory.ports.configuration import ResolvedValue, SettingSource
+from chatmemory.ports.usage import UsageSource
 
 log = structlog.get_logger()
 
@@ -110,6 +122,14 @@ Set (with the client id, secret, session key and public URL, see
 (read-only), and admin rights come only from the identity provider's role.
 Unsetting it again is the break-glass rollback; the other four may stay set.
 """
+
+LANGFUSE_VARS = ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+"""The trace store the usage view reads. All three, or usage is unavailable.
+
+The key pair is project-wide (ingest, read, delete): Langfuse has no read-only
+key. It is used server-side only and never sent to a browser.
+"""
+LANGFUSE_ENVIRONMENT_VAR = "LANGFUSE_ENVIRONMENT"
 
 FORBIDDEN_CREDENTIALS = ("DISCORD_TOKEN", "LLM_API_KEY", "SERPAPI_KEY")
 """Credentials this service must not be given.
@@ -188,6 +208,23 @@ def sign_in(
     return SignIn(settings, provider, PostgresLoginStore(engine), PostgresSessionStore(engine))
 
 
+def usage_source(
+    environ: Mapping[str, str], transport: httpx.AsyncBaseTransport | None
+) -> UsageSource:
+    """Langfuse's read APIs when all three variables are set; otherwise unavailable."""
+    host, public_key, secret_key = (environ.get(n, "").strip() for n in LANGFUSE_VARS)
+    if not (host and public_key and secret_key):
+        log.info("admin.usage_unavailable", reason="LANGFUSE_HOST and keys are not all set")
+        return UnconfiguredUsageSource()
+    return LangfuseUsageSource(
+        host,
+        public_key,
+        secret_key,
+        environment=environ.get(LANGFUSE_ENVIRONMENT_VAR, "").strip() or "production",
+        transport=transport,
+    )
+
+
 def database_url(environ: Mapping[str, str]) -> str:
     url = environ.get(DATABASE_URL_VAR, "").strip()
     if not url:
@@ -238,7 +275,8 @@ def build(
     `create_async_engine` is lazy, so this does no I/O: the first connection
     happens on the first request or the first refresh, and CyberdyneAuth's
     discovery on the first sign-in (or `main`'s warm-up). `transport` carries
-    every outbound call to CyberdyneAuth; None is the real network.
+    every outbound call, to CyberdyneAuth and to Langfuse's read APIs; None
+    is the real network.
 
     An issuer without the other sign-in settings raises `MisconfiguredSignIn`,
     naming what is missing: the issuer alone would downscope every token to
@@ -274,6 +312,7 @@ def build(
         ),
         mcp_tokens=PostgresTokenStore(engine),
         probe=make_probe(),
+        usage=UsageService(usage_source(environ, transport), PostgresUsageDirectory(engine)),
     )
     signing_in = sign_in(settings, engine, transport)
     return ConsoleProcess(

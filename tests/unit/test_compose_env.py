@@ -284,9 +284,18 @@ def admin_service(compose_text: str = COMPOSE) -> dict[str, Any]:
     return service
 
 
-# Non-secret values the console reads for its own sake: the Langfuse host
-# (never its keys) lets it warn at startup when Langfuse is not on v3.
-CONSOLE_EXTRAS = frozenset({"DATABASE_URL", "LANGFUSE_HOST"})
+# Values the console reads for its own sake: the database, and Langfuse for
+# the usage view (host, the project-wide key pair used server-side only, and
+# the environment every read is scoped to).
+CONSOLE_EXTRAS = frozenset(
+    {
+        "DATABASE_URL",
+        "LANGFUSE_HOST",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_ENVIRONMENT",
+    }
+)
 
 
 def unexpected_console_variables(service: dict[str, Any]) -> list[str]:
@@ -329,7 +338,7 @@ def test_the_console_reads_no_env_file() -> None:
     "environment",
     [
         '      - "SENTRY_DSN=${SENTRY_DSN}"\n',
-        "      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}\n",
+        "      - SERPAPI_KEY=${SERPAPI_KEY}\n",
     ],
 )
 def test_the_allowlist_sees_quoted_and_plain_list_items(environment: str) -> None:
@@ -436,9 +445,9 @@ def test_voice_settings_reach_the_bot_and_nothing_else(setting: str) -> None:
     assert "VOICE_QUESTIONS_ENABLED=${VOICE_QUESTIONS_ENABLED:-false}" in service_block("bot")
 
 
-def test_the_console_gets_the_langfuse_host_and_not_its_keys() -> None:
-    """The host alone is enough to warn at startup that Langfuse left v3."""
+def test_the_console_gets_langfuse_for_the_usage_view() -> None:
+    """The usage view reads Langfuse live; without all three it says so."""
     block = service_block("admin")
-    assert "LANGFUSE_HOST=" in block
-    for variable in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
-        assert variable not in block
+    for variable in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        assert f"{variable}=${{{variable}:-}}" in block
+    assert "LANGFUSE_ENVIRONMENT=${LANGFUSE_ENVIRONMENT:-production}" in block

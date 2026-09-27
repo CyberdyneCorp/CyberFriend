@@ -419,8 +419,8 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   (`fixed`, `loop`):
   another app's or environment's traces in a shared project are never
   deleted. The same sweep then deletes everything pending. The console only
-  marks: it holds no Langfuse keys, and `bot` and `ingest` are the processes
-  that hold the pair. A search or deletion Langfuse refuses or cannot receive
+  marks: it reads Langfuse for the usage view and never deletes; `ingest` is
+  the process that deletes. A search or deletion Langfuse refuses or cannot receive
   (a 400 included) stays pending and is retried every five minutes. The
   migration queues a search for everyone who had already opted out, which
   finds the traces of questions they asked. It cannot find the traces that
@@ -458,20 +458,37 @@ checked-in table `scripts/langfuse_model_prices.json` (USD per million
 tokens, reviewed like code). AminiLLM is on-prem and is listed at zero, so its
 calls are matched and counted without inventing a cost.
 
-Applying the table is a manual ops step, not run at startup. It is idempotent:
+The script also checks the **configured** models: `CHAT_MODEL`,
+`EXTRACTION_MODEL`, `EMBEDDING_MODEL` and `MEDIA_AUDIO_MODEL` (their defaults
+when unset), read from its own environment, so export them as the deployment
+has them. Each must be priced by a table row, by a Langfuse-managed
+definition, or by `--price NAME=INPUT,OUTPUT` (USD per million input and
+output tokens, from the provider's price list). A configured model with none
+of those is named and **nothing is written**: prices are never guessed. A
+`--price` registers the model with the pattern `(?i)^(openai/)?(<name>)(-YYYY-MM-DD)?$`
+and replaces a table row of the same name; add it to the table afterwards so
+the next run keeps it.
+
+Production runs `gpt-5.4-mini` (chat and extraction) and
+`text-embedding-3-small`. Langfuse prices the embedding model; whether it
+prices `gpt-5.4-mini` depends on its version, and the script says so. If it
+does not, pass the price from OpenAI's price list.
+
+Applying prices is a manual ops step, not run at startup. It is idempotent:
 a second run reports every model `unchanged`. A changed price deletes our
 definition for that model and creates a new one; models Langfuse manages
 itself are never touched.
 
 ```bash
-LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
-  uv run python scripts/langfuse_models.py --dry-run   # report only
-LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
-  uv run python scripts/langfuse_models.py
+export LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=...
+export CHAT_MODEL=gpt-5.4-mini EXTRACTION_MODEL=gpt-5.4-mini \
+       EMBEDDING_MODEL=text-embedding-3-small
+uv run python scripts/langfuse_models.py --dry-run   # report only
+uv run python scripts/langfuse_models.py --price gpt-5.4-mini=<input>,<output>
 ```
 
-Run it after changing the table or pointing the chat model at a new name.
-Costs are estimates from these tables, not a bill.
+Run it after changing the table or pointing any of those settings at a new
+model. Costs are estimates from these tables, not a bill.
 
 ### Langfuse version: stay on v3
 
@@ -903,12 +920,17 @@ person asked or which trace quoted them.
 `media_usage`, so a person who erases and keeps using the bot starts the
 month's personal allowance again. The server-wide ceiling is unaffected.
 
-**Langfuse keys.** The key pair is project-wide (ingest, read and delete).
-Two processes hold it: `bot` (it exports traces, and states retention in
-`/privacy`) and `ingest` (withdrawal, the asker search and retention). The
-admin console holds none; it and the bot's erasure only mark traces in
-`trace_export`, and ingest deletes. Rotating the pair means updating both
-services.
+**Langfuse keys.** The key pair is project-wide (ingest, read and delete):
+Langfuse has no read-only key, so every holder could also write and delete.
+Three processes hold it: `bot` (it exports traces, and states retention in
+`/privacy`), `ingest` (withdrawal, the asker search and retention) and
+`admin`, which only reads, server-side, for the usage view (`GET
+/api/public/metrics` and `/api/public/traces`; see docs/admin-console.md,
+"Usage"). Rate the admin process accordingly: holding the pair is equivalent
+to holding the trace store, so its environment is as sensitive as the bot's.
+The keys are never sent to a browser and no console response carries them.
+The console and the bot's erasure still only mark traces in `trace_export`;
+ingest deletes. Rotating the pair means updating all three services.
 
 **Open ops check: Langfuse blobs.** Langfuse v3 deletes a trace
 asynchronously (a worker purges ClickHouse). Whether that also removes the
