@@ -549,8 +549,9 @@ change) were stored by Langfuse as `default` and are not counted; question
 counts are unaffected.
 
 `retention_days` in the summary is `TRACE_RETENTION_DAYS` as the admin
-service reads it (default 90, the same variable and default as `bot` and
-`ingest`), for the screen to state; it is null when the value is malformed,
+service reads it (default 90, the same variable, default and parsing as
+`bot` and `ingest`, so `+30` or `1_000` read the same everywhere), for the
+screen to state; it is null when the value is one `bot` and `ingest` refuse,
 and the screen then says it could not read the period rather than stating a
 default the sweep is not enforcing.
 
@@ -558,17 +559,21 @@ default the sweep is not enforcing.
 7/30/90-day presets and a date range checked before it is sent (90 days at
 most). The person, feature, model and tool groupings are read together for the
 same window and shown as four tables; totals are labelled "traced question
-runs". A person is shown by display name with their platform id beneath, or by
+runs". A preset or **Show** chosen while a window is still loading replaces
+that load, and only the newest answer is shown. A person is shown by display name with their platform id beneath, or by
 the platform id alone. A figure that does not apply to a grouping is a dash,
 not a zero. A note on the screen says the totals undercount by design, that
 opted-out, erased and pending-deletion data is never shown, and how long traces
 are kept. When the API answers 503 the screen says usage is unavailable and
-shows no figures, with a retry.
+shows no figures, with a retry -- also when an earlier window loaded fine, so
+no stale table stays up.
 
 Only an admin signed in with CyberdyneAuth (`via == "oidc"`) gets a
 **Questions** button per person; an operator and any `cfa_` token, even an
 admin one, see counts only, and the screen says so. The button opens a panel
-with that person's questions for the window the tables show, 50 a page (newer
+with that person's questions for the window the person table was read for
+(not dates typed but not yet shown), and is not offered while a new window is
+loading, 50 a page (newer
 and older), the count of questions traced before their notice, and a line
 saying the viewing is recorded in the audit. The text lives only in that
 panel's view-model: closing it, changing the window or leaving the screen

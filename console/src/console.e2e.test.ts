@@ -502,8 +502,10 @@ describe("the usage screen", () => {
 
   it("shows an operator counts per person and feature, and no way to read a question", async () => {
     await openUsage("operator-session");
-    // A person with no name on record is shown by their platform id.
+    // A person with no name on record is shown by their platform id, and a
+    // named one has theirs beneath the name.
     expect(within(rowOf("1004")).getByText("$0.0040")).toBeTruthy();
+    expect(within(rowOf("Ana")).getByText("1001")).toBeTruthy();
     expect(screen.getByText("corpus.fixed")).toBeTruthy();
     expect(screen.getByText("gpt-5.4-mini")).toBeTruthy();
     expect(screen.getByText("Traced question runs")).toBeTruthy();
@@ -560,5 +562,24 @@ describe("the usage screen", () => {
     api.options.usageDown = false;
     await fireEvent.click(button("Try again"));
     await screen.findByText("Ana");
+  });
+
+  it("hides figures it read earlier once the trace store goes down", async () => {
+    await openUsage("operator-session");
+    expect(screen.getByText("Traced question runs")).toBeTruthy();
+
+    api.options.usageDown = true;
+    await fireEvent.click(button("Last 7 days"));
+    await screen.findByText(/Usage is unavailable: the trace store could not be read/);
+    expect(screen.queryByText("Ana")).toBeNull();
+    expect(screen.queryByText("corpus.fixed")).toBeNull();
+    expect(screen.queryByText("Traced question runs")).toBeNull();
+  });
+
+  it("states no retention period when the API could not read one", async () => {
+    api.options.retentionUnknown = true;
+    await openUsage("operator-session");
+    expect(screen.getByText(/This service could not read how long traces are kept/)).toBeTruthy();
+    expect(screen.queryByText(/Traces are kept/)).toBeNull();
   });
 });

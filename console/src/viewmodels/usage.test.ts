@@ -59,20 +59,40 @@ function page(page: number, total: number): PersonQuestions {
   };
 }
 
-function fakeApi(options: { down?: boolean; retention?: number | null } = {}) {
+interface FakeOptions {
+  down?: boolean;
+  questionsDown?: boolean;
+  retention?: number | null;
+  /** While set, every summary read waits on it: a load held in flight. */
+  hold?: Promise<void> | null;
+}
+
+/** A promise and the function that settles it. */
+function gate(): { promise: Promise<void>; release: () => void } {
+  let release = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+function fakeApi(options: FakeOptions = {}) {
   const summaries: string[] = [];
   const questions: string[] = [];
   return {
     summaries,
     questions,
+    options,
     usageSummary: async (window: UsageWindow, group: UsageGroup) => {
       summaries.push(`${window.from}..${window.to} ${group}`);
+      const hold = options.hold;
+      if (hold) await hold;
       if (options.down) throw new ApiError(503, "usage unavailable");
       return summary(window, group, options.retention === undefined ? 90 : options.retention);
     },
     personQuestions: async (id: string, window: UsageWindow, n: number) => {
       questions.push(`${id} ${window.from}..${window.to} page ${n}`);
-      if (options.down) throw new ApiError(503, "usage unavailable");
+      if (options.down || options.questionsDown) throw new ApiError(503, "usage unavailable");
       return page(n, 2);
     },
   };
@@ -167,8 +187,51 @@ describe("UsageVM", () => {
   });
 
   it("says the questions are unavailable when the trace store is down", async () => {
-    const vm = new UsageVM(fakeApi({ down: true }), () => true, () => NOW);
+    const vm = new UsageVM(fakeApi({ questionsDown: true }), () => true, () => NOW);
+    await vm.load();
     await vm.open(row("1001"));
     expect(vm.questions?.questions.error).toBe(UNAVAILABLE);
+  });
+
+  it("reads questions for the window the table was read for, not the typed one", async () => {
+    const api = fakeApi();
+    const vm = new UsageVM(api, () => true, () => NOW);
+    await vm.load();
+    vm.from = "2026-09-01";
+    vm.to = "2026-09-10";
+    expect(vm.canApply).toBe(true);
+    await vm.open(row("1001"));
+    expect(api.questions).toEqual(["1001 2026-08-28..2026-09-26 page 1"]);
+  });
+
+  it("opens no questions while a new window is loading", async () => {
+    const api = fakeApi();
+    const vm = new UsageVM(api, () => true, () => NOW);
+    await vm.load();
+    const held = gate();
+    api.options.hold = held.promise;
+    const loading = vm.preset(7);
+    expect(vm.report.data?.person.from).toBe("2026-08-28");
+    await vm.open(row("1001"));
+    held.release();
+    await loading;
+    expect(vm.questions).toBeNull();
+    expect(api.questions).toEqual([]);
+  });
+
+  it("lets a preset chosen during a load supersede it", async () => {
+    const api = fakeApi();
+    const held = gate();
+    api.options.hold = held.promise;
+    const vm = new UsageVM(api, () => false, () => NOW);
+    const first = vm.load();
+    const second = vm.preset(7);
+    expect(api.summaries.at(-1)).toBe("2026-09-20..2026-09-26 tool");
+    held.release();
+    await Promise.all([first, second]);
+    expect(vm.report.loading).toBe(false);
+    expect(vm.report.data?.person.from).toBe("2026-09-20");
+    expect(vm.from).toBe("2026-09-20");
+    expect(vm.shown).toEqual({ from: "2026-09-20", to: "2026-09-26" });
   });
 });

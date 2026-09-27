@@ -244,13 +244,21 @@ function questionFixtures(): Record<string, Json[]> {
 }
 
 /** The usage reads, with the server's rules: 503 when Langfuse is down, `admin_oidc` on text. */
-function usageRead(state: Json, who: StubPrincipal, path: string, query: URLSearchParams, down: boolean): Reply | null {
+function usageRead(
+  state: Json,
+  who: StubPrincipal,
+  path: string,
+  query: URLSearchParams,
+  options: StubOptions,
+): Reply | null {
+  const down = options.usageDown;
   const window = { from: query.get("from") ?? "", to: query.get("to") ?? "" };
   if (path === "/api/usage/summary") {
     if (down) return [503, { error: "usage unavailable" }];
     const group = query.get("group") ?? "person";
     const rows = (state.usage as Record<string, Json[]>)[group] ?? [];
-    return [200, { ...window, group, label: "traced question runs", retention_days: 90, rows, totals: USAGE_TOTALS }];
+    const retention_days = options.retentionUnknown ? null : 90;
+    return [200, { ...window, group, label: "traced question runs", retention_days, rows, totals: USAGE_TOTALS }];
   }
   const match = /^\/api\/usage\/people\/([^/]+)\/questions$/.exec(path);
   if (match === null) return null;
@@ -408,6 +416,17 @@ function writeRefusal(who: StubPrincipal, headers: Headers): Reply | null {
 }
 
 /** One request as the stub saw it: what credential it carried. */
+/**
+ * Switches a test flips: whether `/auth/config` says sign-in is offered,
+ * whether Langfuse is down, and whether the API could read
+ * `TRACE_RETENTION_DAYS`.
+ */
+export interface StubOptions {
+  signIn: boolean;
+  usageDown: boolean;
+  retentionUnknown: boolean;
+}
+
 export interface Seen {
   method: string;
   path: string;
@@ -429,8 +448,7 @@ export interface StubApi {
   seen: Seen[];
   /** Live sessions by cookie value; `SESSIONS` to start with. */
   sessions: Map<string, StubPrincipal>;
-  /** Whether `/auth/config` says sign-in is offered, and whether Langfuse is down. */
-  options: { signIn: boolean; usageDown: boolean };
+  options: StubOptions;
   close: () => Promise<void>;
 }
 
@@ -440,7 +458,7 @@ export async function startStubApi(): Promise<StubApi> {
   const writes: string[] = [];
   const seen: Seen[] = [];
   const sessions = new Map(Object.entries(SESSIONS));
-  const options = { signIn: false, usageDown: false };
+  const options: StubOptions = { signIn: false, usageDown: false, retentionUnknown: false };
 
   const server: Server = createServer((request, response) => {
     const [path = "", query = ""] = (request.url ?? "").split("?");
@@ -498,7 +516,7 @@ export async function startStubApi(): Promise<StubApi> {
         chunks.length === 0 ? {} : (JSON.parse(Buffer.concat(chunks).toString()) as Json);
 
       if (request.method === "GET") {
-        const usage = usageRead(state, who, path, new URLSearchParams(query), options.usageDown);
+        const usage = usageRead(state, who, path, new URLSearchParams(query), options);
         if (usage !== null) {
           reply(...usage);
           return;

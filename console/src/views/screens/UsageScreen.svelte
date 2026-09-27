@@ -19,7 +19,8 @@
   const vm = app.usage();
   onMount(() => void vm.load());
 
-  const open = $derived(app.session.canReadQuestions ? vm.open : undefined);
+  // No Questions button while a new window loads: the rows on screen are the old window's.
+  const open = $derived(app.session.canReadQuestions && !vm.report.loading ? vm.open : undefined);
 
   function apply(event: SubmitEvent): void {
     event.preventDefault();

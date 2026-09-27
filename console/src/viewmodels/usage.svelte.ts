@@ -103,7 +103,9 @@ export class UsageVM {
     this.shown = { from: this.from, to: this.to };
     this.report = new Resource(() => orUnavailable(() => this.#read(this.shown)));
     this.problem = $derived(windowProblem({ from: this.from, to: this.to }));
-    this.canApply = $derived(this.problem === null && !this.report.loading);
+    // Not held back while a read is in flight: a newer one supersedes it, and
+    // Resource drops the older answer, so the tables follow the last choice.
+    this.canApply = $derived(this.problem === null);
     this.retentionDays = $derived(this.report.data?.person.retention_days ?? null);
   }
 
@@ -123,10 +125,15 @@ export class UsageVM {
     await this.apply();
   };
 
-  /** Open a person's questions. Offered to an admin signed in as a person only. */
+  /**
+   * Open a person's questions, for the window the visible table was read for.
+   * Offered to an admin signed in as a person only, and refused while a new
+   * window is loading: the row on screen belongs to the old one.
+   */
   open = async (row: UsageRow): Promise<void> => {
-    if (!this.#canReadQuestions()) return;
-    const questions = new QuestionsVM(this.#api, row, this.shown);
+    const read = this.report.data?.person;
+    if (!this.#canReadQuestions() || this.report.loading || read === undefined) return;
+    const questions = new QuestionsVM(this.#api, row, { from: read.from, to: read.to });
     this.questions = questions;
     await questions.load();
   };
