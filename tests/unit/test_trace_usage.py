@@ -306,6 +306,21 @@ async def test_the_batch_holds_the_trace_a_generation_per_call_and_a_span_per_to
     assert (failed["level"], failed["statusMessage"]) == ("ERROR", "call_failed")
 
 
+async def test_every_observation_carries_the_traces_environment() -> None:
+    # Regression: Langfuse stores an observation without `environment` as
+    # "default", so the usage view's token, cost and tool queries (which
+    # filter observations by our environment) found nothing in production.
+    sent, client = _capture()
+    tracer = LangfuseTracer(
+        "http://lf.invalid", "pk", "sk", client=client, environment="staging"
+    )
+    await tracer.trace(_trace(SPEND))
+    events = sent[0]["batch"]
+
+    assert len(events) == 5
+    assert {e["body"]["environment"] for e in events} == {"staging"}
+
+
 async def test_a_generation_with_no_known_model_omits_the_field() -> None:
     spend = Spend(models=(ModelUsage("plan", "", 1, 1, T0, T0),))
     (_, generation) = await _batch(spend)

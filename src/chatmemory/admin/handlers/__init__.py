@@ -13,6 +13,7 @@ individual screen does. Read them in this order:
     optouts     per-person withdrawal
     tokens      MCP credentials, issued once and never recoverable
     changes     the change record, read back
+    feature_requests  what people suggested, and its triage
 
 Two rules hold in all of them, and neither is left to a reviewer to notice:
 
@@ -20,6 +21,8 @@ Two rules hold in all of them, and neither is left to a reviewer to notice:
     document or an ask body, and `queries` is the only module that reaches
     the corpus at all -- where the statements are counts and timings. A test
     reflects over them and fails on a statement that names a content column.
+    A suggestion (`feature_requests`) is not corpus content: it is the
+    person's own words, given to the team on purpose with a disclosure.
 *   **Nothing returns a credential.** The one exception is the MCP token a
     handler has just minted, which is returned exactly once because it exists
     nowhere else; a stored credential is a hash and no route returns even

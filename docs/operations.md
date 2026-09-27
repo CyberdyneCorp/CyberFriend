@@ -343,7 +343,7 @@ project is never touched.
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
 | `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
-| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, and by `bot`, which states it in `/privacy`, the one-time tracing notice and the capabilities reply |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, by `bot`, which states it in `/privacy`, the one-time tracing notice and the capabilities reply, and by `admin`, which states it on the console's usage screen |
 
 Turning it on with a host but no keys is refused at startup rather than
 silently disabled. A deployment that believes it is recording and is not finds
@@ -419,8 +419,8 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   (`fixed`, `loop`):
   another app's or environment's traces in a shared project are never
   deleted. The same sweep then deletes everything pending. The console only
-  marks: it holds no Langfuse keys, and `bot` and `ingest` are the processes
-  that hold the pair. A search or deletion Langfuse refuses or cannot receive
+  marks: it reads Langfuse for the usage view and never deletes; `ingest` is
+  the process that deletes. A search or deletion Langfuse refuses or cannot receive
   (a 400 included) stays pending and is retried every five minutes. The
   migration queues a search for everyone who had already opted out, which
   finds the traces of questions they asked. It cannot find the traces that
@@ -458,20 +458,38 @@ checked-in table `scripts/langfuse_model_prices.json` (USD per million
 tokens, reviewed like code). AminiLLM is on-prem and is listed at zero, so its
 calls are matched and counted without inventing a cost.
 
-Applying the table is a manual ops step, not run at startup. It is idempotent:
+The script also checks the **configured** models: `CHAT_MODEL`,
+`EXTRACTION_MODEL`, `EMBEDDING_MODEL` and `MEDIA_AUDIO_MODEL` (their defaults
+when unset), read from its own environment, so export them as the deployment
+has them. Each must be priced by a table row, by a Langfuse-managed
+definition, by `--price NAME=INPUT,OUTPUT` (USD per million input and
+output tokens, from the provider's price list), or by a definition an earlier
+`--price` left in Langfuse (reported as "priced by an earlier --price" and
+left as it is). A configured model with none of those is named and **nothing
+is written**: prices are never guessed. A `--price` registers the model with
+the pattern `(?i)^(openai/)?(<name>)(-YYYY-MM-DD)?$` and replaces a table row
+of the same name; add it to the table so a changed price is reviewed like code.
+
+Production runs `gpt-5.4-mini` (chat and extraction) and
+`text-embedding-3-small`. Langfuse prices the embedding model; whether it
+prices `gpt-5.4-mini` depends on its version, and the script says so. If it
+does not, pass the price from OpenAI's price list.
+
+Applying prices is a manual ops step, not run at startup. It is idempotent:
 a second run reports every model `unchanged`. A changed price deletes our
 definition for that model and creates a new one; models Langfuse manages
 itself are never touched.
 
 ```bash
-LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
-  uv run python scripts/langfuse_models.py --dry-run   # report only
-LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
-  uv run python scripts/langfuse_models.py
+export LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=...
+export CHAT_MODEL=gpt-5.4-mini EXTRACTION_MODEL=gpt-5.4-mini \
+       EMBEDDING_MODEL=text-embedding-3-small
+uv run python scripts/langfuse_models.py --dry-run   # report only
+uv run python scripts/langfuse_models.py --price gpt-5.4-mini=<input>,<output>
 ```
 
-Run it after changing the table or pointing the chat model at a new name.
-Costs are estimates from these tables, not a bill.
+Run it after changing the table or pointing any of those settings at a new
+model. Costs are estimates from these tables, not a bill.
 
 ### Langfuse version: stay on v3
 
@@ -903,12 +921,17 @@ person asked or which trace quoted them.
 `media_usage`, so a person who erases and keeps using the bot starts the
 month's personal allowance again. The server-wide ceiling is unaffected.
 
-**Langfuse keys.** The key pair is project-wide (ingest, read and delete).
-Two processes hold it: `bot` (it exports traces, and states retention in
-`/privacy`) and `ingest` (withdrawal, the asker search and retention). The
-admin console holds none; it and the bot's erasure only mark traces in
-`trace_export`, and ingest deletes. Rotating the pair means updating both
-services.
+**Langfuse keys.** The key pair is project-wide (ingest, read and delete):
+Langfuse has no read-only key, so every holder could also write and delete.
+Three processes hold it: `bot` (it exports traces, and states retention in
+`/privacy`), `ingest` (withdrawal, the asker search and retention) and
+`admin`, which only reads, server-side, for the usage view (`GET
+/api/public/metrics` and `/api/public/traces`; see docs/admin-console.md,
+"Usage"). Rate the admin process accordingly: holding the pair is equivalent
+to holding the trace store, so its environment is as sensitive as the bot's.
+The keys are never sent to a browser and no console response carries them.
+The console and the bot's erasure still only mark traces in `trace_export`;
+ingest deletes. Rotating the pair means updating all three services.
 
 **Open ops check: Langfuse blobs.** Langfuse v3 deletes a trace
 asynchronously (a worker purges ClickHouse). Whether that also removes the
@@ -1181,9 +1204,30 @@ surrounding conversation is stored.
 - **Five a day**: at most five accepted per person in any rolling 24 hours,
   enforced inside the insert while holding a lock on the person's row, so
   parallel submissions are counted one after another.
+- **Triage**: the admin console's Feature requests screen lists every
+  suggestion, newest first, filterable by status (`new`, `triaged`,
+  `planned`, `done`, `declined`, `duplicate`), with the author's display name
+  and how many other people suggested the same text
+  (`GET /api/feature-requests`, operator). Admins set the status, a note for
+  the team and a duplicate-of link (`PATCH /api/feature-requests/{id}`,
+  admin; operators get 403). Each changed field is written to the change
+  record as `feature_request.<id>.status`, `.duplicate_of` or `.admin_note`,
+  with who made it; the status and link with their values before and after,
+  the note only as "set" or "empty", never its text. The suggestion's own
+  text cannot be edited.
 - **Status news is opt-in**: the acknowledgement asks whether to DM them when
-  the status changes; nothing is stored unless they press Yes. The sweep that
-  sends those DMs arrives with the admin triage screen.
+  the status changes; nothing is stored unless they press Yes. A sweep in the
+  bot process (every ten minutes, after the gateway connects) sends one DM
+  per status change, in the suggestion's language, naming the new status and
+  quoting their text; the admin note is never sent. A row is claimed before
+  its message is sent, so each change is announced once; a status changed and
+  changed back before the sweep sends nothing. Nobody is messaged who did not
+  press Yes, has opted out or erased their data (their rows are gone), has
+  turned `/notifications` off, or whose DMs are closed. A closed DM is
+  recorded like a notification's (`notification_preference.undeliverable_at`)
+  and the news waits until `/notifications on`; a transient Discord failure
+  is retried on the next sweep. The health endpoint reports
+  `suggestion_news.delivered` and `last_run_at`.
 - **Privacy**: nothing is written for an opted-out person, not even their
   name; an opt-out deletes a person's suggestions in the same
   transaction, and deleting the person cascades. The delete is in

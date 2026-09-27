@@ -308,16 +308,24 @@ services:
       # sign-in and the same switch and HMAC key as the bot's `/account`,
       # which `/link` compares the signed-in email with. `/me/privacy` states
       # retention from the same variables that enforce it elsewhere; unset
-      # BACKUP_RETENTION_DAYS says no backups are kept.
+      # BACKUP_RETENTION_DAYS says no backups are kept
+      # (TRACE_RETENTION_DAYS is set below, for the usage screen too).
       - ACCOUNT_PROVISIONING_ENABLED=${ACCOUNT_PROVISIONING_ENABLED:-false}
       - PROVISIONING_EMAIL_KEY=${PROVISIONING_EMAIL_KEY:-}
       - TRACING_ENABLED=${TRACING_ENABLED:-false}
-      - TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}
       - MEMORY_RETENTION_DAYS=${MEMORY_RETENTION_DAYS}
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}
-      # The host only, no keys: read at startup to warn when Langfuse is not
-      # on v3 (docs/operations.md, "Langfuse version").
+      # The usage view reads Langfuse live (docs/admin-console.md, "Usage").
+      # The host is also read at startup to warn when Langfuse is not on v3.
+      # The key pair is project-wide and is used server-side only; without it
+      # the usage view says usage is unavailable.
       - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_ENVIRONMENT=${LANGFUSE_ENVIRONMENT:-production}
+      # The usage screen states how long traces are kept; the same period the
+      # ingest sweep enforces and /privacy states.
+      - TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}
       # Its own domain. Separate from the MCP one so the console can be closed
       # to the internet without taking retrieval with it.
       - SERVICE_FQDN_ADMIN_8083
