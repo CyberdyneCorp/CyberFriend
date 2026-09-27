@@ -112,9 +112,10 @@ Last reviewed 2026-09-25.
 - **Routing unification**, PR4 to PR12 — paused.
 - **More obligation phrasings** — *o que me pediram esta semana?*, *what was I
   asked?*.
-- **CyberWealth finance over MCP**, once CyberWealth ships its MCP service —
-  a per-server Bearer (`FEDERATION_AUTH_<NAME>`), a person's `cwk_` key held as a
-  DM-only encrypted secret, and `my_*` tools answered only in a DM.
+- **CyberWealth finance over MCP**: a person's `cwk_` key held as a DM-only
+  encrypted secret, so `my_*` tools work. Service authentication
+  (`FEDERATION_AUTH_<NAME>_*`), DM-only `my_*` tools and personal results are
+  in place (`openspec/changes/add-cyberwealth-federation`).
 
 ## Waiting on decisions
 

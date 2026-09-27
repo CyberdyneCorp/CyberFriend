@@ -62,6 +62,7 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
+import httpx2
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -108,6 +109,11 @@ from chatmemory.adapters.mcp_client.config import (
     ConfigurationError as FederationConfigurationError,
 )
 from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
+from chatmemory.adapters.mcp_client.service_auth import (
+    ServiceTokenSource,
+    authenticated_session_factory,
+    service_credentials,
+)
 from chatmemory.adapters.store.alerts_postgres import PostgresAlertStore
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
@@ -229,7 +235,7 @@ from chatmemory.app.self_description import (
 )
 from chatmemory.app.tracing_notice import TracingNotice
 from chatmemory.app.voice import VoiceLimits, VoiceQuestions
-from chatmemory.config import Settings
+from chatmemory.config import Settings, federation_auth_environment
 from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.answers import AnswerService
 from chatmemory.ports.notifications import NotificationSender
@@ -840,17 +846,52 @@ def market_tools_config(
     )
 
 
+def with_service_auth(
+    config: FederationConfig | None,
+    factory: SessionFactory | None,
+    *,
+    transport: httpx.AsyncBaseTransport | None,
+    environ: Mapping[str, str],
+    mcp_transport: httpx2.AsyncBaseTransport | None = None,
+) -> SessionFactory | None:
+    """Give each credentialled server its own bearer; leave the rest alone.
+
+    Raises `FederationConfigurationError` for a credential that cannot be
+    honoured safely. Tokens are minted through `transport`, the process's
+    `Edges.http_transport`, so the e2e harness can fake the issuer.
+    """
+    credentials = service_credentials(config.servers if config else (), environ)
+    if not credentials:
+        return factory
+    log.info("composition.federation.service_auth", servers=sorted(credentials))
+    return authenticated_session_factory(
+        {
+            name: ServiceTokenSource(credential, transport=transport)
+            for name, credential in credentials.items()
+        },
+        factory,
+        http_transport=mcp_transport,
+    )
+
+
 async def build_federation(
     settings: Settings,
     factory: SessionFactory | None = None,
     *,
     proposer: ModelToolProposer | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    auth_environ: Mapping[str, str] | None = None,
+    mcp_transport: httpx2.AsyncBaseTransport | None = None,
 ) -> FederatedTools | None:
     """Connect to the configured servers, or run without any.
 
     `transport` is what the local web, market and wallet providers send
     through -- the process's `Edges.http_transport`. None is httpx's own.
+    Service tokens are minted through it too.
+
+    `auth_environ` holds the `FEDERATION_AUTH_*` variables (read from the
+    environment when None); `mcp_transport` is what a credentialled server's
+    MCP requests go through, for tests.
 
     Every failure degrades to None. That is a deliberate asymmetry with the
     model and embedding checks above, which refuse the deployment: those
@@ -865,6 +906,15 @@ async def build_federation(
     """
     try:
         config = build_federation_config(settings)
+        # Innermost: only remote MCP servers carry a service credential, and
+        # the local providers below open themselves before reaching it.
+        factory = with_service_auth(
+            config,
+            factory,
+            transport=transport,
+            environ=federation_auth_environment() if auth_environ is None else auth_environ,
+            mcp_transport=mcp_transport,
+        )
     except FederationConfigurationError as exc:
         log.error("composition.federation.misconfigured", error=str(exc))
         return None

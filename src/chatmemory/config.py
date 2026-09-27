@@ -6,13 +6,31 @@ same image runs against OpenAI, a LiteLLM proxy, or a self-hosted gateway.
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from dotenv import dotenv_values
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+FEDERATION_AUTH_PREFIX = "FEDERATION_AUTH_"
+
+
+def federation_auth_environment(env_file: str = ".env") -> Mapping[str, str]:
+    """Every `FEDERATION_AUTH_*` variable, from the same sources as `Settings`.
+
+    Per-server credentials are named after the server
+    (`FEDERATION_AUTH_<NAME>_CLIENT_ID`), so they cannot be fields; they are
+    read here instead, the process environment winning over `.env` as it does
+    for every setting.
+    """
+    merged = {k: v for k, v in dotenv_values(env_file).items() if v is not None}
+    merged.update(os.environ)
+    return {k: v for k, v in merged.items() if k.startswith(FEDERATION_AUTH_PREFIX)}
 
 
 class Settings(BaseSettings):

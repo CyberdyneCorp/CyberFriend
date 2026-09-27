@@ -524,6 +524,8 @@ class ReasoningLoop:
             # From the audience, never the arguments: whether a wallet's
             # counterparties may be written out depends on who reads the reply.
             private=question.audience.is_private,
+            # Personal tools and results are held to direct messages.
+            direct=question.audience.is_direct,
         )
         try:
             outcome = await surface.invoke(request)

@@ -740,6 +740,60 @@ characters, citation included.
 never "no activity"; without Aave's tokens the answer says Aave actions may be
 missing. Each chain is bounded by `POSITIONS_TIMEOUT_SECONDS`.
 
+## CyberWealth over MCP
+
+CyberWealth's MCP server (dev:
+`https://cyberwealth-dev-mcp.coolify.cyberdynecorp.ai/mcp`, partner guide in
+CyberWealth `docs/partners/mcp-integration.md`) refuses any request without a
+bearer. CyberFriend authenticates to it as a CyberdyneAuth service principal:
+
+```
+FEDERATION_SERVERS=cyberwealth=https://cyberwealth-dev-mcp.coolify.cyberdynecorp.ai/mcp
+FEDERATION_TOOL_ALLOWLIST=cyberwealth:intel_server_info:ro
+FEDERATION_AUTH_CYBERWEALTH_ISSUER=https://<cyberdyneauth issuer>
+FEDERATION_AUTH_CYBERWEALTH_CLIENT_ID=<client id>
+FEDERATION_AUTH_CYBERWEALTH_CLIENT_SECRET=<client secret>
+FEDERATION_AUTH_CYBERWEALTH_AUDIENCE=cyberwealth
+FEDERATION_AUTH_CYBERWEALTH_SCOPE=cyberwealth:intel.read
+```
+
+`<NAME>` is the server name upper-cased, with `-` written `_`. Any federated
+server can be given a credential this way. The client needs the
+`client_credentials` grant and `cyberwealth` in its allowed audiences, and
+CyberWealth's operators must add its client id to `CW_SERVICE_PRINCIPALS`.
+
+- **Token.** Minted from the issuer's token endpoint (found by OIDC discovery),
+  cached until 60 s before `expires_in`, and minted again then or when the
+  server answers `401` (the request is retried once). It goes on that server's
+  MCP requests only: each credentialled server gets its own HTTP client, and
+  no other server, and not the token endpoint, ever sees it. Neither the
+  secret nor the token is logged.
+- **Refused at boot:** a `FEDERATION_AUTH_*` variable naming a server that is
+  not in `FEDERATION_SERVERS`, a credential missing its issuer, client id or
+  secret, and an issuer or server target that is not `https` (localhost
+  excepted). Like any federation misconfiguration, this logs
+  `composition.federation.misconfigured` and the bot runs without federated
+  tools.
+- **Issuer down.** The server is unreachable for that boot or that run, and the
+  answer says its data is missing. The rest keeps working.
+
+### Personal tools and results are DM-only
+
+A tool whose name starts with `my_` is refused unless the answer goes to the
+asker's DMs. An ephemeral reply in a channel counts as a channel. A result
+that starts with `[personal]` or has `visibility: personal` is dropped before
+the run sees it, unless the answer is a DM, whichever tool returned it. Both
+are audited as refused. The service principal only sees `intel_*` tools, so
+`my_*` needs a person's own connected-app key, which is not built yet.
+
+### Not remembered, not public
+
+Answers resting on CyberWealth cite it by name (`cyberwealth
+(intel_server_info)`). They are not stored in conversation memory, in a
+channel or a DM, because CyberWealth is not one of the public sources
+(web, chain, market) that memory accepts. `intel_*` stays out of that list
+until ownership of public price and DeFi intelligence is agreed.
+
 ## Seeing what is archived
 
 `/channels` lists the archived channels the person asking can read. Private,
