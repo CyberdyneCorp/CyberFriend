@@ -13,6 +13,7 @@ under test is the shipped trigger and function.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -358,3 +359,55 @@ async def test_downgrading_restores_the_per_table_triggers(clean: AsyncEngine) -
     finally:
         await clean.dispose()
         alembic("upgrade", "head")
+
+
+# --- the purge keeps every revision's tables --------------------------------
+
+#: Every table `purge_person_derived` must delete from at head. 0035, 0036 and
+#: 0037 each CREATE OR REPLACE the whole function; re-chaining one of them
+#: after another without restating the other's lines silently drops a table.
+PURGED_AT_HEAD = frozenset(
+    {
+        "conversation_turn",
+        "conversation_summary",
+        "person_fact",
+        "notification",
+        "position_alert",
+        "scheduled_task",
+        "mcp_token",
+        "feature_request",
+        "erasure_request",
+        "user_session",
+        "person_account_link",
+        "account_link_code",
+        "account_provisioning_request",
+        "account_consent",
+        "person_secret",
+    }
+)
+
+#: What 0037's downgrade must restore: 0036's body, without person_secret.
+PURGED_AT_0036 = PURGED_AT_HEAD - {"person_secret"}
+
+
+async def _purged_tables(engine: AsyncEngine) -> frozenset[str]:
+    async with engine.connect() as conn:
+        body = await conn.scalar(
+            text("SELECT pg_get_functiondef('purge_person_derived'::regproc)")
+        )
+    return frozenset(re.findall(r"DELETE FROM (\w+)", str(body)))
+
+
+async def test_the_purge_covers_every_revisions_tables(clean: AsyncEngine) -> None:
+    assert await _purged_tables(clean) == PURGED_AT_HEAD
+
+
+async def test_downgrading_person_secret_restores_the_0036_purge(clean: AsyncEngine) -> None:
+    await clean.dispose()
+    try:
+        alembic("downgrade", "0036")
+        assert await _purged_tables(clean) == PURGED_AT_0036
+    finally:
+        await clean.dispose()
+        alembic("upgrade", "head")
+    assert await _purged_tables(clean) == PURGED_AT_HEAD
