@@ -5,8 +5,9 @@ from __future__ import annotations
 import hmac
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import Row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -17,6 +18,7 @@ from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.accounts import (
     AccountCleanup,
     AccountStore,
+    DiscordProfile,
     LinkCodeIssue,
     LinkCodeVerdict,
     LinkNotice,
@@ -147,6 +149,18 @@ class PostgresAccountStore:
             row = (await conn.execute(sql.LINKED_PERSON, {"sub": sub})).first()
         return None if row is None else PersonRef(str(row.platform), int(row.platform_user_id))
 
+    async def code_holder(self, code_sha256: bytes, now: datetime) -> DiscordProfile | None:
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(sql.CODE_HOLDER, {"code_sha256": code_sha256, "now": now})
+            ).first()
+        return None if row is None else _profile(row)
+
+    async def linked_profile(self, sub: str) -> DiscordProfile | None:
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(sql.LINKED_PROFILE, {"sub": sub})).first()
+        return None if row is None else _profile(row)
+
     async def unlink(self, person: PersonRef) -> bool:
         async with self._engine.begin() as conn:
             person_id = await _known_person(conn, person)
@@ -204,6 +218,13 @@ async def _link(conn: AsyncConnection, new: NewLink, now: datetime) -> LinkOutco
         await conn.execute(sql.END_USER_SESSIONS, {"sub": previous})
     await conn.execute(sql.USE_CODE, {"code_sha256": new.code_sha256, "now": now})
     return LinkOutcome.LINKED
+
+
+def _profile(row: Row[Any]) -> DiscordProfile:
+    return DiscordProfile(
+        person=PersonRef(str(row.platform), int(row.platform_user_id)),
+        display_name=str(row.display_name),
+    )
 
 
 async def _locked_person(conn: AsyncConnection, person: PersonRef) -> int:

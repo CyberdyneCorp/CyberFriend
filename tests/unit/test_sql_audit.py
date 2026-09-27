@@ -683,6 +683,16 @@ UNSCOPED: dict[str, str] = {
         "identity lookup; the platform id a signed-in account's own subject is "
         "linked to. The only way a /me request finds its person. No content"
     ),
+    "accounts_sql.LINKED_PROFILE": (
+        "identity lookup; the platform id and name of the person a signed-in "
+        "account's own subject is linked to, shown to that account on /me. "
+        "No content"
+    ),
+    "accounts_sql.CODE_HOLDER": (
+        "keyed on the sha256 of a single-use code only its holder has; the "
+        "platform id and name it was issued to, shown before sign-in so the "
+        "browser knows which Discord account it would link. Uses nothing"
+    ),
     "accounts_sql.DELETE_LINK": (
         "write; [Unlink] by the presser's own person id. Returns the subject only"
     ),

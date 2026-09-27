@@ -1233,13 +1233,16 @@ Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
   requires; the bot refuses to start otherwise), stored
   only as sha256, single use, valid 15 minutes; a new code ends the earlier
   ones, and at most 5 are issued per person per day.
-- **Redeeming a code** (`/link`, on the admin service): the person signs in
+- **Redeeming a code** (`/link`, on the admin service): the page first names
+  the Discord account the code belongs to and starts a sign-in only from its
+  own same-origin form; the person then signs in
   to CyberdyneAuth in the browser that opened the link, with `prompt=login`.
   The link is made only if CyberdyneAuth reports the email verified and its
   HMAC equals the consented one, and `userinfo.sub` equals the token subject
   (`person_account_link`). The bot then DMs "Linked to a***@domain, not you?
   [Unlink]" (checked every 30 seconds; `notified_at`, migration 0036), and
-  [Unlink] ends the link and every web session of that account. The person's
+  [Unlink] ends the link and every web session of that account; **Unlink**
+  in the user area does the same from the CyberdyneAuth side. The person's
   web user area is `ADMIN_PUBLIC_URL/#/me` (see `docs/admin-console.md`, "The
   user area"). The admin service needs `ACCOUNT_PROVISIONING_ENABLED` and
   `PROVISIONING_EMAIL_KEY` too, and states the same retention as `/privacy`

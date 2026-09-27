@@ -33,7 +33,13 @@ from chatmemory.app.accounts import (
 from chatmemory.app.feature_requests import FeatureRequestService, SubmitOutcome
 from chatmemory.app.optout import OptOutService
 from chatmemory.domain.identity import PersonRef
-from chatmemory.ports.accounts import LinkNotice, LinkOutcome, NewLink, ProvisioningLimits
+from chatmemory.ports.accounts import (
+    DiscordProfile,
+    LinkNotice,
+    LinkOutcome,
+    NewLink,
+    ProvisioningLimits,
+)
 from chatmemory.ports.feature_requests import SourceKind, SuggestionSource
 from tests.integration.test_alert_kinds_store import alembic
 
@@ -209,6 +215,60 @@ async def test_each_link_is_announced_once(clean: AsyncEngine) -> None:
     told.clear()
     assert await announcements.announce(tell) == 0
     assert [n.person for n in told] == [ANA], "only the one not yet told"
+
+
+async def test_a_relink_to_a_new_account_is_announced_again(clean: AsyncEngine) -> None:
+    """The "not you? [Unlink]" DM matters most when the account changes."""
+    store = PostgresAccountStore(clean)
+    await _consent_and_code(store, LEO, "c1")
+    await store.link(_link("c1", _email(LEO), "old-sub"), NOW)
+    [first] = await store.unannounced_links(10)
+    await store.mark_announced(first, NOW)
+    assert await store.unannounced_links(10) == []
+    await store.issue_link_code(
+        LEO, code_digest("c2"), now=NOW, ttl=LINK_CODE_TTL, per_day=LINK_CODES_PER_DAY
+    )
+
+    await store.link(_link("c2", _email(LEO), "new-sub"), NOW + timedelta(minutes=1))
+
+    assert await store.unannounced_links(10) == [LinkNotice(LEO, "new-sub", "l***@example.com")]
+
+
+async def test_announcing_twice_keeps_the_first_time(clean: AsyncEngine) -> None:
+    store = PostgresAccountStore(clean)
+    await _consent_and_code(store, LEO, "c1")
+    await store.link(_link("c1", _email(LEO), "sub-leo"), NOW)
+    [notice] = await store.unannounced_links(10)
+
+    await store.mark_announced(notice, NOW)
+    await store.mark_announced(notice, NOW + timedelta(hours=1))
+
+    told = await _scalar(clean, "SELECT notified_at FROM person_account_link")
+    assert told == NOW
+
+
+async def test_a_live_code_names_its_holder_without_using_it(clean: AsyncEngine) -> None:
+    store = PostgresAccountStore(clean)
+    await _consent_and_code(store, LEO, "c1")
+    async with clean.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE person SET display_name = 'Leo' WHERE id = "
+                "(SELECT person_id FROM person_platform_id WHERE platform_user_id = :u)"
+            ),
+            {"u": LEO.platform_user_id},
+        )
+
+    holder = await store.code_holder(code_digest("c1"), NOW)
+    expired = await store.code_holder(code_digest("c1"), NOW + LINK_CODE_TTL)
+    unknown = await store.code_holder(code_digest("nope"), NOW)
+
+    assert holder == DiscordProfile(LEO, "Leo")
+    assert expired is None and unknown is None
+    assert await store.link(_link("c1", _email(LEO), "sub-leo"), NOW) is LinkOutcome.LINKED
+    assert await store.code_holder(code_digest("c1"), NOW) is None, "a used code names nobody"
+    assert await store.linked_profile("sub-leo") == DiscordProfile(LEO, "Leo")
+    assert await store.linked_profile("sub-unknown") is None
 
 
 # --- user sessions ------------------------------------------------------------------

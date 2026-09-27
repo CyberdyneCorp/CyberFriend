@@ -13,18 +13,24 @@ import type { UserApi } from "../../services/userApi";
 export const SIGN_OUT_INCOMPLETE =
   "Sign-out did not reach the server. Your session may still be active; sign in and out again.";
 
+export const UNLINK_FAILED = "Unlinking did not reach the server. The link is still there; try again.";
+
+type SessionApi = Pick<UserApi, "session" | "logout" | "unlink" | "loginUrl">;
+
 export class UserSessionVM {
   me: MeSession | null = $state.raw(null);
   loading = $state(true);
   error: string | null = $state(null);
+  /** The link was undone here: the server ended the session with it. */
+  unlinked = $state(false);
 
   readonly signedIn = $derived(this.me !== null);
   readonly linked = $derived(this.me?.linked === true);
   readonly loginUrl: string;
 
-  readonly #api: Pick<UserApi, "session" | "logout" | "loginUrl">;
+  readonly #api: SessionApi;
 
-  constructor(api: Pick<UserApi, "session" | "logout" | "loginUrl">) {
+  constructor(api: SessionApi) {
     this.#api = api;
     this.loginUrl = api.loginUrl();
   }
@@ -48,6 +54,22 @@ export class UserSessionVM {
     } catch {
       this.error = SIGN_OUT_INCOMPLETE;
     }
+    this.me = null;
+  };
+
+  /**
+   * Undo the link: for an account linked to a Discord account that is not the
+   * person's own. The server ends the session with it, so this forgets it too.
+   */
+  unlink = async (): Promise<void> => {
+    try {
+      await this.#api.unlink();
+    } catch {
+      this.error = UNLINK_FAILED;
+      return;
+    }
+    this.error = null;
+    this.unlinked = true;
     this.me = null;
   };
 

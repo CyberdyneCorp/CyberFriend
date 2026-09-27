@@ -15,6 +15,7 @@
 - [x] 2.2 Post-link DM with Unlink (bot sweep reads new links)
 - [x] 2.3 `user_session` (with `fresh_auth_at`) + `__Host-cf_user`; `/me/*` rows in the route table; `/me` middleware; CSRF; add to `purge_person_derived`
 - [x] 2.4 Tests: unverified email refused; different email refused; sub mismatch refused; callback in another browser refused; used/expired/superseded code refused; each cookie 401 on the other's routes
+- [x] 2.5 Link CSRF: `GET /link` names the Discord account and starts nothing; `POST /link` only from this origin; `/me/session` names the linked Discord account; `POST /me/unlink` + Unlink in the Svelte user area; tests for each, and for the refreshed-token sub checks, a future `auth_time`, `SameSite=Strict`, the purpose guard and a relink being announced again
 
 ## 3. User area
 

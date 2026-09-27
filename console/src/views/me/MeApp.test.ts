@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { MeSession } from "../../domain/me";
@@ -14,6 +14,7 @@ function area(me: MeSession | null): UserAreaVM {
       throw new Error("not linked");
     },
     suggestions: async () => [],
+    unlink: async () => ({ unlinked: true }),
     loginUrl: () => "/auth/user/login",
     freshUrl: () => "/auth/user/fresh",
   } as unknown as UserApi;
@@ -30,8 +31,19 @@ describe("the user area's page", () => {
   });
 
   it("says how to link when the account has no profile", async () => {
-    render(MeApp, { props: { area: area({ email: "x@example.com", linked: false, fresh: false }) } });
+    render(MeApp, { props: { area: area({ email: "x@example.com", linked: false, discord: null, fresh: false }) } });
     expect(await screen.findByText(/No CyberFriend profile is linked/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Privacy" })).toBeNull();
+  });
+
+  it("names the linked Discord account and unlinks on request", async () => {
+    const me: MeSession = { email: "leo@example.com", linked: true, discord: "Ana (Discord user 8)", fresh: false };
+    render(MeApp, { props: { area: area(me) } });
+    expect(await screen.findByText("Ana (Discord user 8)")).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
+
+    expect(await screen.findByRole("heading", { name: "Unlinked" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Privacy" })).toBeNull();
   });
 });

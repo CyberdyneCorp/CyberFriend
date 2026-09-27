@@ -157,6 +157,19 @@ class LinkNotice:
 
 
 @dataclass(frozen=True, slots=True)
+class DiscordProfile:
+    """Which Discord account a code or a link belongs to, as the web names it.
+
+    `/link` names it before anyone signs in, so whoever follows a link sees
+    which Discord account they are about to link to; `/me` names it after, so
+    an account linked to the wrong person can tell and unlink.
+    """
+
+    person: PersonRef
+    display_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class AccountCleanup:
     requests: int = 0
     codes: int = 0
@@ -222,8 +235,16 @@ class AccountStore(Protocol):
         """
         ...
 
+    async def code_holder(self, code_sha256: bytes, now: datetime) -> DiscordProfile | None:
+        """Whose live code this is, without using it. None if it would not link."""
+        ...
+
     async def linked_person(self, sub: str) -> PersonRef | None:
         """Whom this CyberdyneAuth subject is linked to, or None."""
+        ...
+
+    async def linked_profile(self, sub: str) -> DiscordProfile | None:
+        """`linked_person`, with the name the web shows for it."""
         ...
 
     async def unlink(self, person: PersonRef) -> bool:

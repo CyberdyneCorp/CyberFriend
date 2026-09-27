@@ -127,9 +127,14 @@ The email typed in Discord is unverified, so a link is never made on it.
    `account_link_code(code_sha256, person_id, email_hmac, expires_at = +15 min,
    used_at)`. Issuing a new code invalidates earlier unused ones; at most 5
    codes per person per day.
-2. `/link` stores the code hash in the login record (browser-bound by
-   `__Host-cf_login`, as in the console login) and starts OIDC with
-   `prompt=login`.
+2. `GET /link` starts nothing. It shows a page naming the Discord account the
+   code was issued to ("Leo (Discord user 123)"), telling the reader to
+   continue only if they asked for the link themselves. Its form posts the
+   code to `POST /link`, which is refused unless `Origin` is present and is
+   the console's own (a form cannot carry the CSRF header, and browsers
+   always send `Origin` on a form POST). That stores the code hash in the
+   login record (browser-bound by `__Host-cf_login`, as in the console login)
+   and starts OIDC with `prompt=login`.
 3. On callback, after the standard checks (state, browser binding, id-token
    nonce, `userinfo.sub == id_token.sub == access_token.sub`), the code must be
    unused and unexpired. Userinfo must have `email_verified = true` and an
@@ -148,7 +153,15 @@ it. A CyberdyneAuth account already linked to another person is refused;
 relinking a person to a new account ends the old account's user sessions.
 
 A forwarded or leaked code is useless without signing in as the consented,
-verified email.
+verified email. That does not stop a Discord person who typed somebody
+else's email from sending them the link: the consented email is theirs to
+choose, so the email match proves only that the signer owns it, not that they
+asked. Against that link CSRF: the `/link` page names the Discord account
+before any sign-in, only its same-origin form starts one, `/me` names the
+linked Discord account, and `POST /me/unlink` lets the CyberdyneAuth side undo
+a link (the DM's [Unlink] reaches only the Discord side, which is the
+attacker's in this case). The refusal page for an account already linked
+elsewhere points there.
 
 ### User session
 
@@ -169,7 +182,7 @@ verified email.
   check, SameSite=Strict).
 
 Besides the routes above, the user area has `GET /me/session` (email, linked,
-fresh), `POST /me/logout`, and two public starts, `GET /auth/user/login` and
+the linked Discord account, fresh), `POST /me/unlink`, `POST /me/logout`, and two public starts, `GET /auth/user/login` and
 `GET /auth/user/fresh` (`max_age=300`). A web suggestion is stored with
 `source_kind = 'web'`.
 
@@ -216,7 +229,8 @@ imports between the admin and user view-models.
   there is nothing to leak.
 - [Wrong person linked] -> Verified email equal to the consented one (by
   HMAC), a single-use 15-minute code, a browser-bound login, a subject check,
-  and a post-link DM with Unlink.
+  a post-link DM with Unlink, a pre-sign-in page naming the Discord account,
+  the linked account shown on `/me`, and Unlink on the web too.
 - [A user session reaches admin routes] -> Separate cookies, middlewares and
   route-table levels, with a cross-test.
 - [The account outlives erasure] -> Stated before consent and after erasure.

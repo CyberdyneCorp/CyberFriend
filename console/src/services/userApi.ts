@@ -29,6 +29,8 @@ export const userApi = {
   erase: (mode: ErasureMode, confirm: string) =>
     userRequest<Erased>("POST", pagePath("me/erase"), { mode, confirm }),
   logout: () => userRequest<{ signed_out: boolean }>("POST", pagePath("me/logout")),
+  /** Undo the link to the Discord account; ends the user session too. */
+  unlink: () => userRequest<{ unlinked: boolean }>("POST", pagePath("me/unlink")),
   loginUrl: (): string => pagePath("auth/user/login"),
   freshUrl: (): string => pagePath("auth/user/fresh"),
   /** Leave the page for `url`: the sign-in, which comes back with a cookie. */

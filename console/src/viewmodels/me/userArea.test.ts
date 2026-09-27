@@ -4,6 +4,7 @@ import { CONFIRM_WORD, isUserArea, retentionLines, type Erased, type MePrivacy, 
 import type { UserApi } from "../../services/userApi";
 import { MyFeatureRequestsVM } from "./myFeatureRequests.svelte";
 import { UserAreaVM } from "./userArea.svelte";
+import { UNLINK_FAILED } from "./userSession.svelte";
 
 const PRIVACY: MePrivacy = {
   known: true,
@@ -32,9 +33,10 @@ interface Calls {
   erase: [string, string][];
   left: string[];
   suggested: string[];
+  unlinked: number;
 }
 
-function fakeApi(me: MeSession | null, calls: Calls, refuse?: string): UserApi {
+function fakeApi(me: MeSession | null, calls: Calls, refuse?: string, unlinkFails = false): UserApi {
   return {
     session: async () => me,
     privacy: async () => PRIVACY,
@@ -49,6 +51,11 @@ function fakeApi(me: MeSession | null, calls: Calls, refuse?: string): UserApi {
       return ERASED;
     },
     logout: async () => ({ signed_out: true }),
+    unlink: async () => {
+      if (unlinkFails) throw new Error("offline");
+      calls.unlinked += 1;
+      return { unlinked: true };
+    },
     loginUrl: () => "/auth/user/login",
     freshUrl: () => "/auth/user/fresh",
     leave: (url: string) => {
@@ -58,7 +65,7 @@ function fakeApi(me: MeSession | null, calls: Calls, refuse?: string): UserApi {
 }
 
 function calls(): Calls {
-  return { erase: [], left: [], suggested: [] };
+  return { erase: [], left: [], suggested: [], unlinked: 0 };
 }
 
 describe("the user area", () => {
@@ -70,7 +77,7 @@ describe("the user area", () => {
   });
 
   it("knows who is signed in and whether a profile is linked", async () => {
-    const area = new UserAreaVM(fakeApi({ email: "leo@example.com", linked: false, fresh: false }, calls()));
+    const area = new UserAreaVM(fakeApi({ email: "leo@example.com", linked: false, discord: null, fresh: false }, calls()));
     expect(area.session.loading).toBe(true);
     await area.session.start();
     expect(area.session.signedIn).toBe(true);
@@ -85,6 +92,34 @@ describe("the user area", () => {
   });
 });
 
+describe("unlinking from the web", () => {
+  const LINKED: MeSession = { email: null, linked: true, discord: "Ana (Discord user 8)", fresh: false };
+
+  it("names the Discord account, and unlinking forgets the session the server ended", async () => {
+    const seen = calls();
+    const area = new UserAreaVM(fakeApi(LINKED, seen));
+    await area.session.start();
+    expect(area.session.me?.discord).toBe("Ana (Discord user 8)");
+
+    await area.session.unlink();
+
+    expect(seen.unlinked).toBe(1);
+    expect(area.session.unlinked).toBe(true);
+    expect(area.session.signedIn).toBe(false);
+  });
+
+  it("keeps the session and says so when the unlink did not reach the server", async () => {
+    const area = new UserAreaVM(fakeApi(LINKED, calls(), undefined, true));
+    await area.session.start();
+
+    await area.session.unlink();
+
+    expect(area.session.unlinked).toBe(false);
+    expect(area.session.linked).toBe(true);
+    expect(area.session.error).toBe(UNLINK_FAILED);
+  });
+});
+
 describe("the privacy dashboard", () => {
   it("states that no backups are kept when none are", () => {
     expect(retentionLines(PRIVACY.retention)).toContain("No database backups are kept.");
@@ -95,7 +130,7 @@ describe("the privacy dashboard", () => {
 
   it("asks for a fresh sign-in before deleting, and sends nothing until then", async () => {
     const seen = calls();
-    const area = new UserAreaVM(fakeApi({ email: null, linked: true, fresh: false }, seen));
+    const area = new UserAreaVM(fakeApi({ email: null, linked: true, discord: "Leo (Discord user 7)", fresh: false }, seen));
     await area.session.start();
     const privacy = area.privacy();
     privacy.typed = CONFIRM_WORD;
@@ -111,7 +146,7 @@ describe("the privacy dashboard", () => {
 
   it("deletes with the chosen mode and the typed word, then ends the session", async () => {
     const seen = calls();
-    const area = new UserAreaVM(fakeApi({ email: null, linked: true, fresh: true }, seen));
+    const area = new UserAreaVM(fakeApi({ email: null, linked: true, discord: "Leo (Discord user 7)", fresh: true }, seen));
     await area.session.start();
     const privacy = area.privacy();
     privacy.mode = "erase_and_opt_out";

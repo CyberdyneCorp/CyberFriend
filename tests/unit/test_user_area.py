@@ -19,16 +19,25 @@ import pytest
 from starlette.testclient import TestClient
 
 from chatmemory.admin.auth import SESSION_COOKIE
+from chatmemory.admin.oidc.crypto import TokenCipher
+from chatmemory.admin.oidc.service import SignInFailed
+from chatmemory.admin.oidc.store import LoginRecord
 from chatmemory.admin.server import build_app
 from chatmemory.admin.user.auth import USER_COOKIE
 from chatmemory.admin.user.routes import ACCOUNT_NOT_DELETED, NOT_LINKED, UserArea
 from chatmemory.admin.user.service import UserSignIn
 from chatmemory.admin.user.store import InMemoryUserSessionStore
-from chatmemory.app.accounts import AccountLinking, code_digest, email_hmac, mask_email
+from chatmemory.app.accounts import (
+    AccountLinking,
+    code_digest,
+    discord_label,
+    email_hmac,
+    mask_email,
+)
 from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.app.privacy import PrivacyService, RetentionFacts
 from chatmemory.domain.identity import PersonRef
-from chatmemory.ports.accounts import LinkOutcome, NewLink
+from chatmemory.ports.accounts import DiscordProfile, LinkOutcome, NewLink
 from chatmemory.ports.facts import FactKind
 from chatmemory.ports.feature_requests import (
     FeatureRequest,
@@ -44,7 +53,7 @@ from chatmemory.ports.privacy import (
     HeldFact,
     Inventory,
 )
-from tests.unit.oidc_support import CSRF, PUBLIC_URL, Rig, rig
+from tests.unit.oidc_support import CSRF, PUBLIC_URL, SESSION_KEY, Rig, rig
 from tests.unit.test_admin_api import build_console
 
 KEY = b"k" * 32
@@ -52,6 +61,8 @@ LEO = PersonRef("discord", 7)
 ANA = PersonRef("discord", 8)
 LEO_EMAIL = "leo@cyberdyne.test"
 CODE = "leo-link-code"
+SAME_ORIGIN = {"Origin": PUBLIC_URL}
+NAMES = {LEO: "Leo", ANA: "Ana <b>"}
 
 
 @dataclass
@@ -86,8 +97,24 @@ class MemoryAccounts:
         code.used = True
         return LinkOutcome.LINKED
 
+    async def code_holder(self, code_sha256: bytes, now: datetime) -> DiscordProfile | None:
+        code = self.codes.get(code_sha256)
+        if code is None or code.used or code.expires_at <= now:
+            return None
+        return DiscordProfile(code.person, NAMES[code.person])
+
     async def linked_person(self, sub: str) -> PersonRef | None:
         return self.links.get(sub)
+
+    async def linked_profile(self, sub: str) -> DiscordProfile | None:
+        person = self.links.get(sub)
+        return None if person is None else DiscordProfile(person, NAMES[person])
+
+    async def unlink(self, person: PersonRef) -> bool:
+        subs = [s for s, p in self.links.items() if p == person]
+        for sub in subs:
+            del self.links[sub]
+        return bool(subs)
 
 
 class Inventories:
@@ -148,13 +175,18 @@ class Area:
     erasures: Erasures
     suggestions: Suggestions
     admin_token: str
+    sign_in_service: UserSignIn
 
     def browser(self) -> TestClient:
         return TestClient(self.client.app, base_url=PUBLIC_URL)
 
     def follow_link(self, browser: TestClient, sub: str, code: str = CODE) -> int:
-        started = browser.get("/link", params={"code": code}, follow_redirects=False)
-        assert started.status_code == 302, started.text
+        page = browser.get("/link", params={"code": code}, follow_redirects=False)
+        assert page.status_code == 200, page.text
+        started = browser.post(
+            "/link", data={"code": code}, headers=SAME_ORIGIN, follow_redirects=False
+        )
+        assert started.status_code == 303, started.text
         oidc_code, state = self.signing.fake.authorize(started.headers["location"], sub)
         done = browser.get(
             "/auth/callback", params={"code": oidc_code, "state": state}, follow_redirects=False
@@ -183,13 +215,14 @@ async def area() -> Area:
     sessions = InMemoryUserSessionStore()
     erasures = Erasures(accounts, sessions)
     suggestions = Suggestions()
+    user_sign_in = UserSignIn(
+        signing.sign_in,
+        sessions,
+        AccountLinking(accounts, email_key=KEY, clock=signing.clock),  # type: ignore[arg-type]
+        clock=signing.clock,
+    )
     user_area = UserArea(
-        sign_in=UserSignIn(
-            signing.sign_in,
-            sessions,
-            AccountLinking(accounts, email_key=KEY, clock=signing.clock),  # type: ignore[arg-type]
-            clock=signing.clock,
-        ),
+        sign_in=user_sign_in,
         privacy=PrivacyService(
             Inventories(),
             RetentionFacts(
@@ -214,6 +247,7 @@ async def area() -> Area:
         erasures,
         suggestions,
         console.credential,
+        user_sign_in,
     )
 
 
@@ -229,7 +263,12 @@ def test_a_link_code_followed_and_signed_in_links_and_opens_the_user_area(area: 
     assert SESSION_COOKIE not in area.client.cookies
     assert area.signing.fake.authorizations[-1]["prompt"] == "login"
     session = area.client.get("/me/session").json()
-    assert session == {"email": LEO_EMAIL, "linked": True, "fresh": False}
+    assert session == {
+        "email": LEO_EMAIL,
+        "linked": True,
+        "discord": "Leo (Discord user 7)",
+        "fresh": False,
+    }
 
 
 def test_an_unverified_email_is_refused(area: Area) -> None:
@@ -256,7 +295,9 @@ def test_a_subject_mismatch_is_refused(area: Area) -> None:
 
 
 def test_a_callback_in_another_browser_is_refused(area: Area) -> None:
-    started = area.client.get("/link", params={"code": CODE}, follow_redirects=False)
+    started = area.client.post(
+        "/link", data={"code": CODE}, headers=SAME_ORIGIN, follow_redirects=False
+    )
     oidc_code, state = area.signing.fake.authorize(started.headers["location"], "leo-sub")
 
     victim = area.browser()
@@ -273,19 +314,90 @@ def test_a_used_code_is_refused(area: Area) -> None:
     assert area.follow_link(area.client, "leo-sub") == 302
     area.accounts.links.clear()
 
-    assert area.follow_link(area.browser(), "leo-sub") == 403
+    assert area.browser().get("/link", params={"code": CODE}).status_code == 400
+    assert _link_without_page(area, area.browser(), "leo-sub") == 403
     assert area.accounts.links == {}
 
 
 def test_an_expired_code_is_refused(area: Area) -> None:
     area.signing.clock.advance(timedelta(minutes=16))
 
-    assert area.follow_link(area.client, "leo-sub") == 403
+    assert area.client.get("/link", params={"code": CODE}).status_code == 400
+    assert _link_without_page(area, area.client, "leo-sub") == 403
     assert area.accounts.links == {}
+
+
+def _link_without_page(area: Area, browser: TestClient, sub: str) -> int:
+    """The form posted straight away, as a code that expired on its page would be."""
+    started = browser.post(
+        "/link", data={"code": CODE}, headers=SAME_ORIGIN, follow_redirects=False
+    )
+    assert started.status_code == 303, started.text
+    oidc_code, state = area.signing.fake.authorize(started.headers["location"], sub)
+    return browser.get(
+        "/auth/callback", params={"code": oidc_code, "state": state}, follow_redirects=False
+    ).status_code
 
 
 def test_a_link_without_a_code_starts_nothing(area: Area) -> None:
     response = area.client.get("/link", follow_redirects=False)
+    assert response.status_code == 400
+    assert area.signing.logins.records == {}
+
+
+def test_the_link_page_names_the_discord_account_and_starts_nothing(area: Area) -> None:
+    """Someone sent another person's link sees whose it is before signing in."""
+    page = area.client.get("/link", params={"code": CODE}, follow_redirects=False)
+
+    assert page.status_code == 200
+    assert "Leo (Discord user 7)" in page.text
+    assert "Continue only if you asked for this link yourself" in page.text
+    assert 'method="post" action="/link"' in page.text
+    assert page.headers["cache-control"] == "no-store"
+    assert area.signing.logins.records == {}
+    assert "__Host-cf_login" not in area.client.cookies
+    assert not area.accounts.codes[code_digest(CODE)].used
+
+
+def test_the_link_page_escapes_the_name(area: Area) -> None:
+    expires = area.signing.clock.now + timedelta(minutes=15)
+    area.accounts.issue(ANA, "ana-code", "ana@cyberdyne.test", expires)
+
+    page = area.client.get("/link", params={"code": "ana-code"})
+
+    assert "Ana &lt;b&gt; (Discord user 8)" in page.text
+    assert "<b>" not in page.text
+
+
+def test_an_unknown_code_gets_no_page(area: Area) -> None:
+    page = area.client.get("/link", params={"code": "nope"})
+    assert page.status_code == 400
+    assert area.signing.logins.records == {}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param({}, id="no-origin"),
+        pytest.param({"Origin": "https://evil.test"}, id="other-origin"),
+        pytest.param({"Origin": "null"}, id="opaque-origin"),
+        pytest.param({**SAME_ORIGIN, "Sec-Fetch-Site": "cross-site"}, id="cross-site-fetch"),
+    ],
+)
+def test_the_link_form_starts_a_sign_in_only_from_this_origin(
+    area: Area, headers: dict[str, str]
+) -> None:
+    """A cross-site form cannot skip the page that names the Discord account."""
+    response = area.client.post(
+        "/link", data={"code": CODE}, headers=headers, follow_redirects=False
+    )
+
+    assert response.status_code == 403
+    assert area.signing.logins.records == {}
+
+
+def test_the_link_form_without_a_code_starts_nothing(area: Area) -> None:
+    response = area.client.post("/link", data={}, headers=SAME_ORIGIN, follow_redirects=False)
     assert response.status_code == 400
     assert area.signing.logins.records == {}
 
@@ -349,6 +461,7 @@ def test_without_the_user_area_its_routes_are_not_there() -> None:
 
     client = asyncio.run(app())
     assert client.get("/link", params={"code": "x"}, follow_redirects=False).status_code == 404
+    assert client.post("/link", data={"code": "x"}, headers=SAME_ORIGIN).status_code == 404
     assert client.get("/me/privacy").status_code == 401
 
 
@@ -503,6 +616,185 @@ def test_signing_out_ends_the_user_session(area: Area) -> None:
     replay = area.browser().get("/me/session", headers={"Cookie": f"{USER_COOKIE}={cookie}"})
     assert replay.status_code == 401
     assert all(r.revoked_at is not None for r in area.sessions.records.values())
+
+
+# --- a link made by somebody else's code -----------------------------------------
+
+
+def test_a_link_to_someone_elses_discord_shows_whose_and_can_be_unlinked_on_the_web(
+    area: Area,
+) -> None:
+    """Ana ran /account with Leo's email and sent Leo her link. Leo's /me names
+    Ana's Discord account, and Leo can undo the link from his own side."""
+    area.accounts.issue(ANA, "ana-code", LEO_EMAIL, _in_15(area))
+    page = area.client.get("/link", params={"code": "ana-code"})
+    assert "Discord user 8" in page.text
+    assert area.follow_link(area.client, "leo-sub", code="ana-code") == 302
+    cookie = area.client.cookies[USER_COOKIE]
+
+    shown = area.client.get("/me/session").json()
+    unlinked = area.client.post("/me/unlink", headers=CSRF)
+
+    assert shown["discord"] == "Ana <b> (Discord user 8)"
+    assert unlinked.status_code == 200 and unlinked.json() == {"unlinked": True}
+    assert area.accounts.links == {}
+    assert area.signing.fake.revoked, "the refresh token was not revoked at the issuer"
+    cleared = [h for h in unlinked.headers.get_list("set-cookie") if h.startswith(USER_COOKIE)]
+    assert cleared and "Max-Age=0" in cleared[0]
+    replay = area.browser().get("/me/session", headers={"Cookie": f"{USER_COOKIE}={cookie}"})
+    assert replay.status_code == 401
+    # Leo's own link now works.
+    assert area.follow_link(area.browser(), "leo-sub") == 302
+    assert area.accounts.links == {"leo-sub": LEO}
+
+
+def test_unlinking_on_the_web_needs_the_console_header(area: Area) -> None:
+    area.follow_link(area.client, "leo-sub")
+
+    cross_site = area.client.post("/me/unlink")
+    other_origin = area.client.post(
+        "/me/unlink", headers={**CSRF, "Origin": "https://evil.test"}
+    )
+
+    assert cross_site.status_code == other_origin.status_code == 403
+    assert area.accounts.links == {"leo-sub": LEO}
+
+
+def test_unlinking_an_unlinked_account_says_so(area: Area) -> None:
+    assert area.sign_in(area.client, "mallory-sub") == 302
+
+    response = area.client.post("/me/unlink", headers=CSRF)
+
+    assert response.status_code == 404
+    assert response.json() == {"error": NOT_LINKED}
+
+
+def test_the_refused_page_says_where_to_unlink(area: Area) -> None:
+    area.follow_link(area.client, "leo-sub")
+    area.accounts.issue(ANA, "ana-code", LEO_EMAIL, _in_15(area))
+
+    browser = area.browser()
+    started = browser.post(
+        "/link", data={"code": "ana-code"}, headers=SAME_ORIGIN, follow_redirects=False
+    )
+    oidc_code, state = area.signing.fake.authorize(started.headers["location"], "leo-sub")
+    refused = browser.get(
+        "/auth/callback", params={"code": oidc_code, "state": state}, follow_redirects=False
+    )
+
+    assert refused.status_code == 403
+    assert "press Unlink there" in refused.text
+    assert area.accounts.links == {"leo-sub": LEO}
+
+
+@pytest.mark.parametrize(
+    ("name", "label"),
+    [
+        ("Leo", "Leo (Discord user 7)"),
+        ("7", "Discord user 7"),
+        ("", "Discord user 7"),
+        ("(erased)", "Discord user 7"),
+    ],
+)
+def test_the_discord_account_is_named_by_its_id_and_any_real_name(name: str, label: str) -> None:
+    assert discord_label(DiscordProfile(LEO, name)) == label
+
+
+# --- the session's own checks ------------------------------------------------------
+
+
+def test_the_user_cookie_is_host_only_secure_http_only_and_strict(area: Area) -> None:
+    page = area.client.post(
+        "/link", data={"code": CODE}, headers=SAME_ORIGIN, follow_redirects=False
+    )
+    oidc_code, state = area.signing.fake.authorize(page.headers["location"], "leo-sub")
+    done = area.client.get(
+        "/auth/callback", params={"code": oidc_code, "state": state}, follow_redirects=False
+    )
+
+    [cookie] = [h for h in done.headers.get_list("set-cookie") if h.startswith(USER_COOKIE)]
+    attributes = {part.strip().lower() for part in cookie.split(";")}
+    assert {"samesite=strict", "secure", "httponly", "path=/"} <= attributes
+    assert not any(a.startswith("domain=") for a in attributes)
+
+
+def test_an_auth_time_in_the_future_is_not_fresh(area: Area) -> None:
+    """An issuer clock far ahead must not buy a "fresh" sign-in that lasts."""
+    area.follow_link(area.client, "leo-sub")
+    ahead = int((area.signing.clock.now + timedelta(minutes=10)).timestamp())
+    area.signing.fake.id_overrides = {"auth_time": ahead}
+
+    assert area.sign_in(area.client, "leo-sub", "/auth/user/fresh") == 400
+    assert area.client.get("/me/session").json()["fresh"] is False
+
+
+def test_an_auth_time_within_the_clock_skew_is_fresh(area: Area) -> None:
+    area.follow_link(area.client, "leo-sub")
+    ahead = int((area.signing.clock.now + timedelta(seconds=30)).timestamp())
+    area.signing.fake.id_overrides = {"auth_time": ahead}
+
+    assert area.sign_in(area.client, "leo-sub", "/auth/user/fresh") == 302
+
+
+def _in_15(area: Area) -> datetime:
+    return area.signing.clock.now + timedelta(minutes=15)
+
+
+def _near_expiry(area: Area) -> None:
+    area.signing.fake.access_ttl = 30  # inside the 60-second refresh window
+    assert area.follow_link(area.client, "leo-sub") == 302
+    area.signing.fake.access_ttl = 900
+
+
+def test_a_refresh_is_used_for_a_session_near_expiry(area: Area) -> None:
+    _near_expiry(area)
+
+    assert area.client.get("/me/session").status_code == 200
+    assert area.signing.fake.grants[-1] == "refresh_token"
+
+
+def test_a_refreshed_id_token_for_another_subject_ends_the_user_session(area: Area) -> None:
+    _near_expiry(area)
+    area.signing.fake.id_token_on_refresh = True
+    area.signing.fake.id_overrides = {"sub": "mallory-sub"}
+
+    assert area.client.get("/me/session").status_code == 401
+    [record] = area.sessions.records.values()
+    assert record.revoked_at is not None
+
+
+def test_a_refreshed_access_token_for_another_subject_ends_the_user_session(
+    area: Area,
+) -> None:
+    _near_expiry(area)
+    area.signing.fake.access_overrides = {"sub": "mallory-sub"}
+
+    assert area.client.get("/me/session").status_code == 401
+    [record] = area.sessions.records.values()
+    assert record.revoked_at is not None
+
+
+def test_a_stored_access_token_for_another_subject_is_refused(area: Area) -> None:
+    area.follow_link(area.client, "leo-sub")
+    ((id_hash, record),) = area.sessions.records.items()
+    other = area.signing.fake.mint_access("mallory-sub")
+    sealed = TokenCipher(SESSION_KEY).seal(other, context=f"user-access:{id_hash}")
+    area.sessions.records[id_hash] = replace(record, access_token_enc=sealed)
+
+    assert area.client.get("/me/session").status_code == 401
+
+
+async def test_a_console_login_is_not_finished_as_a_user_sign_in(area: Area) -> None:
+    started = await area.signing.sign_in.begin(purpose="admin")
+    [(login, _)] = area.signing.logins.records.values()
+    assert isinstance(login, LoginRecord) and login.purpose == "admin"
+
+    code, _ = area.signing.fake.authorize(started.authorization_url, "leo-sub")
+
+    result = await area.sign_in_service.complete(login, code=code, binding=started.binding)
+
+    assert isinstance(result, SignInFailed)
+    assert area.sessions.records == {}
 
 
 def test_the_user_session_holds_ciphertext_and_hashes_only(area: Area) -> None:

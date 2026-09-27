@@ -79,13 +79,26 @@ The system SHALL link an identity-provider account to a person only when the
 person follows a single-use link, valid for 15 minutes, from their direct
 message, signs in in the same browser, the provider reports a verified email
 equal to the consented email, and the userinfo subject equals the token
-subject. The person SHALL be told when a link is made and SHALL be able to
-undo it.
+subject. Before any sign-in starts, whoever follows the link SHALL be shown
+which Discord account it links to. The person SHALL be told when a link is
+made, and the link SHALL be undoable both from Discord and from the user area.
 
 #### Scenario: Link code forwarded to someone else
 - WHEN someone other than the person uses the link and signs in with a
   different email
 - THEN no link SHALL be made
+
+#### Scenario: Link sent to someone who did not ask for it
+- WHEN someone opens a link they were sent
+- THEN they SHALL be shown which Discord account it would link to before any
+  sign-in starts
+- AND a sign-in SHALL start only from that page, not from a cross-site request
+
+#### Scenario: Link made by someone else's code
+- WHEN a signed-in account is linked to a Discord account that is not the
+  person's own
+- THEN the user area SHALL name the linked Discord account
+- AND the person SHALL be able to unlink it from the user area
 
 #### Scenario: Unverified email
 - WHEN the provider reports the email as unverified

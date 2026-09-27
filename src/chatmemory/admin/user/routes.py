@@ -1,10 +1,16 @@
 """`/link`, `/auth/user/*` and `/me/*`: the web user area's routes.
 
 `/link`, `/auth/user/login` and `/auth/user/fresh` are public rows: each starts
-a user sign-in (see `service`). Every `/me` route is a `user` row, reached
-only with the user cookie (`auth`), and finds the person from the signed-in
-subject's link and nothing else: no route reads a person or platform id from
-the request. An unlinked subject and an unknown one get the same answer.
+a user sign-in (see `service`). `/link` never starts one on a GET: it shows
+which Discord account the code would link to, and only a same-origin POST of
+that page's form starts the sign-in. A person sent somebody else's link is
+told whose it is before anything happens, and a link made anyway can be undone
+from `/me` (`POST /me/unlink`) as well as from the Discord DM.
+
+Every `/me` route is a `user` row, reached only with the user cookie
+(`auth`), and finds the person from the signed-in subject's link and nothing
+else: no route reads a person or platform id from the request. An unlinked
+subject and an unknown one get the same answer.
 
 With the user area off every route answers 404, as `/auth/*` does with
 sign-in off.
@@ -12,15 +18,17 @@ sign-in off.
 
 from __future__ import annotations
 
+import html
 import json
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qs
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from chatmemory.admin.auth import LOGIN_COOKIE, cookie_value
+from chatmemory.admin.auth import LOGIN_COOKIE, cookie_value, header_values
 from chatmemory.admin.oidc.service import LOGIN_LIFETIME, SignInFailed
 from chatmemory.admin.oidc.store import LoginRecord
 from chatmemory.admin.user.auth import USER_COOKIE, current_user
@@ -32,7 +40,7 @@ from chatmemory.admin.user.service import (
     LinkRefused,
     UserSignIn,
 )
-from chatmemory.app.accounts import code_digest
+from chatmemory.app.accounts import code_digest, discord_label
 from chatmemory.app.feature_requests import FeatureRequestService, SubmitOutcome
 from chatmemory.app.language import Language
 from chatmemory.app.privacy import PrivacyReport, PrivacyService
@@ -77,9 +85,31 @@ LINK_PAGES: dict[LinkFailure, tuple[str, str]] = {
     LinkFailure.REFUSED: (
         "This account cannot be linked.",
         "Sign in with the email you gave in Discord. If this CyberdyneAuth "
-        "account is linked to another Discord account, unlink it there first.",
+        "account is already linked to another Discord account, sign in to your "
+        "CyberFriend data page, press Unlink there, and ask for a new link in "
+        "Discord.",
     ),
 }
+CROSS_SITE_LINK = (
+    "The link was not started.",
+    "Open the link from your Discord DM again and press the button on its page.",
+)
+
+_CONFIRM_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+<title>CyberFriend</title></head>
+<body><h1>Link your CyberdyneAuth account?</h1>
+<p>This link was requested in Discord by <strong>{discord}</strong>.</p>
+<p>If you continue and sign in, your CyberdyneAuth account is linked to that
+Discord account: the CyberFriend data page then shows and acts on its profile,
+and what you suggest there is filed as it.</p>
+<p><strong>Continue only if you asked for this link yourself.</strong> If
+somebody sent it to you, close this page: nothing has been linked.</p>
+<form method="post" action="/link">
+<input type="hidden" name="code" value="{code}">
+<button type="submit">Sign in and link to {discord}</button>
+</form></body>
+</html>"""
 SIGN_IN_FAILED = (
     "Sign-in did not complete.",
     "Start again. A sign-in link works once, in the browser that opened it.",
@@ -119,7 +149,8 @@ class UserArea:
 
 def routes(area: UserArea | None) -> list[Route]:
     return [
-        Route("/link", _begin(area, LINK_PURPOSE), methods=["GET"], name="user_link"),
+        Route("/link", _link_page(area), methods=["GET"], name="user_link"),
+        Route("/link", _link_start(area), methods=["POST"], name="user_link_start"),
         Route("/auth/user/login", _begin(area, USER_PURPOSE), methods=["GET"], name="user_login"),
         Route("/auth/user/fresh", _begin(area, FRESH_PURPOSE), methods=["GET"], name="user_fresh"),
         Route("/me/session", _me(area, _session), methods=["GET"], name="me_session"),
@@ -130,6 +161,7 @@ def routes(area: UserArea | None) -> list[Route]:
             methods=["GET", "POST"],
             name="me_feature_requests",
         ),
+        Route("/me/unlink", _me(area, _unlink), methods=["POST"], name="me_unlink"),
         Route("/me/erase", _me(area, _erase), methods=["POST"], name="me_erase"),
         Route("/me/logout", _me(area, _logout), methods=["POST"], name="me_logout"),
     ]
@@ -139,29 +171,86 @@ def routes(area: UserArea | None) -> list[Route]:
 
 
 def _begin(area: UserArea | None, purpose: str) -> Any:
-    async def begin(request: Request) -> Response:
+    async def begin(_: Request) -> Response:
         if area is None:
             return _not_found()
-        code_sha256 = None
-        if purpose == LINK_PURPOSE:
-            code = request.query_params.get("code", "")
-            if not code or len(code) > MAX_CODE_CHARS:
-                return _page(LINK_PAGES[LinkFailure.FAILED], 400)
-            code_sha256 = code_digest(code)
-        begun = await area.sign_in.begin(purpose, code_sha256=code_sha256)
-        response = RedirectResponse(begun.authorization_url, status_code=302, headers=NO_STORE)
-        response.set_cookie(
-            LOGIN_COOKIE,
-            begun.binding,
-            max_age=int(LOGIN_LIFETIME.total_seconds()),
-            path="/",
-            secure=True,
-            httponly=True,
-            samesite="lax",
-        )
-        return response
+        return await _start(area, purpose, None, status=302)
 
     return begin
+
+
+def _link_page(area: UserArea | None) -> Any:
+    """`GET /link?code=`: name the Discord account; start nothing."""
+
+    async def page(request: Request) -> Response:
+        if area is None:
+            return _not_found()
+        code = _code(request.query_params.get("code"))
+        holder = None if code is None else await area.sign_in.linking.holder(code_digest(code))
+        if code is None or holder is None:
+            return _page(LINK_PAGES[LinkFailure.FAILED], 400)
+        body = _CONFIRM_PAGE.format(
+            discord=html.escape(discord_label(holder)), code=html.escape(code, quote=True)
+        )
+        return HTMLResponse(body, headers=NO_STORE)
+
+    return page
+
+
+def _link_start(area: UserArea | None) -> Any:
+    """`POST /link`: the confirmation page's form, from this origin only."""
+
+    async def start(request: Request) -> Response:
+        if area is None:
+            return _not_found()
+        if not _same_origin_form(request, area.sign_in.sign_in.settings.public_origin):
+            return _page(CROSS_SITE_LINK, 403)
+        form = parse_qs((await request.body()).decode("utf-8", "replace"))
+        code = _code(next(iter(form.get("code", [])), None))
+        if code is None:
+            return _page(LINK_PAGES[LinkFailure.FAILED], 400)
+        # 303: the browser follows a POST's redirect with a GET.
+        return await _start(area, LINK_PURPOSE, code_digest(code), status=303)
+
+    return start
+
+
+async def _start(
+    area: UserArea, purpose: str, code_sha256: bytes | None, *, status: int
+) -> Response:
+    begun = await area.sign_in.begin(purpose, code_sha256=code_sha256)
+    response = RedirectResponse(begun.authorization_url, status_code=status, headers=NO_STORE)
+    response.set_cookie(
+        LOGIN_COOKIE,
+        begun.binding,
+        max_age=int(LOGIN_LIFETIME.total_seconds()),
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+def _code(value: str | None) -> str | None:
+    """A link code as sent, or None when it cannot be one."""
+    if not value or len(value) > MAX_CODE_CHARS:
+        return None
+    return value
+
+
+def _same_origin_form(request: Request, public_origin: str) -> bool:
+    """A form post from this origin: an `Origin` is required, not just checked.
+
+    A form cannot carry the console's CSRF header, and every browser sends
+    `Origin` on a form POST, so its absence is refused rather than excused as
+    it is for scripts. `Sec-Fetch-Site`, when sent, must agree.
+    """
+    origins = header_values(request.scope, b"origin")
+    if len(origins) != 1 or origins[0].decode("latin-1") != public_origin:
+        return False
+    site = header_values(request.scope, b"sec-fetch-site")
+    return not site or site == [b"same-origin"]
 
 
 async def user_callback(area: UserArea, login: LoginRecord, request: Request) -> Response:
@@ -215,14 +304,32 @@ def _not_linked() -> JSONResponse:
 
 async def _session(area: UserArea, _: Request) -> Response:
     user = current_user()
-    person = await _person(area)
+    profile = await area.sign_in.linking.profile_for(user.sub)
     return JSONResponse(
         {
             "email": user.email,
-            "linked": person is not None,
+            "linked": profile is not None,
+            # Which Discord account this is linked to: one linked by somebody
+            # else's code shows a name that is not theirs, and can be unlinked.
+            "discord": discord_label(profile) if profile is not None else None,
             "fresh": user.fresh(area.sign_in.now()),
         }
     )
+
+
+async def _unlink(area: UserArea, _: Request) -> Response:
+    """Undo the link from the web, as [Unlink] does in the DM. Ends the session:
+    it belongs to the account, and the account no longer has a person."""
+    user = current_user()
+    person = await _person(area)
+    if person is None:
+        return _not_linked()
+    refresh = await area.sign_in.refresh_token_of(user)
+    await area.sign_in.linking.unlink(person)
+    await area.sign_in.end_subject(user.sub, refresh)
+    response = JSONResponse({"unlinked": True})
+    _clear(response)
+    return response
 
 
 async def _privacy(area: UserArea, _: Request) -> Response:

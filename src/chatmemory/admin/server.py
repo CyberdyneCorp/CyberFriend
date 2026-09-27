@@ -144,12 +144,15 @@ ROUTE_ACCESS: Mapping[RouteKey, Access] = {
     # The user area. Starting a user sign-in is open, like `/auth/login`;
     # everything under /me needs the user cookie and nothing else will do.
     ("GET", "/link"): _PUBLIC,
+    # The confirmation page's form: same-origin only, checked in the handler.
+    ("POST", "/link"): _PUBLIC,
     ("GET", "/auth/user/login"): _PUBLIC,
     ("GET", "/auth/user/fresh"): _PUBLIC,
     ("GET", "/me/session"): _USER,
     ("GET", "/me/privacy"): _USER,
     ("GET", "/me/feature-requests"): _USER,
     ("POST", "/me/feature-requests"): _USER,
+    ("POST", "/me/unlink"): _USER,
     ("POST", "/me/erase"): _USER,
     ("POST", "/me/logout"): _USER,
     # Who is signed in, and with which role: any console principal.
@@ -200,6 +203,9 @@ exists.
 
 LOGOUT: RouteKey = ("POST", "/auth/logout")
 """The only non-read console route that is not `admin`, named so the test can say so."""
+
+LINK_START: RouteKey = ("POST", "/link")
+"""The `/link` page's form: public, since it starts a sign-in, and same-origin only."""
 
 USER_PREFIX = "/me"
 """The user area's own routes: `user` rows, never console ones."""

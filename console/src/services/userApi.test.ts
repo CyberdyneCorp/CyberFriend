@@ -31,4 +31,16 @@ describe("the user API", () => {
     expect(await userApi.session()).toBeNull();
     expect(currentPrincipal()).not.toBeNull();
   });
+
+  it("unlinks with a POST that carries the CSRF header", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ unlinked: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    expect(await userApi.unlink()).toEqual({ unlinked: true });
+
+    const [path, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe("/me/unlink");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["x-cyberfriend-console"]).toBe("1");
+  });
 });

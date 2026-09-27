@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 
 from chatmemory.admin.access import WRITE_ACCESS, Access, permits, route_keys
 from chatmemory.admin.auth import Operator, Principal, Role
-from chatmemory.admin.server import LOGOUT, ROUTE_ACCESS, USER_PREFIX, build_app
+from chatmemory.admin.server import LINK_START, LOGOUT, ROUTE_ACCESS, USER_PREFIX, build_app
 from chatmemory.domain.identity import PersonRef
 from tests.unit.test_admin_api import build_console
 from tests.unit.test_admin_api_federation import ISSUES
@@ -62,12 +62,16 @@ async def test_every_row_names_a_mounted_route(tmp_path: Path) -> None:
 def test_no_write_is_below_admin() -> None:
     # Signing out is the one exception, and only narrows access: it is public
     # so an operator (or a session whose refresh failed) can end it, and it
-    # checks the CSRF header itself. The user area's writes are `user`: they
-    # act on the signed-in person's own data, and are tested below.
+    # checks the CSRF header itself. Starting a link from its page is public
+    # like every sign-in start, and checks the origin itself. The user area's
+    # writes are `user`: they act on the signed-in person's own data, and are
+    # tested below.
     below = {
         key: access
         for key, access in ROUTE_ACCESS.items()
-        if key[0] != "GET" and key != LOGOUT and not key[1].startswith(USER_PREFIX + "/")
+        if key[0] != "GET"
+        and key not in {LOGOUT, LINK_START}
+        and not key[1].startswith(USER_PREFIX + "/")
     }
     assert all(access in WRITE_ACCESS for access in below.values()), below
 

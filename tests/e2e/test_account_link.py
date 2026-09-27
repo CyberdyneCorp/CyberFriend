@@ -49,10 +49,25 @@ class Both:
         )
 
     async def sign_in(self, browser: httpx.AsyncClient, start_url: str) -> httpx.Response:
-        started = await browser.get(start_url)
-        assert started.status_code == 302, started.text
+        if start_url.startswith("/link?"):
+            started = await self._confirm_link(browser, start_url)
+        else:
+            started = await browser.get(start_url)
+            assert started.status_code == 302, started.text
         code, state = self.fake.authorize(started.headers["location"], "leo-sub")
         return await browser.get("/auth/callback", params={"code": code, "state": state})
+
+    async def _confirm_link(self, browser: httpx.AsyncClient, link_url: str) -> httpx.Response:
+        """The page names the Discord account; only its form starts the sign-in."""
+        page = await browser.get(link_url)
+        assert page.status_code == 200, page.text
+        assert "Discord user" in page.text
+        [code] = parse_qs(urlsplit(link_url).query)["code"]
+        started = await browser.post(
+            "/link", data={"code": code}, headers={"Origin": PUBLIC_URL}
+        )
+        assert started.status_code == 303, started.text
+        return started
 
 
 @pytest_asyncio.fixture
@@ -139,6 +154,8 @@ async def test_consent_link_user_area_and_delete_everything(both: Both) -> None:
         assert [label for label, _ in notice.buttons] == ["Unlink"]
         assert (await _announce(bot)).sent == (), "announced once"
 
+        session = (await browser.get("/me/session")).json()
+        assert session["linked"] is True and "Discord user" in session["discord"]
         privacy = await browser.get("/me/privacy")
         assert privacy.status_code == 200, privacy.text
         facts = {f["kind"]: f["value"] for f in privacy.json()["facts"]}

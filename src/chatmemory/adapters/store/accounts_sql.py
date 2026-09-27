@@ -136,6 +136,31 @@ ORDER BY p.platform = 'discord' DESC, p.platform_user_id
 LIMIT 1
 """)
 
+#: The same identity, with the name `/me` shows for it.
+LINKED_PROFILE = text("""
+SELECT p.platform, p.platform_user_id, n.display_name
+FROM person_account_link l
+JOIN person n ON n.id = l.person_id
+JOIN person_platform_id p ON p.person_id = l.person_id
+WHERE l.sub = :sub
+ORDER BY p.platform = 'discord' DESC, p.platform_user_id
+LIMIT 1
+""")
+
+#: Whose live code it is, for the page `/link` shows before signing in. The
+#: same conditions as `LOCK_LIVE_CODE`, without the lock and without using it.
+CODE_HOLDER = text("""
+SELECT p.platform, p.platform_user_id, n.display_name
+FROM account_link_code c
+JOIN person n ON n.id = c.person_id
+JOIN person_platform_id p ON p.person_id = c.person_id
+WHERE c.code_sha256 = :code_sha256
+  AND c.used_at IS NULL
+  AND c.expires_at > CAST(:now AS timestamptz)
+ORDER BY p.platform = 'discord' DESC, p.platform_user_id
+LIMIT 1
+""")
+
 DELETE_LINK = text("""
 DELETE FROM person_account_link WHERE person_id = :person_id RETURNING sub
 """)

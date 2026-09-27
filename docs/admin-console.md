@@ -485,13 +485,15 @@ without it). Off, `/link` and `/auth/user/*` answer 404 and `/me/*` 401.
 
 | Route | Access | What it does |
 |---|---|---|
-| `GET /link?code=...` | public | The link the bot DMs. Stores the code's sha256 in a browser-bound login record (`__Host-cf_login`) and signs in with `prompt=login`. |
+| `GET /link?code=...` | public | The link the bot DMs. Starts nothing: a page names the Discord account the code was issued to ("Leo (Discord user 123)") and says to continue only if you asked for the link yourself. An unknown, used or expired code gets the "did not work" page. |
+| `POST /link` | public, same origin | That page's form (`code`). Refused unless `Origin` is sent and is the console's own (and `Sec-Fetch-Site`, when sent, is `same-origin`): a form cannot send the CSRF header. Stores the code's sha256 in a browser-bound login record (`__Host-cf_login`) and signs in with `prompt=login` (303). |
 | `GET /auth/user/login` | public | A plain user sign-in. |
 | `GET /auth/user/fresh` | public | A sign-in with `max_age=300`, which "delete everything" needs. |
-| `GET /me/session` | user | `{"email", "linked", "fresh"}`. |
+| `GET /me/session` | user | `{"email", "linked", "discord", "fresh"}`; `discord` names the linked Discord account, so a link to somebody else's is visible. |
 | `GET /me/privacy` | user | The `/privacy` inventory at DM detail, what is kept and for how long (`BACKUP_RETENTION_DAYS` unset says no backups are kept), and that the CyberdyneAuth account is not deleted. |
 | `GET`, `POST /me/feature-requests` | user, CSRF on POST | The person's suggestions, and a new one under the same rules as `/suggest` (no contact details, deduplicated, 5 a day); stored with source `web`. |
 | `POST /me/erase` | user, CSRF | `{"mode": "erase" \| "erase_and_opt_out", "confirm": "DELETE"}`. Needs a fresh sign-in; ends the link and every session of the account, clears the cookie and revokes the refresh token. |
+| `POST /me/unlink` | user, CSRF | Removes the link, as [Unlink] in the DM does; ends every session of the account, clears the cookie and revokes the refresh token. |
 | `POST /me/logout` | user, CSRF | Ends the user session. |
 
 - **Linking is by proof.** `/auth/callback` finishes a user sign-in when the
@@ -505,6 +507,13 @@ without it). Off, `/link` and `/auth/user/*` answer 404 and `/me/*` 401.
   nothing. A CyberdyneAuth account already linked to another person is
   refused; relinking a person to a new account ends the old account's user
   sessions.
+- **Whose link it is, before and after.** The consented email is whatever the
+  Discord person typed, so a link alone does not prove that whoever follows
+  it asked for it: somebody could run `/account` with your email and send you
+  their link. `/link` therefore names the Discord account before anything
+  starts, only its same-origin form starts the sign-in, the user area names
+  the linked Discord account, and **Unlink** there undoes a link from the
+  CyberdyneAuth side (the DM's [Unlink] reaches only the Discord side).
 - **The bot says so.** It DMs "Linked to a***@example.com, not you?
   [Unlink]" within 30 seconds (`person_account_link.notified_at`, 0036).
   [Unlink] is persistent and ends every user session of that account.

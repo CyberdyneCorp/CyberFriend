@@ -3,8 +3,9 @@
 
   Mounted instead of the console when the address is `#/me`. It asks the API
   who the user cookie names and shows nothing until it knows. Signed in but
-  not linked, it says how to link; linked, it shows the privacy dashboard and
-  the person's suggestions. After "delete everything" it shows what was done,
+  not linked, it says how to link; linked, it names the Discord account the
+  link is to, with Unlink for a link that is not the person's own, and shows
+  the privacy dashboard and the person's suggestions. After "delete everything" it shows what was done,
   and that the CyberdyneAuth account itself is not deleted.
 -->
 <script lang="ts">
@@ -42,6 +43,11 @@
       </p>
       <p class="muted">{area.erased.identity_account}</p>
     </section>
+  {:else if area.session.unlinked}
+    <section class="panel" role="status">
+      <h2>Unlinked</h2>
+      <p>This CyberdyneAuth account is no longer linked to a CyberFriend profile, and you are signed out.</p>
+    </section>
   {:else if area.session.loading}
     <p class="muted">Checking for a session…</p>
   {:else if !area.session.signedIn}
@@ -60,6 +66,17 @@
       </p>
     </section>
   {:else}
+    <section class="panel me__link">
+      <p>
+        Linked to the Discord account <strong>{area.session.me?.discord ?? "unknown"}</strong>. Not you?
+        <button type="button" class="button button--quiet" onclick={() => void area.session.unlink()}>
+          Unlink
+        </button>
+      </p>
+      {#if area.session.error !== null}
+        <p class="problem" role="alert">{area.session.error}</p>
+      {/if}
+    </section>
     <nav class="me__tabs">
       <button
         type="button"

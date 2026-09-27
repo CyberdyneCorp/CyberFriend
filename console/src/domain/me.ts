@@ -8,6 +8,8 @@
 export interface MeSession {
   email: string | null;
   linked: boolean;
+  /** The Discord account the link is to, as "Name (Discord user 123)"; null when not linked. */
+  discord: string | null;
   /** Signed in within the last five minutes: "delete everything" may run. */
   fresh: boolean;
 }

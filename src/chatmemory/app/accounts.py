@@ -48,6 +48,7 @@ from chatmemory.ports.accounts import (
     AccountCleanup,
     AccountProvisioner,
     AccountStore,
+    DiscordProfile,
     LinkCodeVerdict,
     LinkNotice,
     LinkOutcome,
@@ -58,6 +59,7 @@ from chatmemory.ports.accounts import (
     retry_at,
 )
 from chatmemory.ports.facts import FactKind, FactStore, InvalidFact, normalise_fact
+from chatmemory.ports.privacy import ERASED_NAME
 
 log = structlog.get_logger()
 
@@ -287,9 +289,36 @@ class AccountLinking:
         log.info("accounts.link", outcome=outcome.value)
         return outcome
 
+    async def holder(self, code_sha256: bytes) -> DiscordProfile | None:
+        """Whose live code this is, for `/link` to name before signing in."""
+        return await self._store.code_holder(code_sha256, self._clock())
+
     async def person_for(self, sub: str) -> PersonRef | None:
         """The person a signed-in subject is linked to; None if it is not."""
         return await self._store.linked_person(sub)
+
+    async def profile_for(self, sub: str) -> DiscordProfile | None:
+        """`person_for`, with the name `/me` shows, so a wrong link is visible."""
+        return await self._store.linked_profile(sub)
+
+    async def unlink(self, person: PersonRef) -> bool:
+        """Unlink from the web: the same as [Unlink] in the DM."""
+        unlinked = await self._store.unlink(person)
+        log.info("accounts.unlinked", done=unlinked, via="web")
+        return unlinked
+
+
+def discord_label(profile: DiscordProfile) -> str:
+    """"Leo (Discord user 7)", or "Discord user 7" while the name is a placeholder.
+
+    A person row's name starts as the platform id and is replaced by a real
+    one when one is known; the id is always shown, since a name can be copied.
+    """
+    user = f"Discord user {profile.person.platform_user_id}"
+    name = profile.display_name.strip()
+    if not name or name == str(profile.person.platform_user_id) or name == ERASED_NAME:
+        return user
+    return f"{name} ({user})"
 
 
 LINK_NOTICE_BATCH = 20
