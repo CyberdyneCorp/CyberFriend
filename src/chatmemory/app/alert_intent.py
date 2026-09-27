@@ -65,7 +65,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-from chatmemory.app.routing import CONVERSATION_VERBS, recent_chain_address
+from chatmemory.app.routing import (
+    CONVERSATION_VERBS,
+    asker_typed_address,
+    recent_chain_address,
+)
 from chatmemory.domain.chain import find_addresses
 from chatmemory.ports.alerts import DEFAULT_EDGE_PERCENT, AlertKind, PriceDirection
 
@@ -267,6 +271,9 @@ class AlertIntent:
     asset: str | None = None
     direction: PriceDirection | None = None
     level: Decimal | None = None
+    #: With no address written or carried: the latest one the asker typed
+    #: earlier in this conversation, used only when no wallet is saved.
+    earlier_address: str | None = None
 
 
 def alert_intent(text: str, previous_questions: Sequence[str] = ()) -> AlertIntent | None:
@@ -289,6 +296,7 @@ def alert_intent(text: str, previous_questions: Sequence[str] = ()) -> AlertInte
         threshold=_threshold(text) if kind is AlertKind.AAVE_HEALTH else None,
         chain=_chain(text),
         address=address,
+        earlier_address=None if address else asker_typed_address(previous_questions),
         token_id=_token_id(text) if kind is AlertKind.LP_RANGE else None,
         edge_percent=_edge_percent(request) if kind is AlertKind.LP_RANGE else None,
     )

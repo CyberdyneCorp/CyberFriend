@@ -34,9 +34,11 @@ from enum import StrEnum
 
 from chatmemory.app.routing import (
     PositionKind,
+    asker_typed_address,
     defi_question,
     portfolio_question,
     wallet_question,
+    wallet_reference,
 )
 from chatmemory.app.wallet_activity import activity_question
 
@@ -71,6 +73,9 @@ class CryptoQuery:
     addresses: tuple[str, ...] = ()
     mine: bool = False
     carried: bool = False
+    #: A bare "a carteira que eu acabei de passar": the asker's own earlier
+    #: chain question, asked again with the address they typed.
+    asked: str | None = None
 
 
 def crypto_route(text: str, previous: Sequence[str] = ()) -> CryptoQuery | None:
@@ -78,7 +83,34 @@ def crypto_route(text: str, previous: Sequence[str] = ()) -> CryptoQuery | None:
 
     `previous` is the asker's own earlier questions, oldest first, for a
     follow-up that names no address ("and in total?", "show me the v4 one").
+    A message that only points back at a wallet ("essa carteira", "the wallet
+    I just gave you") asks the latest chain question among them again.
     """
+    found = _question_route(text, previous)
+    if found is not None or not wallet_reference(text):
+        return found
+    return _asked_again(previous)
+
+
+def _asked_again(previous: Sequence[str]) -> CryptoQuery | None:
+    """The asker's latest chain question, with the latest address they typed.
+
+    With no address typed at all, none is invented: the route then asks for
+    one. Never the saved wallet -- "the wallet I just gave you" is not it.
+    """
+    typed = asker_typed_address(previous)
+    for index in range(len(previous) - 1, -1, -1):
+        earlier = _question_route(previous[index], previous[:index])
+        if earlier is None:
+            continue
+        addresses = earlier.addresses or ((typed,) if typed is not None else ())
+        return CryptoQuery(
+            earlier.route, addresses, carried=True, asked=previous[index]
+        )
+    return None
+
+
+def _question_route(text: str, previous: Sequence[str]) -> CryptoQuery | None:
     activity = activity_question(text, previous)
     if activity is not None:
         return CryptoQuery(

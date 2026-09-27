@@ -230,6 +230,16 @@ _TEXT: dict[str, dict[Language, str]] = {
         EN: "You haven't told me {p}.",
         PT: "Você ainda não me disse {p}.",
     },
+    "currency_missing": {
+        EN: (
+            "I don't have a preferred currency saved for you. Say "
+            "`my currency is the euro` and I'll show amounts in it too."
+        ),
+        PT: (
+            "Não tenho uma moeda preferida salva para você. Diga "
+            "`minha moeda é o real` e eu mostro os valores também nela."
+        ),
+    },
     "one_direct_only": {
         EN: "I only show {p} in a direct message. Ask me there.",
         PT: "Só mostro {p} em mensagem direta. Me pergunte lá.",
@@ -537,6 +547,9 @@ def _one_fact(
     # answer, not "you haven't told me".
     if kind is FactKind.FULL_NAME and FactKind.PREFERRED_NAME in by_kind:
         return shown_line(FactKind.PREFERRED_NAME, by_kind[FactKind.PREFERRED_NAME], language)
+    if kind is FactKind.PREFERRED_CURRENCY:
+        # Not "you haven't told me": how to tell it is the useful part.
+        return text("currency_missing", language)
     return text("one_missing", language, p=possessive(kind, language))
 
 

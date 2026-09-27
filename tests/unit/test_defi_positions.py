@@ -634,6 +634,28 @@ async def test_pools_then_loans_about_one_wallet_are_two_questions(
     assert third.is_error and "exhausted" in third.text
 
 
+async def test_a_new_question_about_the_same_wallet_has_its_own_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """"A carteira que eu acabei de passar" re-reads the wallet two questions
+    after it was typed: a new question, not the same run asking again."""
+
+    async def report(
+        self: PositionsProvider, tool: str, address: str, question: str = ""
+    ) -> str:
+        return f"{tool} for {address}"
+
+    monkeypatch.setattr(PositionsProvider, "report", report)
+    provider = _provider(Counting().client(), budget=1)
+    results = []
+    for question in (f"pools of {OWNER}", f"why not in reais {OWNER}", f"pools of {OWNER}"):
+        with authorized(_clearance(OWNER, question, QueryOrigin.ASKER)):
+            results.append(await provider.call_tool(LIQUIDITY_TOOL, {"address": OWNER}))
+
+    assert not results[0].is_error and not results[1].is_error
+    assert results[2].is_error and "exhausted" in results[2].text, "the same question again"
+
+
 async def test_one_chain_failing_does_not_hide_the_others(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

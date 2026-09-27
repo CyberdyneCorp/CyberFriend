@@ -152,6 +152,7 @@ PREDICATE_MODULES = frozenset(
 NOT_A_ROUTE = {
     "classify": "fixed path or loop, both the corpus answer",
     "typed_command_reply": "the reply to a typed command, not the check for one",
+    "asker_typed_address": "where a chain route's address comes from, not a route",
 }
 
 

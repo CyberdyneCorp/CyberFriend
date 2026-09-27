@@ -144,8 +144,14 @@ async def _admit(
     key: str,
     cleared: Cleared,
 ) -> Cleared | ToolResult:
-    """The per-question budget, then the rate limit."""
-    if not budget.spend(key):
+    """The per-question budget, then the rate limit.
+
+    Charged per question as well as per address: a follow-up that reads the
+    wallet the asker just gave ("a carteira que eu acabei de passar") is a new
+    question, not the same run calling again. The rate limit still spaces
+    every call to the provider, whatever the question.
+    """
+    if not budget.spend(f"{cleared.question}\n{key}"):
         log.warning("chain.budget_exhausted", tool=tool)
         return refusal(server, tool, "calls_per_run_exhausted")
     if not await limiter.acquire():

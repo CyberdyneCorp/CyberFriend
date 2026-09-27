@@ -472,6 +472,9 @@ class AlertRequests:
         if address is None and saved_wallets:
             wallets = suffix_list(tuple(saved_wallets))
             return AlertReply(text("which_wallet", language, wallets=wallets))
+        saved = address is not None and intent.address is None
+        # Typed by the asker earlier here, with nothing saved: theirs as well.
+        address = address or intent.earlier_address
         if address is None:
             return AlertReply(text("no_address", language))
         refused = _limit_refusal(intent, language)
@@ -482,7 +485,7 @@ class AlertRequests:
         # An edge distance on a position already watched needs no new slot.
         if room <= 0 and intent.edge_percent is None:
             return AlertReply(text("at_cap", language, cap=self._cap))
-        source = AddressSource.TYPED if intent.address else AddressSource.SAVED
+        source = AddressSource.SAVED if saved else AddressSource.TYPED
         request = _Request(person, intent, address, source, language, direct)
         read = await self._targets.read(address, intent.kind, intent.chain)
         log.info(
