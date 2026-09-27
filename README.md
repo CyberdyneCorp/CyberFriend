@@ -41,7 +41,7 @@ internet said.
 | **Channel media (recording only)** | From `MEDIA_ENABLED_AT`, voice notes and images posted in indexed channels are recorded as pending rows: metadata and a CDN link, nothing downloaded and nothing searchable yet. Transcribing voice notes and reading images come later. Off by default |
 | **Admin console** | A web console for federation, channels, retention, opt-outs and tokens |
 | **MCP interface** | Your corpus as an MCP server, under the same permission rules |
-| **Tracing** | Each answer — question, answer, feature and references to the evidence behind it (never its text) — exported to Langfuse for study. Off by default |
+| **Tracing** | Each answer — question, answer, feature, references to the evidence behind it (never its text), per-call model token usage and federated tool calls (never their arguments) — exported to Langfuse for study. Off by default |
 
 ### Every feature at a glance
 

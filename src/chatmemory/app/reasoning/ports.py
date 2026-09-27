@@ -160,6 +160,8 @@ class Plan:
     sub_questions: tuple[str, ...] = ()
     model_calls: int = 0
     prompt_tokens: int = 0
+    completion_tokens: int = 0
+    model: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +203,8 @@ class Grounded:
     cited_window_ids: tuple[int, ...] = ()
     model_calls: int = 1
     prompt_tokens: int = 0
+    completion_tokens: int = 0
+    model: str = ""
 
 
 class Synthesizer(Protocol):
@@ -230,6 +234,8 @@ class JsonCompletion:
     data: Mapping[str, object]
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    #: The model that answered, as configured; empty from a double that says none.
+    model: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +243,7 @@ class TextCompletion:
     text: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    model: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +277,7 @@ class ToolCompletion:
     call: ToolCall | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    model: str = ""
 
     @property
     def wants_tool(self) -> bool:
