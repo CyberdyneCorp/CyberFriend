@@ -169,7 +169,10 @@ trace into FakeLangfuse and asserts neither appears in counts or text.
 
 - `GET /api/usage/summary?from&to&group=person|feature|model|tool`: operator.
   `from`/`to` are inclusive dates (whole UTC days, the last 30 by default),
-  window capped at 90 days. Counts only. Aggregates group by `[userId, name]`
+  window capped at 90 days. Counts only. The response also carries
+  `retention_days` (`TRACE_RETENTION_DAYS` as the admin service reads it, null
+  when malformed) so the screen states the period the sweep enforces rather
+  than one of its own. Aggregates group by `[userId, name]`
   (traces), `[userId, traceName, providedModelName]` (generations) and
   `[userId, traceName, name]` (spans), all by day, so feature and person
   groupings both come from the same rows.

@@ -52,6 +52,7 @@ from pathlib import Path
 import httpx
 import structlog
 import uvicorn
+from pydantic import PositiveInt, TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from starlette.applications import Starlette
 
@@ -130,6 +131,12 @@ The key pair is project-wide (ingest, read, delete): Langfuse has no read-only
 key. It is used server-side only and never sent to a browser.
 """
 LANGFUSE_ENVIRONMENT_VAR = "LANGFUSE_ENVIRONMENT"
+TRACE_RETENTION_VAR = "TRACE_RETENTION_DAYS"
+DEFAULT_TRACE_RETENTION_DAYS = 90
+"""What the usage screen states as the trace retention period. It is the
+period the ingest sweep enforces and the bot's `/privacy` states, so it is the
+same variable with the same default, never a number of the console's own."""
+_RETENTION_DAYS: TypeAdapter[int] = TypeAdapter(PositiveInt)
 
 FORBIDDEN_CREDENTIALS = ("DISCORD_TOKEN", "LLM_API_KEY", "SERPAPI_KEY")
 """Credentials this service must not be given.
@@ -225,6 +232,25 @@ def usage_source(
     )
 
 
+def trace_retention_days(environ: Mapping[str, str]) -> int | None:
+    """`TRACE_RETENTION_DAYS` as the bot and ingest read it; None when unreadable.
+
+    Parsed as `Settings` parses it (pydantic's lax int, then positive), so
+    '+30' or '1_000' state the period the sweep enforces. Unreadable does not
+    stop the console (a mistyped variable is the worst moment for it to be
+    down), but it states no period rather than a default the sweep is not
+    enforcing: bot and ingest refuse to start on that value.
+    """
+    raw = environ.get(TRACE_RETENTION_VAR, "").strip()
+    if not raw:
+        return DEFAULT_TRACE_RETENTION_DAYS
+    try:
+        return _RETENTION_DAYS.validate_python(raw)
+    except ValidationError:
+        log.warning("admin.trace_retention_unreadable", variable=TRACE_RETENTION_VAR)
+        return None
+
+
 def database_url(environ: Mapping[str, str]) -> str:
     url = environ.get(DATABASE_URL_VAR, "").strip()
     if not url:
@@ -312,7 +338,11 @@ def build(
         ),
         mcp_tokens=PostgresTokenStore(engine),
         probe=make_probe(),
-        usage=UsageService(usage_source(environ, transport), PostgresUsageDirectory(engine)),
+        usage=UsageService(
+            usage_source(environ, transport),
+            PostgresUsageDirectory(engine),
+            retention_days=trace_retention_days(environ),
+        ),
     )
     signing_in = sign_in(settings, engine, transport)
     return ConsoleProcess(

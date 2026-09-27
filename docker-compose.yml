@@ -306,6 +306,9 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
       - LANGFUSE_ENVIRONMENT=${LANGFUSE_ENVIRONMENT:-production}
+      # The usage screen states how long traces are kept; the same period the
+      # ingest sweep enforces and /privacy states.
+      - TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}
       # Its own domain. Separate from the MCP one so the console can be closed
       # to the internet without taking retrieval with it.
       - SERVICE_FQDN_ADMIN_8083

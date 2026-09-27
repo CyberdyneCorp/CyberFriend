@@ -61,7 +61,8 @@ class Rigged:
 
     async def console(self) -> Console:
         return await build_console(
-            sign_in=self.signing.sign_in, usage=UsageService(self.source, self.directory)
+            sign_in=self.signing.sign_in,
+            usage=UsageService(self.source, self.directory, retention_days=90),
         )
 
     def browser(self, console: Console, sub: str) -> TestClient:
@@ -94,7 +95,7 @@ async def test_a_token_is_refused_question_text_whatever_its_role(
     directory = FakeUsageDirectory(people={ANA_ID: ViewedPerson(7, "Ana", NOTICE)})
     # Without an issuer the token is admin; still not a person signed in.
     console = await build_console(
-        oidc_configured=oidc_configured, usage=UsageService(source, directory)
+        oidc_configured=oidc_configured, usage=UsageService(source, directory, retention_days=90)
     )
 
     response = console.client.get(QUESTIONS, params=WINDOW, headers=console.auth())
@@ -182,6 +183,7 @@ async def test_the_summary_is_counts_for_an_operator(rigged: Rigged) -> None:
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["label"] == "traced question runs"
+    assert body["retention_days"] == 90
     assert (body["from"], body["to"]) == ("2026-09-01", "2026-09-20")
     ana = next(row for row in body["rows"] if row["key"] == ANA_ID)
     assert (ana["name"], ana["questions"], ana["input_tokens"], ana["cost"]) == (

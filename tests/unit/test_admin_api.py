@@ -259,7 +259,7 @@ async def build_console(
         optouts=OptOutService(registry, FakeDocumentPurge(), FakePersonTraces()),
         mcp_tokens=ReviewAndRevokeOnly(mcp_tokens),
         probe=probe,
-        usage=usage or UsageService(FakeUsageSource(), FakeUsageDirectory()),
+        usage=usage or UsageService(FakeUsageSource(), FakeUsageDirectory(), retention_days=90),
     )
     app = build_app(services, tokens, oidc_configured=oidc_configured, sign_in=sign_in)
     return Console(

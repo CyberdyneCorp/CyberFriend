@@ -136,6 +136,7 @@ credential issue as an escalation.
 | Retention | How long anything is kept, and who has opted out. |
 | Settings | Every setting, its value, and **where that value came from**. |
 | Tokens | Review and revoke MCP credentials. Issuing one is not possible from here; see below. |
+| Usage | Traced question runs, tokens, estimated cost, tool calls and voice time per person, feature, model and tool, for up to 90 days. An admin signed in with CyberdyneAuth can open one person's questions (their own words, paged, audited); everybody else sees counts only. See "Usage" below. |
 | Audit | Who changed what, when, from what to what. |
 
 ## The four rules this interface is built around
@@ -292,7 +293,11 @@ cd console && npm test
 - `viewmodels/*.test.ts` — every screen's behaviour without a DOM: the typed
   gate and the read-only fast path, the note a save gives when the environment
   still wins, the unreadable-channel note, opt-outs that cannot be parsed,
-  tokens without an id, the audit filter, the two-click `Confirmation`.
+  tokens without an id, the audit filter, the two-click `Confirmation`, and
+  the usage view (every grouping read for one window, a window over 90 days
+  never sent, "usage unavailable" on a 503, question text never requested for
+  a principal who may not read it, paging, and the text dropped when its panel
+  closes or the window changes).
 - `views/components/TypedConfirm.test.ts` and `ConfirmButton.test.ts` — the
   enable button and the two-click removal, in a DOM.
 - `views/Shell.test.ts` — the navigation leaves out a route the role may not
@@ -310,7 +315,11 @@ cd console && npm test
   readability and adding an unreadable channel, settings provenance and a save
   the environment overrides, the retention message, saving a retention setting
   under its own key, adding an opt-out, two-click removals of a channel, an
-  opt-out and a token, and the audit's refusals and filter. With CyberdyneAuth
+  opt-out and a token, the audit's refusals and filter, and the usage screen
+  (an operator's counts with no question control, an admin paging one
+  person's questions with the window and page in the request, an admin token
+  offered no question text, and "usage unavailable" with no figures when the
+  stub's Langfuse is down). With CyberdyneAuth
   offered: the sign-in link first and the token form behind "Use an operator
   token"; a cookie session opening the console with no credential header; an
   operator seeing every screen with no control that changes anything; an admin
@@ -538,6 +547,37 @@ tracer sets it on every generation and span. Observations exported before
 that (per-call generations and spans from the tracing batch up to this
 change) were stored by Langfuse as `default` and are not counted; question
 counts are unaffected.
+
+`retention_days` in the summary is `TRACE_RETENTION_DAYS` as the admin
+service reads it (default 90, the same variable, default and parsing as
+`bot` and `ingest`, so `+30` or `1_000` read the same everywhere), for the
+screen to state; it is null when the value is one `bot` and `ingest` refuse,
+and the screen then says it could not read the period rather than stating a
+default the sweep is not enforcing.
+
+**The screen** (`#/usage`, operator). The last 30 days by default, with
+7/30/90-day presets and a date range checked before it is sent (90 days at
+most). The person, feature, model and tool groupings are read together for the
+same window and shown as four tables; totals are labelled "traced question
+runs". A preset or **Show** chosen while a window is still loading replaces
+that load, and only the newest answer is shown. A person is shown by display name with their platform id beneath, or by
+the platform id alone. A figure that does not apply to a grouping is a dash,
+not a zero. A note on the screen says the totals undercount by design, that
+opted-out, erased and pending-deletion data is never shown, and how long traces
+are kept. When the API answers 503 the screen says usage is unavailable and
+shows no figures, with a retry -- also when an earlier window loaded fine, so
+no stale table stays up.
+
+Only an admin signed in with CyberdyneAuth (`via == "oidc"`) gets a
+**Questions** button per person; an operator and any `cfa_` token, even an
+admin one, see counts only, and the screen says so. The button opens a panel
+with that person's questions for the window the person table was read for
+(not dates typed but not yet shown), and is not offered while a new window is
+loading, 50 a page (newer
+and older), the count of questions traced before their notice, and a line
+saying the viewing is recorded in the audit. The text lives only in that
+panel's view-model: closing it, changing the window or leaving the screen
+drops it, and nothing is written to browser storage.
 
 **Keys.** The admin process now holds the Langfuse key pair, which is
 project-wide (ingest, read, delete). It uses it for these reads only, never

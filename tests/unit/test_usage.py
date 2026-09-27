@@ -67,7 +67,7 @@ class Ticks:
 def _service(
     source: FakeUsageSource, directory: FakeUsageDirectory, ticks: Ticks | None = None
 ) -> UsageService:
-    return UsageService(source, directory, monotonic=ticks or Ticks())
+    return UsageService(source, directory, retention_days=90, monotonic=ticks or Ticks())
 
 
 # --- the window -------------------------------------------------------------

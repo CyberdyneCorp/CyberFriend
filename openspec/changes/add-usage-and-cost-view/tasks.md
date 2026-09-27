@@ -38,6 +38,6 @@
 
 ## 6. Screen
 
-- [ ] 6.1 Svelte `UsageVM` + Usage screen; text section only for OIDC admin; "traced question runs" label; "usage unavailable" state
-- [ ] 6.2 e2e: FakeLangfuse behind the admin transport; operator vs admin views
-- [ ] 6.3 Docs: `docs/admin-console.md`, `docs/operations.md` (Langfuse keys rating for the admin process)
+- [x] 6.1 Svelte `UsageVM` + Usage screen; text section only for OIDC admin; "traced question runs" label; "usage unavailable" state
+- [x] 6.2 e2e: FakeLangfuse behind the admin transport; operator vs admin views
+- [x] 6.3 Docs: `docs/admin-console.md`, `docs/operations.md` (Langfuse keys rating for the admin process)

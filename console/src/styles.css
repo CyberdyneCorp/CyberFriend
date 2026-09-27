@@ -192,3 +192,7 @@ p { margin: 0.25rem 0; }
 .signin__form { display: flex; flex-direction: column; gap: 0.6rem; }
 .signin .panel > a.button { text-align: center; text-decoration: none; }
 .nav__who { display: block; color: var(--text); overflow-wrap: anywhere; }
+
+/* --- usage ------------------------------------------------------------ */
+
+.usage-note { margin: 0.25rem 0 0.75rem; max-width: 80ch; }
