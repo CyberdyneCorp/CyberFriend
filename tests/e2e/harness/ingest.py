@@ -19,7 +19,7 @@ production's. Decisions are embedded by the offline `HashEmbeddings`.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import cast
 
 import discord
@@ -44,6 +44,7 @@ from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import (
     build_ask_pipeline,
     build_corpus_store,
+    build_trace_retention,
     build_trace_withdrawal,
 )
 from chatmemory.config import Settings
@@ -53,6 +54,7 @@ from chatmemory.entrypoints.decisions_backfill import backfill, indexing_scope
 from chatmemory.entrypoints.ingest import (
     ScopedExtractionLedger,
     live_loop,
+    trace_retention_pass,
     trace_withdrawal_pass,
 )
 from chatmemory.health import HealthState
@@ -139,6 +141,7 @@ class Ingest:
         # The sweep's own instance, as the entrypoint builds a second one for
         # `trace_withdrawal_loop`.
         self._withdrawal = build_trace_withdrawal(settings, engine, transport)
+        self._retention = build_trace_retention(settings, engine, transport)
 
     async def capture(self, raw: discord.Message) -> Message:
         """Run one gateway message through `live_loop`: persist, then submit."""
@@ -175,6 +178,11 @@ class Ingest:
         """One pass of `trace_withdrawal_loop`: the Langfuse search, then deletions."""
         assert self._withdrawal is not None, "tracing is not configured"
         await trace_withdrawal_pass(self._withdrawal, HealthState())
+
+    async def expire_traces(self, now: datetime) -> None:
+        """One pass of `trace_retention_loop`, as if it ran at `now`."""
+        assert self._retention is not None, "tracing is not configured"
+        await trace_retention_pass(self._retention, HealthState(), now)
 
     async def extract(self) -> int:
         """Run the extraction pass over everything captured, ready or not."""

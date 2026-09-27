@@ -320,8 +320,9 @@ path), each run also sends:
 Every read and delete this application makes against Langfuse is scoped by
 that environment and by our tag: a trace named by a feature is only ours if it
 also carries `app:cyberfriend`, and only the legacy `fixed` / `loop` names,
-which predate the tag, are recognised without it. Another app or environment
-sharing the project is never touched.
+which predate the tag, are recognised without it -- never on a row carrying
+another application's `app:` tag. Another app or environment sharing the
+project is never touched.
 
 | | |
 |---|---|
@@ -330,6 +331,7 @@ sharing the project is never touched.
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
 | `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest` |
 
 Turning it on with a host but no keys is refused at startup rather than
 silently disabled. A deployment that believes it is recording and is not finds
@@ -355,6 +357,24 @@ Two things limit the exposure, and it is worth knowing exactly what they do:
   on the trace store, so a destination that is down delays the withdrawal
   without delaying the deletion. Unconfirmed withdrawals are retried by a sweep
   in the `ingest` process every five minutes.
+- **Traces are kept `TRACE_RETENTION_DAYS` (90 by default).** Self-hosted
+  Langfuse has no retention of its own, so `ingest` sweeps once a day (and at
+  start-up): every `trace_export` row older than the cutoff is marked pending
+  deletion, and `GET /api/public/traces?toTimestamp=<cutoff>&environment=<LANGFUSE_ENVIRONMENT>`
+  is paged with `tags=app:cyberfriend`, then once per legacy name (`fixed`,
+  `loop`), to catch traces whose index row was never written. The legacy-name
+  queries have no asker to narrow by and `fixed` / `loop` are generic names, so
+  they stop at 2026-09-25, the day the tag shipped (`LEGACY_UNTIL` in the
+  Langfuse adapter): an untagged legacy-named trace is only ours if it is older
+  than that, carries a numeric (Discord) `userId` and no other `app:` tag.
+  Every row is re-checked for our environment, our names (a feature-named row
+  must carry `app:cyberfriend`), those legacy rules and the cutoff before it is
+  marked, so another app's or environment's traces in a shared project are
+  never deleted. The five-minute withdrawal sweep then deletes what is pending,
+  draining the whole queue each pass rather than one batch of 100, so the first
+  sweep's backlog never holds an opt-out or a deleted message behind it. `/health` reports the last
+  pass under `trace_retention`; a pass that could not read Langfuse shows
+  `found: null` and is retried the next day.
 - **An opt-out stops new exports.** Nothing is exported for a person who has
   opted out of indexing. If the opt-out registry cannot be read, the run is
   withheld rather than exported.

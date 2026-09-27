@@ -201,6 +201,7 @@ from chatmemory.app.reasoning.stages import ModelSynthesizer, ModelToolProposer
 from chatmemory.app.reasoning.tracing import (
     OptOutAwareTracer,
     TracedAnswerService,
+    TraceRetention,
     TraceWithdrawal,
 )
 from chatmemory.app.said_by import SaidByService
@@ -1241,6 +1242,35 @@ def build_corpus_store(settings: Settings, engine: AsyncEngine) -> PostgresStore
     return PostgresStore(engine, media_since=settings.media_capture_since)
 
 
+def _langfuse_keys(settings: Settings) -> tuple[str, str] | None:
+    """The key pair ingest deletes with, or None when tracing is not configured.
+
+    The same three settings as the exporter, because a deployment that exports
+    must withdraw and one that does not has nothing to withdraw.
+    """
+    if not settings.tracing_enabled or not settings.langfuse_host:
+        return None
+    if settings.langfuse_public_key is None or settings.langfuse_secret_key is None:
+        return None
+    return (
+        settings.langfuse_public_key.get_secret_value(),
+        settings.langfuse_secret_key.get_secret_value(),
+    )
+
+
+def _trace_finder(
+    settings: Settings, keys: tuple[str, str], transport: httpx.AsyncBaseTransport | None
+) -> LangfuseTraceFinder:
+    return LangfuseTraceFinder(
+        host=settings.langfuse_host,
+        public_key=keys[0],
+        secret_key=keys[1],
+        environment=settings.langfuse_environment,
+        timeout=settings.tracing_timeout_seconds,
+        transport=transport,
+    )
+
+
 def build_trace_withdrawal(
     settings: Settings,
     engine: AsyncEngine,
@@ -1248,38 +1278,46 @@ def build_trace_withdrawal(
 ) -> TraceWithdrawal | None:
     """The deletion side of tracing, for the ingest process.
 
-    Built from the same three settings as the exporter, because a deployment
-    that exports must withdraw and one that does not has nothing to withdraw.
     `transport` replaces httpx's default network transport. The ingest
     entrypoint passes none; the end-to-end harness passes FakeWeb's, which
     without this parameter it could not, so no test could see a trace being
     withdrawn.
     """
-    if not settings.tracing_enabled or not settings.langfuse_host:
+    keys = _langfuse_keys(settings)
+    if keys is None:
         return None
-    if settings.langfuse_public_key is None or settings.langfuse_secret_key is None:
-        return None
-    public_key = settings.langfuse_public_key.get_secret_value()
-    secret_key = settings.langfuse_secret_key.get_secret_value()
     return TraceWithdrawal(
         PostgresTraceIndex(engine),
         LangfuseTraceDeleter(
             host=settings.langfuse_host,
-            public_key=public_key,
-            secret_key=secret_key,
+            public_key=keys[0],
+            secret_key=keys[1],
             timeout=settings.tracing_timeout_seconds,
             transport=transport,
         ),
         # The backstop for traces exported before the index recorded who
         # asked them: an opt-out queues a search by platform id, this runs it.
-        LangfuseTraceFinder(
-            host=settings.langfuse_host,
-            public_key=public_key,
-            secret_key=secret_key,
-            environment=settings.langfuse_environment,
-            timeout=settings.tracing_timeout_seconds,
-            transport=transport,
-        ),
+        _trace_finder(settings, keys, transport),
+    )
+
+
+def build_trace_retention(
+    settings: Settings,
+    engine: AsyncEngine,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> TraceRetention | None:
+    """The retention sweep over exported traces, for the ingest process.
+
+    None exactly when `build_trace_withdrawal` is: the sweep only marks, and
+    the withdrawal's retry pass is what deletes. `transport` as there.
+    """
+    keys = _langfuse_keys(settings)
+    if keys is None:
+        return None
+    return TraceRetention(
+        PostgresTraceIndex(engine),
+        _trace_finder(settings, keys, transport),
+        timedelta(days=settings.trace_retention_days),
     )
 
 

@@ -303,6 +303,14 @@ class Settings(BaseSettings):
     distinct value per deployment is what keeps one from deleting the
     other's traces."""
 
+    trace_retention_days: int = 90
+    """How long an exported trace is kept before ingest deletes it.
+
+    Self-hosted Langfuse has no retention of its own, so without this sweep a
+    person's questions and answers would be kept forever. Only this
+    application's traces in `langfuse_environment` are ever deleted.
+    """
+
     tracing_timeout_seconds: float = 5.0
     """What an export may cost before it is abandoned.
 
@@ -484,7 +492,10 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        "memory_recent_turns", "memory_summarise_after_turns", "memory_retention_days"
+        "memory_recent_turns",
+        "memory_summarise_after_turns",
+        "memory_retention_days",
+        "trace_retention_days",
     )
     @classmethod
     def _positive_memory_setting(cls, v: int) -> int:

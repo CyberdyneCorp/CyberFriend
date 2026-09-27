@@ -54,6 +54,18 @@ class TraceIndex(Protocol):
         """
         ...
 
+    async def request_deletion_before(self, cutoff: datetime) -> Sequence[str]:
+        """Mark every trace exported before `cutoff` for deletion; return their ids.
+
+        Only traces not already marked are returned, so a daily sweep reports
+        what it newly expired rather than the backlog still being deleted.
+        """
+        ...
+
+    async def record_expired_traces(self, trace_ids: Sequence[str]) -> None:
+        """Mark traces the destination holds past retention, indexed or not."""
+        ...
+
     async def confirm_deleted(self, trace_ids: Sequence[str]) -> None:
         """Record that the destination accepted the deletion of these traces."""
         ...
@@ -80,5 +92,15 @@ class TraceFinder(Protocol):
 
         None if the destination could not be read, so the search stays open
         and is retried. Never another application's or environment's traces.
+        """
+        ...
+
+
+class ExpiredTraceFinder(Protocol):
+    async def find_traces_before(self, cutoff: datetime) -> Sequence[str] | None:
+        """Every trace of this application the destination holds from before `cutoff`.
+
+        None if the destination could not be read, so the next sweep retries.
+        Never another application's or environment's traces.
         """
         ...
