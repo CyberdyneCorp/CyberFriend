@@ -15,7 +15,7 @@
  * from the interface rather than from an error.
  */
 
-import type { FederatedTool } from "../api/types";
+import type { FederatedTool } from "./types";
 
 export type Effect = "read-only" | "state-changing";
 
