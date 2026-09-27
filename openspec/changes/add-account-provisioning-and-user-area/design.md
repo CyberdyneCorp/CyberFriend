@@ -50,11 +50,17 @@ accepts leaves nothing behind.
 
 ### Consent in DM only
 
-In a guild, the command replies ephemerally with "I'll DM you". In the DM, the
-bot shows the exact values that will be sent:
+The command is a group, `/account create` and `/account link` (Discord cannot
+have both a `/account` command and `/account link`). In a guild, it replies
+ephemerally with "I'll DM you". In the DM, the bot shows the exact values that
+will be sent:
 
-- email from the `email` fact, or asked for;
-- name from `full_name`, else `preferred_name`, else the display name;
+- email from the `email` fact, or asked for in a form ([Enter email]); a typed
+  address is checked like an email fact and not saved as one;
+- name from `full_name`, else `preferred_name`, else the display name: the
+  first that passes the full-name fact rule and is not domain-like (no links,
+  `<`, `>`, control or bidi characters, as CyberdyneAuth checks names); if
+  none passes, no name is sent;
 - locale from the person's answer language.
 
 The consent text, in the person's language, also states:
@@ -87,7 +93,8 @@ time.
   the call; over the limit the reply says when they can try again and nothing
   is sent;
 - a 429 from CyberdyneAuth is reported as "try again later" and is not counted
-  as a request;
+  as a request (the request row is written under the person lock before the
+  call, with the consent, and deleted again when the call fails);
 - these rows are purged by `purge_person_derived` and by a 30-day cleanup.
 
 ### The port

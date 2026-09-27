@@ -185,6 +185,7 @@ moment: scheduled questions and position alerts.
 | `/suggest` | Suggest something the bot should learn to do; the reply gives its number and asks whether to DM you when its status changes |
 | `/suggestions` | Your suggestions and their status (new, triaged, planned, done, declined, duplicate) |
 | `/privacy` | What I hold about you and what is kept after a deletion. Counts and fact kinds in a server channel (only you see it, with a button for the details by DM); values in a DM. **Delete everything…** erases it all, with or without opting you out, after a typed confirmation |
+| `/account create`, `link` | Only where `ACCOUNT_PROVISIONING_ENABLED`: ask for a CyberdyneAuth account in a DM after seeing the exact name, email and language that will be sent, and get a single-use sign-in link to link it |
 
 Every command except `/index` and `/unindex` works in the server **and in a
 direct message with the bot**; those two act on a channel, so they live in the
@@ -480,6 +481,7 @@ lists the common ones. The settings worth knowing:
 | `LANGFUSE_ENVIRONMENT` | Langfuse environment to export to and search on opt-out (`production`) |
 | `TRACE_RETENTION_DAYS` | Days an exported trace is kept; `ingest` deletes this app's older traces daily (default 90). `/privacy`, the one-time tracing notice, the capabilities reply and the console's usage screen state the same period |
 | `BACKUP_RETENTION_DAYS` | Days a database backup is kept, as configured where backups run. Only stated, by `/privacy`; unset (the default) says no backups are kept, so set it when backups are turned on |
+| `ACCOUNT_PROVISIONING_ENABLED`, `PROVISIONING_EMAIL_KEY`, `ADMIN_PUBLIC_URL` | `/account`: a CyberdyneAuth account asked for in a DM, with consent to the exact name and email. Off by default, and hidden until the CyberdyneAuth adapter ships; on, it needs an HMAC key of at least 32 characters and the console URL (see `docs/operations.md`) |
 
 Anything that reaches outside the server is off by default. A deployment should
 acquire an outbound boundary because somebody chose it.

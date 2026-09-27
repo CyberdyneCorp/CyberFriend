@@ -46,6 +46,7 @@ SQL_MODULES = (
     "privacy_sql",
     "erasure_sql",
     "tracing_notice_sql",
+    "accounts_sql",
     "usage_sql",
 )
 
@@ -623,6 +624,57 @@ UNSCOPED: dict[str, str] = {
     "tracing_notice_sql.CLAIM_NOTICE": (
         "write; a notice version and time on the asker's own person row, "
         "refused for an opted-out person. No content"
+    ),
+    # --- accounts_sql: the requester's own provisioning records -------------
+    #
+    # No email is ever stored: only an HMAC of it. Nothing here is content.
+    "accounts_sql.LOCK_PERSON": (
+        "row lock on the requester's own person row, keyed on their person id, "
+        "so the provisioning limits' count holds. Returns the id only"
+    ),
+    "accounts_sql.REQUESTS_SINCE": (
+        "times of the requester's own provisioning requests, keyed on their "
+        "person id, for the limits. No content"
+    ),
+    "accounts_sql.INSERT_CONSENT": (
+        "write; the requester's own consent: a version, a time and an email "
+        "HMAC, keyed on their person id. Returns no row"
+    ),
+    "accounts_sql.INSERT_REQUEST": (
+        "write; one counted request of the requester's own, keyed on their "
+        "person id. Returns the id only"
+    ),
+    "accounts_sql.DELETE_REQUEST": (
+        "write; uncounts a request this process reserved moments earlier and "
+        "the provider refused, by its own id. Returns no row"
+    ),
+    "accounts_sql.LATEST_CONSENT": (
+        "the email HMAC of the requester's own latest consent, keyed on their "
+        "person id. A keyed hash, never an address"
+    ),
+    "accounts_sql.CODES_SINCE": (
+        "how many link codes the requester was issued today and when the "
+        "first was, keyed on their person id. No content"
+    ),
+    "accounts_sql.SUPERSEDE_CODES": (
+        "write; ends the requester's own earlier link codes, keyed on their "
+        "person id. Returns no row"
+    ),
+    "accounts_sql.INSERT_CODE": (
+        "write; a link code's sha256 for the requester's own person id. "
+        "Returns no row"
+    ),
+    "accounts_sql.REDEEM_CODE": (
+        "keyed on the sha256 of a single-use code only its holder has; "
+        "returns the person id and email HMAC it was issued for. No content"
+    ),
+    "accounts_sql.DELETE_OLD_REQUESTS": (
+        "ingest maintenance; deletes requests past the 30 days they count "
+        "for, by age. Returns no row"
+    ),
+    "accounts_sql.DELETE_OLD_CODES": (
+        "ingest maintenance; deletes link codes past their day, by age. "
+        "Returns no row"
     ),
     # --- usage_sql: who the admin usage view must not show ---------------
     "usage_sql.EXCLUDED_PEOPLE": (

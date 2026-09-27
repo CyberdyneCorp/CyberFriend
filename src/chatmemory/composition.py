@@ -108,6 +108,7 @@ from chatmemory.adapters.mcp_client.config import (
     ConfigurationError as FederationConfigurationError,
 )
 from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
+from chatmemory.adapters.store.accounts_postgres import PostgresAccountStore
 from chatmemory.adapters.store.alerts_postgres import PostgresAlertStore
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
@@ -136,6 +137,7 @@ from chatmemory.adapters.web.limits import CallBudget
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
+from chatmemory.app.accounts import AccountRecordsRetention, AccountService
 from chatmemory.app.alert_requests import AlertRequests
 from chatmemory.app.alerts import AlertRunner, AlertService
 from chatmemory.app.ask import AskService
@@ -235,6 +237,7 @@ from chatmemory.app.tracing_notice import TracingNotice
 from chatmemory.app.voice import VoiceLimits, VoiceQuestions
 from chatmemory.config import Settings
 from chatmemory.domain.identity import PersonRef
+from chatmemory.ports.accounts import AccountProvisioner
 from chatmemory.ports.answers import AnswerService
 from chatmemory.ports.notifications import NotificationSender
 from chatmemory.ports.sources import EmbeddingClient
@@ -1107,6 +1110,40 @@ def build_feature_requests(engine: AsyncEngine, clock: Clock = utc_now) -> Featu
     return FeatureRequestService(PostgresFeatureRequestStore(engine), clock=clock)
 
 
+def build_accounts(
+    settings: Settings,
+    engine: AsyncEngine,
+    provisioner: AccountProvisioner | None,
+    clock: Clock = utc_now,
+) -> AccountService | None:
+    """`/account`, or None when it is not offered.
+
+    None while ACCOUNT_PROVISIONING_ENABLED is off, and also when it is on
+    with no provisioner to send through: the command stays hidden rather than
+    offering a Confirm that could only fail.
+    """
+    if not settings.account_provisioning_enabled:
+        return None
+    key, url = settings.provisioning_email_key, settings.admin_public_url
+    if provisioner is None or key is None or url is None:
+        log.warning("composition.accounts_without_provisioner")
+        return None
+    return AccountService(
+        PostgresAccountStore(engine),
+        provisioner,
+        PostgresFactStore(engine),
+        email_key=key.get_secret_value().encode(),
+        link_base_url=url,
+        clock=clock,
+    )
+
+
+def build_account_retention(engine: AsyncEngine) -> AccountRecordsRetention:
+    """The account-records cleanup, for the ingest process. Runs whether or
+    not provisioning is on: rows written while it was on must still age out."""
+    return AccountRecordsRetention(PostgresAccountStore(engine))
+
+
 def build_feature_request_news(
     engine: AsyncEngine, messenger: TaskMessenger, clock: Clock = utc_now
 ) -> StatusNewsRunner:
@@ -1733,6 +1770,9 @@ class Edges:
     engine: AsyncEngine
     http_transport: httpx.AsyncBaseTransport | None = None
     clock: Clock = utc_now
+    #: Where `/account` requests a CyberdyneAuth account. None until the
+    #: CyberdyneAuth adapter ships; the end-to-end harness hands a fake.
+    account_provisioner: AccountProvisioner | None = None
 
     @classmethod
     def production(cls, settings: Settings) -> Edges:

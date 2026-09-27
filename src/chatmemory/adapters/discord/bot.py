@@ -51,6 +51,7 @@ import discord
 import structlog
 from discord import app_commands
 
+from chatmemory.adapters.discord.accounts import account_group
 from chatmemory.adapters.discord.alerts import (
     alert_listing,
     follow_up_with_confirmation,
@@ -85,6 +86,7 @@ from chatmemory.adapters.discord.suggestions import (
 )
 from chatmemory.adapters.discord.suggestions import text as suggestion_text
 from chatmemory.adapters.discord.views import RequesterOnlyView
+from chatmemory.app.accounts import AccountService
 from chatmemory.app.alert_requests import AlertProposal, AlertRequests
 from chatmemory.app.ask import (
     AskOutcome,
@@ -1029,6 +1031,7 @@ class CyberFriendClient(discord.Client):
         self._alerts: AlertRequests | None = None
         self._suggestions: FeatureRequestService | None = None
         self._privacy: PrivacyService | None = None
+        self._accounts: AccountService | None = None
         self._voice: VoiceQuestions | None = None
         self._described = Capabilities()
 
@@ -1103,6 +1106,15 @@ class CyberFriendClient(discord.Client):
         """
         self._privacy = privacy
 
+    def attach_accounts(self, accounts: AccountService) -> None:
+        """Offer `/account create|link`.
+
+        Unlike the commands above, not registered without it: account
+        provisioning is off unless enabled, and a command that could only say
+        so is not offered at all.
+        """
+        self._accounts = accounts
+
     def attach_notifications(self, notifications: NotificationPreferences) -> None:
         """Give `/notifications` somewhere to write.
 
@@ -1158,6 +1170,11 @@ class CyberFriendClient(discord.Client):
             self._build_privacy_command(),
         ):
             self.tree.add_command(_in_guild_and_dm(command))
+        if self._accounts is not None:
+            # Global like `/privacy`: the consent itself happens in a DM.
+            self.tree.add_command(
+                _in_guild_and_dm(account_group(self._accounts, self._caller_language))
+            )
         # Guild only: these act on a channel. No `default_permissions`: Manage
         # Channels granted by a channel overwrite, and not guild-wide, must
         # still see the command. The permission is checked when it runs.

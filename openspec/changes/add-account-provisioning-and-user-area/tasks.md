@@ -1,13 +1,13 @@
 ## 1. Consent and the port
 
-- [ ] 1.1 Migrations: `account_consent`, `account_provisioning_request`, `account_link_code`, `person_account_link`; each added to `purge_person_derived`
-- [ ] 1.2 `ports/accounts.py`: `ProvisioningRequest(email, name, locale)`, `AccountProvisioner.request_account`, `ProvisioningRateLimited`, `ProvisioningUnavailable`
-- [ ] 1.3 `PROVISIONING_EMAIL_KEY`; `email_hmac` helper; no plain email or sha256 stored anywhere
-- [ ] 1.4 Fake provisioner in `tests/e2e/harness` (always 202); `ACCOUNT_PROVISIONING_ENABLED` flag
-- [ ] 1.5 `/account` command: guild -> DM; DM shows exact name and email, the invitation rule and the "outlives delete everything" statement; Confirm/Cancel; consent row
-- [ ] 1.6 Per-person limits (1 per 24h, 3 per 30 days); 429 -> "try later", not counted
-- [ ] 1.7 [Link my account] / `/account link`: fresh 15-minute single-use code, earlier codes invalidated, 5 per day
-- [ ] 1.8 Tests: only email/name/locale sent; one reply text for every outcome; second request within 24h refused and nothing sent; fourth in 30 days refused; code hashed, single use, 15 min; consent text snapshot (EN/PT)
+- [x] 1.1 Migrations: `account_consent`, `account_provisioning_request`, `account_link_code`, `person_account_link`; each added to `purge_person_derived`
+- [x] 1.2 `ports/accounts.py`: `ProvisioningRequest(email, name, locale)`, `AccountProvisioner.request_account`, `ProvisioningRateLimited`, `ProvisioningUnavailable`
+- [x] 1.3 `PROVISIONING_EMAIL_KEY`; `email_hmac` helper; no plain email or sha256 stored anywhere
+- [x] 1.4 Fake provisioner in `tests/e2e/harness` (always 202); `ACCOUNT_PROVISIONING_ENABLED` flag
+- [x] 1.5 `/account` command: guild -> DM; DM shows exact name and email, the invitation rule and the "outlives delete everything" statement; Confirm/Cancel; consent row
+- [x] 1.6 Per-person limits (1 per 24h, 3 per 30 days); 429 -> "try later", not counted
+- [x] 1.7 [Link my account] / `/account link`: fresh 15-minute single-use code, earlier codes invalidated, 5 per day
+- [x] 1.8 Tests: only email/name/locale sent; one reply text for every outcome; second request within 24h refused and nothing sent; fourth in 30 days refused; code hashed, single use, 15 min; consent text snapshot (EN/PT)
 
 ## 2. Linking and the user session
 
