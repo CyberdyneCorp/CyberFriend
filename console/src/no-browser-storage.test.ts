@@ -8,21 +8,32 @@
  * pasted it, and this console can widen what the agent may do.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { codeOf as code, sourceFiles } from "./test/sourceScan";
+
 const SRC = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURES = fileURLToPath(new URL("../fixtures/storage-guard/", import.meta.url));
 
 /**
- * The one module, besides the session module, allowed to read the token.
- * One constant so a move (to `services/http.ts`, say) changes the location
- * without loosening the rule.
+ * The one module, besides the session module, allowed to read the token: it
+ * hands a held break-glass token to `breakGlassHttp.ts` for the request.
  */
-const TOKEN_READER = "api/client.ts";
+const TOKEN_READER = "services/http.ts";
+const SESSION_MODULE = "services/session.ts";
+
+/**
+ * Where a credential header may be written, and where the browser may be told
+ * to attach cookies. Two files, two modes, so a cookie request can never carry
+ * a token and a token request can never carry a cookie.
+ */
+const CREDENTIAL_HEADER_WRITER = "services/breakGlassHttp.ts";
+const COOKIE_SENDER = "services/http.ts";
+const CREDENTIAL_HEADER = /authorization|bearer/i;
+const COOKIE_MODE = "same-origin";
 
 const FORBIDDEN = [
   "localStorage",
@@ -33,43 +44,13 @@ const FORBIDDEN = [
 ];
 
 /**
- * Every file type the console may be written in: `.ts` and `.tsx` today,
- * `.svelte` and `.svelte.ts` (covered by `.ts`) after the port. A guard that
- * did not know about a file type would pass while checking nothing.
+ * `.ts`, `.svelte` and `.svelte.ts` under `dir`, except this file: it names
+ * every API it forbids, so it would fail its own scan. Comments are stripped
+ * before matching (see `codeOf`), so prose about why the token is not in
+ * `localStorage` does not count.
  */
-const SOURCE = /\.(ts|tsx|svelte)$/;
-
 function sources(dir: string): string[] {
-  // Sorted, so a report's order does not depend on the filesystem.
-  return readdirSync(dir).sort().flatMap((entry) => {
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) return sources(path);
-    // This file names every API it forbids, so it would fail its own scan.
-    if (entry === "no-browser-storage.test.ts") return [];
-    return SOURCE.test(entry) ? [path] : [];
-  });
-}
-
-/**
- * The code, without the prose about it.
- *
- * Several files explain *why* the token is not in `localStorage`, and a scan
- * that read those comments as violations would be one nobody could keep
- * green. HTML comments (Svelte markup), block comments and whole-line `//`
- * comments go; an inline trailing comment is left alone rather than risk
- * truncating the code before it.
- */
-function code(path: string): string {
-  const source = readFileSync(path, "utf8");
-  // HTML comments exist only in Svelte markup. In TypeScript `<!--` and `-->`
-  // are ordinary characters (a string, `x-->0`), and stripping between them
-  // would hide real code from the scan.
-  const markup = path.endsWith(".svelte") ? source.replace(/<!--[\s\S]*?-->/g, "") : source;
-  return markup
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("//"))
-    .join("\n");
+  return sourceFiles(dir, (name) => name === "no-browser-storage.test.ts");
 }
 
 /** `relative/path: api` for every forbidden storage API used under `root`. */
@@ -98,11 +79,50 @@ describe("credential handling", () => {
 
   it("reads the credential in exactly one place outside the session module", () => {
     // `currentToken` feeding the fetch client is the whole surface. A second
-    // reader is how a token ends up in a log line or a React prop.
+    // reader is how a token ends up in a log line or a component prop.
     const readers = sources(SRC).filter(
-      (path) => !path.endsWith("auth/session.ts") && code(path).includes("currentToken"),
+      (path) => !path.endsWith(SESSION_MODULE) && code(path).includes("currentToken"),
     );
     expect(readers.map((p) => p.slice(SRC.length))).toEqual([TOKEN_READER]);
+  });
+});
+
+/**
+ * `relative/path: what` for every source under `root` that writes a credential
+ * header or asks for cookies outside the one file allowed to. Tests and their
+ * helpers are outside it: they read those headers to assert on them.
+ */
+function credentialModeUses(root: string): string[] {
+  const files = sourceFiles(root, (name) => name.endsWith(".test.ts")).filter(
+    (path) => !path.slice(root.length).startsWith("test/"),
+  );
+  return files.flatMap((path) => {
+    const relative = path.slice(root.length);
+    const text = code(path);
+    const found: string[] = [];
+    if (relative !== CREDENTIAL_HEADER_WRITER && CREDENTIAL_HEADER.test(text)) {
+      found.push(`${relative}: credential header`);
+    }
+    if (relative !== COOKIE_SENDER && text.includes(COOKIE_MODE)) found.push(`${relative}: ${COOKIE_MODE}`);
+    return found;
+  });
+}
+
+describe("the two request modes", () => {
+  it("writes a credential header only in the break-glass module, and asks for cookies only in http.ts", () => {
+    expect(credentialModeUses(SRC)).toEqual([]);
+  });
+
+  it("sees both modes where they are allowed, so a green run means something", () => {
+    expect(CREDENTIAL_HEADER.test(code(join(SRC, CREDENTIAL_HEADER_WRITER)))).toBe(true);
+    expect(code(join(SRC, COOKIE_SENDER))).toContain(COOKIE_MODE);
+  });
+
+  it("catches either mode in the wrong file", () => {
+    expect(credentialModeUses(join(FIXTURES, "../credential-guard/"))).toEqual([
+      "services/http.ts: credential header",
+      "views/Screen.svelte: same-origin",
+    ]);
   });
 });
 

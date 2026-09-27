@@ -132,9 +132,9 @@ console-build:
 console-test:
     cd console && npm run test
 
-# The Svelte rewrite (console-svelte/): lint, tests, then svelte-check and build.
-console-svelte-check:
-    cd console-svelte && npm run lint && npm test && npm run build
+# Lint (cognitive complexity <= 12), tests, then svelte-check and the build: what CI runs.
+console-check:
+    cd console && npm run lint && npm test && npm run build
 
 # --- images --------------------------------------------------------------
 

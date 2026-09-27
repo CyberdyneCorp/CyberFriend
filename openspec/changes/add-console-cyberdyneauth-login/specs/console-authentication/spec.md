@@ -41,6 +41,20 @@ sign-out, after the session is revoked.
 - AND the sign-in routes SHALL NOT be available
 - AND bearer tokens SHALL work as before
 
+#### Scenario: Console offers sign-in only when it is configured
+- WHEN the console loads without a session
+- THEN it SHALL ask the admin API, without a credential, whether sign-in is
+  offered
+- AND SHALL show "Sign in with CyberdyneAuth" first, with the operator-token
+  form behind a separate control, when it is
+- AND SHALL show the operator-token form alone when it is not
+
+#### Scenario: Break-glass token in the console
+- WHEN a person signs in to the console with an operator token
+- THEN the console SHALL send the token as a bearer header without cookies
+- AND SHALL take the token's role from the admin API, not assume one
+- AND cookie-mode requests SHALL never carry a bearer header
+
 ### Requirement: Access tokens are verified locally
 
 The system SHALL accept an access token only if its RS256 signature verifies

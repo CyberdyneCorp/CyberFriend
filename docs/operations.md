@@ -197,7 +197,7 @@ ran, and the memory and fact rows, read by SQL. Every `/name` the bot says is
 checked against the commands Discord offers where it said it.
 
 - `E2E_REQUIRE_DB=1` turns "no database" from a skip into a failure. CI sets it.
-- The suite fails the run if it takes more than 90 seconds.
+- The suite fails the run if it takes more than 120 seconds.
 - `E2E_UPDATE_SNAPSHOTS=1` rewrites `tests/e2e/snapshots/commands.json`, the
   exact command payload the bot syncs; review the diff like code.
 - discord.py is pinned to `~=2.7.1` in the dev extras because the fake wire
@@ -257,6 +257,16 @@ corpus or the bot's accounts, and neither is ever logged, recorded in
 |---|---|---|
 | `ADMIN_OIDC_CLIENT_SECRET` | The `cyberfriend` client's secret at CyberdyneAuth. | Rotate it at CyberdyneAuth and redeploy `admin`. |
 | `ADMIN_SESSION_KEY` | 32 bytes (base64) that encrypt the tokens in `admin_session`. `openssl rand -base64 32`. | Replace it and redeploy: every existing session stops decrypting and people sign in again. |
+
+Nothing else secret reaches `admin`. Its environment in `docker-compose.yml`
+is `DATABASE_URL`, its own `ADMIN_*` variables (sign-in included), its domain,
+and the non-secret setting baselines it reports provenance for (channels,
+federation, web tools, asks, windows); no `DISCORD_TOKEN`, `LLM_API_KEY`,
+`SERPAPI_KEY` or tracing key. `tests/unit/test_compose_env.py` parses the
+compose file and fails on any other variable in that service's `environment:`
+(list or map form, quoted or not) and on an `env_file:` on the service, which
+would hand it every variable in the file. Enabling sign-in on Coolify is
+described in `docs/admin-console.md` ("Enabling sign-in on Coolify").
 
 The other sign-in variables (`ADMIN_OIDC_ISSUER`, `ADMIN_OIDC_CLIENT_ID`,
 `ADMIN_PUBLIC_URL`) are not secret. The issuer is the switch: with it set, the
