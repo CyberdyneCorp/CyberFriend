@@ -1202,7 +1202,11 @@ Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
 
 - **Consent in a DM, to exact values.** Asked in a channel, the reply is
   private and the rest continues in a DM. The DM shows the name (full name,
-  else preferred name, else Discord display name), the email (the email fact,
+  else preferred name, else Discord display name, the first that passes the
+  full-name rule — letters, marks, digits, spaces and `'-.’`, at most 128
+  characters, nothing domain-like such as `www.x.com` — so no link, `<`, `>`,
+  control or bidi character is sent or shown; if none passes, no name is
+  sent), the email (the email fact,
   or one typed into a form, which is not saved as a fact) and the language,
   says CyberdyneAuth will email an invitation and the account works only once
   it is accepted, and that the CyberdyneAuth account is **not** deleted by
@@ -1225,7 +1229,9 @@ Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
   changing it orphans every stored consent and link code. The admin process
   will need the same key to match a signed-in email when the web link flow
   arrives.
-- **Link codes**: 32 random bytes in `ADMIN_PUBLIC_URL/link?code=...`, stored
+- **Link codes**: 32 random bytes in `ADMIN_PUBLIC_URL/link?code=...`
+  (`ADMIN_PUBLIC_URL` must be https with no query or fragment, as the console
+  requires; the bot refuses to start otherwise), stored
   only as sha256, single use, valid 15 minutes; a new code ends the earlier
   ones, and at most 5 are issued per person per day. Redeeming them (the
   `/link` route) is not built yet.

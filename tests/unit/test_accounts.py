@@ -25,6 +25,7 @@ from chatmemory.app.accounts import (
     ConsentDraft,
     ProvisioningOutcome,
     ProvisioningResult,
+    account_name,
     code_digest,
     email_hmac,
 )
@@ -205,10 +206,14 @@ async def test_only_email_name_and_locale_are_sent_whatever_else_is_on_file() ->
 @pytest.mark.parametrize(
     ("facts", "display", "expected"),
     [
-        ({"full_name": "Leonardo Santos", "preferred_name": "Leo"}, "leo_d", "Leonardo Santos"),
-        ({"preferred_name": "Leo"}, "leo_d", "Leo"),
-        ({}, "leo_d", "leo_d"),
+        ({"full_name": "Leonardo Santos", "preferred_name": "Leo"}, "Leo D", "Leonardo Santos"),
+        ({"preferred_name": "Leo"}, "Leo D", "Leo"),
+        ({}, "  Leo   D ", "Leo D"),
         ({}, "  ", None),
+        # A name fact that looks like a domain is skipped for the next candidate.
+        ({"preferred_name": "www.evil.com"}, "Leo D", "Leo D"),
+        # A display name CyberdyneAuth would refuse sends no name at all.
+        ({}, "leo_d", None),
     ],
 )
 async def test_the_name_is_the_full_name_else_preferred_else_display(
@@ -217,6 +222,50 @@ async def test_the_name_is_the_full_name_else_preferred_else_display(
     draft = await service(Facts(**facts)).draft(LEO, display, Language.ENGLISH)
     assert draft.name == expected
     assert draft.email is None and draft.locale == "en"
+
+
+@pytest.mark.parametrize(
+    "display",
+    [
+        "<b>Leo</b>",
+        "Leo > Ana",
+        "https://evil.example/x",
+        "www.evil.com",
+        "evil.co",
+        "Leo\x07",
+        "Leo\u202eatad",
+        "Leo\u200bD",
+        "L" * 129,
+    ],
+)
+async def test_a_display_name_with_links_markup_or_control_characters_is_not_sent(
+    display: str,
+) -> None:
+    provisioner = RecordingProvisioner()
+    accounts = service(Facts(email=EMAIL), provisioner=provisioner)
+
+    draft = await accounts.draft(LEO, display, Language.ENGLISH)
+    result = await accounts.confirm(LEO, draft)
+
+    assert draft.name is None
+    assert result.outcome is ProvisioningOutcome.REQUESTED
+    assert provisioner.sent == [ProvisioningRequest(email=EMAIL, name=None, locale="en")]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        ("J.R.R. Tolkien", "J.R.R. Tolkien"),
+        ("José  da   Silva", "José da Silva"),
+        ("D’Ávila-Neto", "D’Ávila-Neto"),
+        ("www.evil.com", None),
+        ("a/b", None),
+    ],
+)
+def test_account_names_follow_the_full_name_rule_without_domains(
+    candidate: str, expected: str | None
+) -> None:
+    assert account_name(candidate) == expected
 
 
 def test_a_typed_email_is_checked_like_an_email_fact() -> None:
@@ -433,6 +482,27 @@ def test_provisioning_is_off_by_default() -> None:
 def test_enabling_needs_a_long_key_and_the_public_url(extra: dict[str, str]) -> None:
     with pytest.raises(ValidationError):
         Settings.model_validate({**BASE, "account_provisioning_enabled": True, **extra})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://admin.example.com",
+        "https://admin.example.com/?a=b",
+        "https://admin.example.com/#top",
+        "https://",
+        "admin.example.com",
+    ],
+)
+def test_the_public_url_is_https_without_query_or_fragment(url: str) -> None:
+    """The link code is a bearer secret appended as `{url}/link?code=...`."""
+    with pytest.raises(ValidationError):
+        Settings.model_validate({**BASE, "admin_public_url": url})
+
+
+def test_the_public_url_loses_its_trailing_slash() -> None:
+    settings = Settings.model_validate({**BASE, "admin_public_url": "https://admin.example.com/"})
+    assert settings.admin_public_url == "https://admin.example.com"
 
 
 def test_enabled_without_a_provisioner_stays_hidden() -> None:

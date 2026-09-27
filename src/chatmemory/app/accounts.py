@@ -4,8 +4,9 @@
 
 *   **Exact values, then consent.** `draft` shows what would be sent: the
     email fact (or one the person types, which is not saved as a fact), the
-    full name, else the preferred name, else the display name, and the answer
-    language. `confirm` sends exactly that through `ProvisioningRequest`,
+    full name, else the preferred name, else the display name (the first that
+    passes `account_name`, so no link, markup or control character; none sends
+    no name), and the answer language. `confirm` sends exactly that through `ProvisioningRequest`,
     which has no field for anything else.
 *   **Limited per person.** At most 1 request in 24 hours and 3 in 30 days,
     counted in the store under a lock before the provider is called. Over the
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -75,6 +77,26 @@ def email_hmac(key: bytes, email: str) -> bytes:
 def code_digest(code: str) -> bytes:
     """What is stored of a link code: its sha256."""
     return hashlib.sha256(code.encode()).digest()
+
+
+# A dot between two letters/digits followed by two or more letters: `www.evil.com`,
+# `evil.co`. Initials such as "J.R.R. Tolkien" have one letter after each dot.
+_DOMAIN_LIKE = re.compile(r"[^\W_]\.[^\W\d_]{2,}")
+
+
+def account_name(candidate: str) -> str | None:
+    """`candidate` as a name the identity provider will take, or None.
+
+    It must pass the full-name fact check (letters, marks, digits, spaces and
+    `'-.’`, at most 128 characters: no `<`, `>`, `/`, `:`, control or bidi
+    characters) and must not look like a domain, so no link can be sent or
+    shown as a name.
+    """
+    try:
+        name = normalise_fact(FactKind.FULL_NAME, candidate)
+    except InvalidFact:
+        return None
+    return None if _DOMAIN_LIKE.search(name) else name
 
 
 def locale_for(language: Language) -> str:
@@ -161,12 +183,13 @@ class AccountService:
 
     async def draft(self, person: PersonRef, display_name: str, language: Language) -> ConsentDraft:
         facts = await self._facts.facts_of(Viewer(person, frozenset()))
-        name = (
-            facts.get(FactKind.FULL_NAME)
-            or facts.get(FactKind.PREFERRED_NAME)
-            or display_name.strip()
-            or None
+        candidates = (
+            facts.get(FactKind.FULL_NAME),
+            facts.get(FactKind.PREFERRED_NAME),
+            display_name,
         )
+        names = (account_name(c) for c in candidates if c)
+        name = next((n for n in names if n is not None), None)
         return ConsentDraft(name=name, email=facts.get(FactKind.EMAIL), language=language)
 
     async def confirm(self, person: PersonRef, draft: ConsentDraft) -> ProvisioningResult:

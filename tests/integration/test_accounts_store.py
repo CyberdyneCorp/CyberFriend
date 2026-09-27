@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from chatmemory.adapters.store import accounts_postgres
 from chatmemory.adapters.store.accounts_postgres import PostgresAccountStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.app.accounts import (
@@ -92,13 +94,27 @@ async def test_one_request_a_day_and_three_in_thirty_days(clean: AsyncEngine) ->
     assert await _count(clean, "account_consent", leo) == 3
 
 
-async def test_parallel_presses_are_counted_once(clean: AsyncEngine) -> None:
+async def test_parallel_presses_are_counted_once(
+    clean: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every transaction pauses between counting and inserting, so without the
+    person-row lock all five would count zero and all five would be granted."""
     store = PostgresAccountStore(clean)
     await _reserve(store, LEO, NOW - timedelta(days=5))  # creates the person row first
+    counted = accounts_postgres._requests_since
+
+    async def slow_count(*args: Any) -> list[datetime]:
+        found = await counted(*args)
+        await asyncio.sleep(0.2)
+        return found
+
+    monkeypatch.setattr(accounts_postgres, "_requests_since", slow_count)
 
     results = await asyncio.gather(*(_reserve(store, LEO, NOW) for _ in range(5)))
 
     assert sorted(results) == [False, False, False, False, True]
+    monkeypatch.undo()
+    assert await store.last_requests(LEO, NOW - timedelta(hours=1)) == [NOW]
 
 
 async def test_a_released_request_is_not_counted(clean: AsyncEngine) -> None:

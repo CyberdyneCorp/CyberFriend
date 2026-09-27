@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Annotated
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import SecretStr, field_validator, model_validator
@@ -632,9 +633,14 @@ class Settings(BaseSettings):
     @field_validator("admin_public_url")
     @classmethod
     def _https_public_url(cls, v: str | None) -> str | None:
-        if v is not None and not v.lower().startswith(("https://", "http://")):
-            raise ValueError("admin_public_url must be an http(s) URL")
-        return v.rstrip("/") if v is not None else None
+        """The same rule the console applies to this variable: the link code
+        appended to it is a bearer secret, so https, a host, no query or fragment."""
+        if v is None:
+            return None
+        parts = urlsplit(v)
+        if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment:
+            raise ValueError("admin_public_url must be an https URL without query or fragment")
+        return v.rstrip("/")
 
     @model_validator(mode="after")
     def _provisioning_needs_a_key_and_url(self) -> Settings:

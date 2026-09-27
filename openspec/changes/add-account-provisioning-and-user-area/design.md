@@ -57,7 +57,10 @@ will be sent:
 
 - email from the `email` fact, or asked for in a form ([Enter email]); a typed
   address is checked like an email fact and not saved as one;
-- name from `full_name`, else `preferred_name`, else the display name;
+- name from `full_name`, else `preferred_name`, else the display name: the
+  first that passes the full-name fact rule and is not domain-like (no links,
+  `<`, `>`, control or bidi characters, as CyberdyneAuth checks names); if
+  none passes, no name is sent;
 - locale from the person's answer language.
 
 The consent text, in the person's language, also states:
