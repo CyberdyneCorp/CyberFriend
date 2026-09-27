@@ -166,7 +166,14 @@ the kept list above, with two buttons:
   voice questions and tracing your questions."
 
 Either opens a modal asking for `DELETE` or `APAGAR`, in the person's
-language. Both say the deletion cannot be undone.
+language. Both say the deletion cannot be undone. A person already opted out
+gets only the first button, worded to say they stay opted out: erasure never
+lifts an opt-out.
+
+Once Langfuse confirms a trace deletion, `trace_export` keeps only the trace
+id and `deleted_at`: the asker id and the `trace_export_message` links go,
+and a finished `trace_asker_search` row is deleted. Otherwise they would be a
+per-person record of when someone asked, outliving the erasure.
 
 ### Opt-out fixes
 

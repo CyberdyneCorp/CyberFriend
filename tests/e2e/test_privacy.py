@@ -46,7 +46,7 @@ async def test_in_a_channel_counts_and_kinds_only_then_details_by_dm(bot: E2EBot
     assert shown.sent and all(s.via == "followup" and s.ephemeral for s in shown.sent)
     first = shown.sent[0]
     assert "Only you can see this" in first.content
-    assert [label for label, _ in first.buttons] == ["Send me the details"]
+    assert [label for label, _ in first.buttons] == ["Send me the details", "Delete everything…"]
     assert "Saved: email address, phone number." in shown.text
     assert f"<#{GENERAL}>: 1 message" in shown.text.splitlines()
     assert "No database backups are kept" in shown.text
@@ -70,7 +70,7 @@ async def test_in_a_channel_counts_and_kinds_only_then_details_by_dm(bot: E2EBot
     [note] = [s for s in pressed.sent if s.via == "followup"]
     assert note.ephemeral and "Sent the details to your direct messages" in note.content
     [redrawn] = [s for s in pressed.sent if s.via == "edit"]
-    assert redrawn.disabled == {"Send me the details"}
+    assert redrawn.disabled == {"Send me the details"}, "[Delete everything...] stays live"
 
 
 async def test_in_a_dm_the_values_are_shown(bot: E2EBot) -> None:
@@ -81,7 +81,8 @@ async def test_in_a_dm_the_values_are_shown(bot: E2EBot) -> None:
     assert all(s.ephemeral for s in shown.sent)
     assert shown.sent[0].content == "Here's everything I hold about you."
     assert f"`{EMAIL}`" in shown.text and PHONE in shown.text
-    assert not any(s.buttons for s in shown.sent)
+    buttons = [[label for label, _ in s.buttons] for s in shown.sent if s.buttons]
+    assert buttons == [["Delete everything…"]], "no details button: the values are here"
 
 
 async def test_a_channel_the_person_can_no_longer_read_is_neither_named_nor_counted(

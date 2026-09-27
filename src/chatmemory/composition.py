@@ -75,6 +75,7 @@ from chatmemory.adapters.discord.acl import (
 )
 from chatmemory.adapters.discord.profile import DiscordProfileResolver
 from chatmemory.adapters.documents.http import BoundedHttpFetcher
+from chatmemory.adapters.documents.store import PostgresDocumentStore
 from chatmemory.adapters.llm.asks_extraction import (
     ExtractorConfig,
     OpenAICompatibleAskExtractor,
@@ -111,6 +112,7 @@ from chatmemory.adapters.store.alerts_postgres import PostgresAlertStore
 from chatmemory.adapters.store.asks_postgres import PostgresAskStore
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
 from chatmemory.adapters.store.decisions_postgres import PostgresDecisionStore
+from chatmemory.adapters.store.erasure_postgres import PostgresErasureStore
 from chatmemory.adapters.store.facts_postgres import PostgresFactStore
 from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestStore
 from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
@@ -164,6 +166,7 @@ from chatmemory.app.conversation import (
 from chatmemory.app.currency import PreferredCurrencies
 from chatmemory.app.decisions.answering import DecisionAnswerService
 from chatmemory.app.decisions.model import DecisionPolicy
+from chatmemory.app.erasure import ErasureService
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.app.limits import RateLimiter
@@ -173,6 +176,7 @@ from chatmemory.app.notifications import (
     NotificationPreferences,
     ObligationNotifier,
 )
+from chatmemory.app.optout import OptOutService
 from chatmemory.app.privacy import PrivacyService, RetentionFacts
 from chatmemory.app.reasoning.capabilities import (
     LOOP_STAGES,
@@ -1112,7 +1116,27 @@ def build_privacy(
         memory_retention_days=settings.memory_retention_days,
         backup_retention_days=settings.backup_retention_days,
     )
-    return PrivacyService(PostgresPrivacyStore(engine), retention, channels, clock=clock)
+    return PrivacyService(
+        PostgresPrivacyStore(engine),
+        retention,
+        channels,
+        clock=clock,
+        erasure=build_erasure(engine, clock),
+    )
+
+
+def build_erasure(engine: AsyncEngine, clock: Clock = utc_now) -> ErasureService:
+    """[Delete everything...]: the bot runs it, the ingest sweep resumes it.
+
+    Over the opt-out's own three steps, built as the admin console builds
+    them -- the document store and the trace index included -- so an admin
+    opt-out and a self-service erasure purge through one path. The trace
+    index only marks; ingest's withdrawal sweep deletes from Langfuse.
+    """
+    optouts = OptOutService(
+        PostgresRetentionStore(engine), PostgresDocumentStore(engine), PostgresTraceIndex(engine)
+    )
+    return ErasureService(PostgresErasureStore(engine), optouts, clock=clock)
 
 
 def build_schedules(settings: Settings, engine: AsyncEngine) -> ScheduleService | None:

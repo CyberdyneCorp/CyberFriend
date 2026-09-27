@@ -20,6 +20,7 @@ import pytest
 from discord import app_commands
 from discord.http import HTTPClient, Route
 from discord.state import ConnectionState
+from discord.ui.modal import Modal
 from discord.ui.view import View, ViewStore
 from discord.webhook import async_ as webhook_async
 
@@ -55,6 +56,8 @@ INTERNALS = [
     # `FakeDiscord.press`: the view stored for a message, and its dispatch.
     (ConnectionState, "store_view"),
     (View, "_scheduled_task"),
+    # `FakeDiscord.submit`: the modal stored when it was opened, and its dispatch.
+    (Modal, "_scheduled_task"),
 ]
 
 # The REST routes `FakeHTTP.request` answers, and the methods that send them.
@@ -98,6 +101,11 @@ def test_stored_views_are_kept_by_message_id_and_item_key() -> None:
     assert "self._view_store: ViewStore" in inspect.getsource(ConnectionState.clear)
     assert "self._views[message_id] = dispatch_info" in inspect.getsource(ViewStore.add_view)
     assert "(item.type.value, item.custom_id)" in inspect.getsource(ViewStore.add_view)
+
+
+def test_opened_modals_are_kept_by_custom_id() -> None:
+    """`FakeDiscord.submit` finds the modal in `_view_store._modals`."""
+    assert "self._modals[view.custom_id] = view" in inspect.getsource(ViewStore.add_view)
 
 
 def test_the_command_tree_keeps_its_own_http_client() -> None:

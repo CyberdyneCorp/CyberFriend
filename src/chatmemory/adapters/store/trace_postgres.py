@@ -123,9 +123,11 @@ WHERE trace_export.deleted_at IS NULL
 """)
 
 #: Only a search requested before it started is closed: an opt-out that
-#: reopened the row meanwhile gets a fresh search.
+#: reopened the row meanwhile gets a fresh search. Closed by deleting the row:
+#: a finished search keyed on a platform id is a record that the person was
+#: withdrawn, which an erasure must not leave behind. Queueing again inserts.
 COMPLETE_ASKER_SEARCH = text("""
-UPDATE trace_asker_search SET completed_at = :now
+DELETE FROM trace_asker_search
 WHERE platform_user_id = :platform_user_id AND completed_at IS NULL
   AND requested_at <= :started
 """)
@@ -150,9 +152,18 @@ SET deletion_requested_at =
 WHERE trace_export.deleted_at IS NULL
 """)
 
+#: A confirmed deletion keeps only the trace id and when it went, so that a
+#: listing Langfuse has not caught up with does not queue it again. Who asked
+#: and which messages it quoted go: they were kept only to find the trace, and
+#: left behind they are a per-person record of when someone asked questions.
 CONFIRM_DELETED = text("""
-UPDATE trace_export SET deleted_at = :now
-WHERE trace_id = ANY(:trace_ids) AND deleted_at IS NULL
+WITH confirmed AS (
+    UPDATE trace_export SET deleted_at = :now, asker_platform_user_id = NULL
+    WHERE trace_id = ANY(:trace_ids) AND deleted_at IS NULL
+    RETURNING trace_id
+)
+DELETE FROM trace_export_message
+WHERE trace_id IN (SELECT trace_id FROM confirmed)
 """)
 
 PENDING_DELETIONS = text("""

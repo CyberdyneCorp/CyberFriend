@@ -169,10 +169,9 @@ class OptOutService:
         # Flag first, purge second. The reverse order leaves a window between
         # the delete and the flag in which a backfill page re-imports exactly
         # what was just removed -- and the opt-out still reports success.
-        await self._registry.record_opt_out(person, reason)
-        traces = await self._withdraw_traces(person)
-        corpus = await self._registry.purge_person(person)
-        documents = await self._purge_documents(person)
+        await self.exclude(person, reason)
+        traces = await self.withdraw_traces(person)
+        corpus, documents = await self.purge_contributions(person)
 
         report = OptOutReport(
             person=person, corpus=corpus, documents=documents, traces=traces
@@ -192,7 +191,16 @@ class OptOutService:
         )
         return report
 
-    async def _withdraw_traces(self, person: PersonRef) -> int:
+    # The three steps of an opt-out, public because self-service erasure
+    # (`app.erasure`) runs the same ones, each as its own resumable step.
+
+    async def exclude(self, person: PersonRef, reason: str = "") -> None:
+        """Record the exclusion; the database purges everything derived from them."""
+        await self._registry.record_opt_out(person, reason)
+
+    async def withdraw_traces(self, person: PersonRef) -> int:
+        """Mark their asked and quoting traces for deletion. Before the purge:
+        their message rows are what say who wrote what a trace quotes."""
         if self._traces is None:
             log.error(
                 "optout.traces_not_covered",
@@ -201,6 +209,11 @@ class OptOutService:
             )
             return 0
         return await self._traces.request_deletion_for_person(person)
+
+    async def purge_contributions(self, person: PersonRef) -> tuple[PersonPurge, int]:
+        """Their messages and everything built on them, then their documents."""
+        corpus = await self._registry.purge_person(person)
+        return corpus, await self._purge_documents(person)
 
     async def _purge_documents(self, person: PersonRef) -> int:
         if self._documents is None:

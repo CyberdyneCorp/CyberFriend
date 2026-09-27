@@ -567,9 +567,16 @@ ORDER BY p.id
 LIMIT :cap
 """)
 
+#: Not from a message older than the person's erasure, nor ever for somebody
+#: who erased their data and opted out: the name is part of what they deleted,
+#: and a backfill re-reading their old messages must not write it back.
 UPDATE_PERSON_DISPLAY = text("""
 UPDATE person SET display_name = :n
 WHERE id = :id AND display_name IS DISTINCT FROM :n
+  AND (erased_before IS NULL OR (
+      erased_before <= :created_at
+      AND NOT EXISTS (SELECT 1 FROM person_opt_out o WHERE o.person_id = person.id)
+  ))
 """)
 
 

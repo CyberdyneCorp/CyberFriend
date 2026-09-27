@@ -14,9 +14,10 @@ hold a value.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from enum import IntEnum, StrEnum
 from typing import Protocol
 
 from chatmemory.domain.identity import ChannelRef, PersonRef
@@ -186,4 +187,134 @@ class PrivacyStore(Protocol):
         """Everything held about `person`, reading channel content only in
         `readable_channel_ids`. An unknown person is `Inventory()`, and is not
         created: reading must not invent people."""
+        ...
+
+
+# --- delete everything ---------------------------------------------------------
+
+
+ERASED_NAME = "(erased)"
+"""The display name an erased person's record keeps. Not their account id, so
+the unnamed-people repair never looks their name up again."""
+
+
+class ErasureMode(StrEnum):
+    """The two buttons: delete everything, or delete everything and leave."""
+
+    ERASE = "erase"
+    ERASE_AND_OPT_OUT = "erase_and_opt_out"
+
+
+class ErasureStep(IntEnum):
+    """The last step of an erasure that finished, as `erasure_request.step` holds it.
+
+    Numbered as the design numbers them. Steps 3 and 4 (traces quoting their
+    messages, traces of their questions) are one call and finish together.
+    """
+
+    RECORDED = 1
+    REIMPORT_STOPPED = 2
+    TRACES_MARKED = 4
+    PURGED = 5
+    VOICE_FOLDED = 6
+    TOMBSTONED = 7
+    COMPLETE = 8
+
+
+@dataclass(frozen=True, slots=True)
+class ErasureCounts:
+    """What the reply reports, taken from the inventory before anything goes.
+
+    `messages` and `media` count only channels the person could read when they
+    confirmed, as the dashboard does: a count of the rest would say that
+    channels they cannot see are archived. Everything of theirs is deleted
+    regardless. `traces` is filled in by the trace step, as "at least".
+    """
+
+    messages: int = 0
+    media: int = 0
+    facts: int = 0
+    memory: int = 0
+    tasks: int = 0
+    alerts: int = 0
+    suggestions: int = 0
+    tokens: int = 0
+    voice_seconds: int = 0
+    traces: int = 0
+
+    @classmethod
+    def of(cls, inventory: Inventory) -> ErasureCounts:
+        return cls(
+            messages=sum(a.messages for a in inventory.archived),
+            media=inventory.media.total,
+            facts=len(inventory.facts),
+            memory=inventory.memory.total,
+            tasks=len(inventory.tasks),
+            alerts=len(inventory.alerts),
+            suggestions=len(inventory.suggestions),
+            tokens=len(inventory.tokens),
+            voice_seconds=inventory.voice_seconds_this_month,
+        )
+
+    def as_json(self) -> dict[str, int]:
+        return {name: getattr(self, name) for name in self.__slots__}
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, object]) -> ErasureCounts:
+        return cls(**{k: int(str(v)) for k, v in data.items() if k in cls.__slots__})
+
+
+@dataclass(frozen=True, slots=True)
+class ErasureRequest:
+    id: int
+    person_id: int
+    person: PersonRef
+    mode: ErasureMode
+    step: ErasureStep
+    requested_at: datetime
+    counts: ErasureCounts = ErasureCounts()
+
+    @property
+    def complete(self) -> bool:
+        return self.step is ErasureStep.COMPLETE
+
+
+class ErasureStore(Protocol):
+    """The durable request and the steps that are plain SQL.
+
+    Every step method is idempotent: a resumed erasure repeats the step it was
+    in when the process stopped.
+    """
+
+    async def open(
+        self, person: PersonRef, mode: ErasureMode, counts: ErasureCounts
+    ) -> ErasureRequest:
+        """Record the request, creating the person row if unseen. With one
+        already open for the person, that one is returned; a request to also
+        stop archiving upgrades it and repeats its steps."""
+        ...
+
+    async def stop_reimport(self, request: ErasureRequest) -> None:
+        """Set `person.erased_before` to the request time (never earlier than it was)."""
+        ...
+
+    async def record_traces(self, request: ErasureRequest, traces: int) -> None: ...
+
+    async def purge_derived(self, request: ErasureRequest) -> None:
+        """`purge_person_derived(person_id)`."""
+        ...
+
+    async def fold_voice(self, request: ErasureRequest) -> int:
+        """Move the person's `media_usage` seconds into the anonymous total;
+        returns the seconds moved."""
+        ...
+
+    async def tombstone(self, request: ErasureRequest) -> None:
+        """Clear the name and preferences, keeping id, platform ids, `erased_before`."""
+        ...
+
+    async def advance(self, request: ErasureRequest, step: ErasureStep) -> ErasureRequest: ...
+
+    async def open_requests(self, idle_since: datetime, limit: int) -> Sequence[ErasureRequest]:
+        """Open requests with no step finished since `idle_since`, oldest first."""
         ...

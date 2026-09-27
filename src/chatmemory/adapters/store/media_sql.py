@@ -31,13 +31,16 @@ ON CONFLICT DO NOTHING
 """)
 
 # What this person has used on their own questions this month, and what
-# everybody has used on anything.
+# everybody has used on anything -- including the seconds of people who erased
+# their data, folded into `media_usage_anonymous` so the ceiling stays true.
 MONTH_USAGE = text("""
 SELECT
     COALESCE(SUM(seconds) FILTER (
         WHERE person_id = :person_id AND purpose = 'question'
     ), 0) AS mine,
-    COALESCE(SUM(seconds), 0) AS everyone
+    COALESCE(SUM(seconds), 0)
+      + (SELECT COALESCE(SUM(seconds), 0) FROM media_usage_anonymous WHERE month = :month)
+      AS everyone
 FROM media_usage
 WHERE month = :month
 """)
