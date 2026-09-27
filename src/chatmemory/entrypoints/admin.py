@@ -15,6 +15,12 @@ Its only outbound HTTP is to CyberdyneAuth (discovery, keys, token, userinfo,
 revocation), through the transport `build` is given, like the bot's
 `Edges.http_transport`.
 
+With sign-in configured and `ACCOUNT_PROVISIONING_ENABLED`, it also serves the
+web user area (`admin.user`): `/link`, where a person redeems the code the bot
+DMed them, and `/me`, their own privacy dashboard, "delete everything" and
+suggestions. For `/link` it holds `PROVISIONING_EMAIL_KEY`, the same HMAC key
+the bot stores consented emails under, to compare the signed-in email with.
+
 Two consequences shape this file:
 
 *   **It never loads `Settings`.** That class requires the Discord token, the
@@ -42,16 +48,20 @@ import asyncio
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import structlog
 import uvicorn
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from starlette.applications import Starlette
 
 from chatmemory import logging as log_setup
 from chatmemory.adapters.documents.store import PostgresDocumentStore
+from chatmemory.adapters.store.accounts_postgres import PostgresAccountStore
 from chatmemory.adapters.store.admin_postgres import (
     PostgresChangeRecord,
     PostgresOperatorTokens,
@@ -61,8 +71,12 @@ from chatmemory.adapters.store.admin_session_postgres import (
     PostgresSessionStore,
 )
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.adapters.store.erasure_postgres import PostgresErasureStore
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestStore
+from chatmemory.adapters.store.privacy_postgres import PostgresPrivacyStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
+from chatmemory.adapters.store.user_session_postgres import PostgresUserSessionStore
 from chatmemory.adapters.tracing.langfuse import warn_unless_supported
 from chatmemory.admin.handlers.federation import make_probe
 from chatmemory.admin.handlers.queries import (
@@ -79,13 +93,19 @@ from chatmemory.admin.oidc.config import (
 from chatmemory.admin.oidc.provider import OIDCProvider, ProviderUnavailable
 from chatmemory.admin.oidc.service import SignIn
 from chatmemory.admin.server import build_app
+from chatmemory.admin.user.routes import UserArea
+from chatmemory.admin.user.service import UserSignIn
+from chatmemory.app.accounts import AccountLinking
 from chatmemory.app.configuration import (
     SETTINGS,
     ConfigurationEditor,
     RuntimeConfiguration,
 )
+from chatmemory.app.erasure import ErasureService
+from chatmemory.app.feature_requests import FeatureRequestService
 from chatmemory.app.optout import OptOutService
-from chatmemory.config import Settings
+from chatmemory.app.privacy import PrivacyService, RetentionFacts
+from chatmemory.config import MIN_EMAIL_KEY_CHARS, Settings
 from chatmemory.mcp.auth import PostgresTokenStore
 from chatmemory.ports.configuration import ResolvedValue, SettingSource
 
@@ -122,8 +142,25 @@ everywhere it is installed.
 """
 
 
+USER_AREA_VAR = "ACCOUNT_PROVISIONING_ENABLED"
+EMAIL_KEY_VAR = "PROVISIONING_EMAIL_KEY"
+
+RETENTION_VARS = {
+    "tracing_enabled": "TRACING_ENABLED",
+    "langfuse_host": "LANGFUSE_HOST",
+    "trace_retention_days": "TRACE_RETENTION_DAYS",
+    "memory_retention_days": "MEMORY_RETENTION_DAYS",
+    "backup_retention_days": "BACKUP_RETENTION_DAYS",
+}
+"""What `/me/privacy` states about keeping data, read as the bot reads them."""
+
+
 class MissingDatabase(RuntimeError):
     """The one credential this service does need is absent."""
+
+
+class MisconfiguredUserArea(RuntimeError):
+    """The user area is switched on without the key `/link` compares with."""
 
 
 def environment_baseline(environ: Mapping[str, str]) -> dict[str, ResolvedValue]:
@@ -188,6 +225,90 @@ def sign_in(
     return SignIn(settings, provider, PostgresLoginStore(engine), PostgresSessionStore(engine))
 
 
+def _setting(environ: Mapping[str, str], field: str) -> Any:
+    """One `Settings` field from its variable, or its default, without `Settings`."""
+    info = Settings.model_fields[field]
+    raw = environ.get(RETENTION_VARS[field], "").strip()
+    default = info.get_default(call_default_factory=True)
+    if not raw:
+        return default
+    try:
+        return TypeAdapter(info.annotation).validate_python(raw)
+    except ValidationError:
+        log.warning("admin.environment_value_rejected", setting=field)
+        return default
+
+
+def retention_facts(environ: Mapping[str, str]) -> RetentionFacts:
+    """What `/privacy` states, from the variables that enforce it (see
+    `composition.build_privacy`). An unset BACKUP_RETENTION_DAYS says no
+    backups are kept."""
+    backup = _setting(environ, "backup_retention_days")
+    return RetentionFacts(
+        tracing=bool(_setting(environ, "tracing_enabled"))
+        and bool(_setting(environ, "langfuse_host")),
+        trace_retention_days=int(_setting(environ, "trace_retention_days")),
+        memory_retention_days=int(_setting(environ, "memory_retention_days")),
+        backup_retention_days=backup if isinstance(backup, int) and backup > 0 else None,
+    )
+
+
+def user_area_enabled(environ: Mapping[str, str]) -> bool:
+    return environ.get(USER_AREA_VAR, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def email_key(environ: Mapping[str, str]) -> bytes:
+    key = environ.get(EMAIL_KEY_VAR, "").strip()
+    if len(key) < MIN_EMAIL_KEY_CHARS:
+        raise MisconfiguredUserArea(
+            f"{USER_AREA_VAR} needs {EMAIL_KEY_VAR}, the bot's key, of at least "
+            f"{MIN_EMAIL_KEY_CHARS} characters"
+        )
+    return key.encode()
+
+
+def user_area(
+    environ: Mapping[str, str],
+    signing_in: SignIn | None,
+    engine: AsyncEngine,
+    optouts: OptOutService,
+) -> UserArea | None:
+    """The web user area, or None when it is off.
+
+    On with `ACCOUNT_PROVISIONING_ENABLED`, like `/account` in the bot, and
+    only where CyberdyneAuth sign-in is configured: the user area signs in
+    through the same client. Erasure goes through the same opt-out steps the
+    console's opt-out takes, and the ingest sweep resumes it if this process
+    stops half way.
+    """
+    if not user_area_enabled(environ):
+        return None
+    if signing_in is None:
+        log.warning("admin.user_area_without_sign_in", hint="set the ADMIN_OIDC_* variables")
+        return None
+    linking = AccountLinking(PostgresAccountStore(engine), email_key=email_key(environ))
+    privacy = PrivacyService(
+        PostgresPrivacyStore(engine),
+        retention_facts(environ),
+        # No channel listing: which archived channels a person can read is
+        # the Discord ACL, which this process cannot ask. Fails closed: no
+        # channel is named or counted here, and `/privacy` in Discord shows them.
+        channels=None,
+        erasure=ErasureService(PostgresErasureStore(engine), optouts),
+    )
+    return UserArea(
+        sign_in=UserSignIn(
+            signing_in, PostgresUserSessionStore(engine), linking, clock=_now
+        ),
+        privacy=privacy,
+        suggestions=FeatureRequestService(PostgresFeatureRequestStore(engine)),
+    )
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
 def database_url(environ: Mapping[str, str]) -> str:
     url = environ.get(DATABASE_URL_VAR, "").strip()
     if not url:
@@ -228,6 +349,8 @@ class ConsoleProcess:
     port: int
     #: CyberdyneAuth sign-in, or None when it is not configured.
     sign_in: SignIn | None = None
+    #: The web user area, or None when it is off.
+    user_area: UserArea | None = None
 
 
 def build(
@@ -276,6 +399,7 @@ def build(
         probe=make_probe(),
     )
     signing_in = sign_in(settings, engine, transport)
+    area = user_area(environ, signing_in, engine, services.optouts)
     return ConsoleProcess(
         app=build_app(
             services,
@@ -283,12 +407,14 @@ def build(
             console_dir(environ),
             oidc_configured=settings is not None,
             sign_in=signing_in,
+            user_area=area,
         ),
         services=services,
         configuration=configuration,
         engine=engine,
         port=port(environ),
         sign_in=signing_in,
+        user_area=area,
     )
 
 
@@ -318,6 +444,7 @@ async def main() -> None:
         settings=len(SETTINGS),
         token_role="operator" if built.sign_in else "admin",
         sign_in="cyberdyneauth" if built.sign_in else "off",
+        user_area="on" if built.user_area else "off",
     )
     await warm_up(built.sign_in)
     if langfuse_host := os.environ.get("LANGFUSE_HOST"):

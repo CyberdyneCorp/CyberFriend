@@ -55,6 +55,8 @@ class FakeUser:
     email: str
     #: None: no roles claim at all.
     roles: list[str] | None
+    #: What userinfo says: False until a provisioned account's invitation is accepted.
+    email_verified: bool = True
 
 
 @dataclass
@@ -91,6 +93,8 @@ class FakeOIDC:
     id_token_on_refresh: bool = False
     #: What was asked of the fake, for assertions.
     grants: list[str] = field(default_factory=list)
+    #: The query of every authorization request, in order (`prompt`, `max_age`...).
+    authorizations: list[dict[str, str]] = field(default_factory=list)
     jwks_fetches: int = 0
     revoked: list[str] = field(default_factory=list)
     _kid: str = "k1"
@@ -104,8 +108,10 @@ class FakeOIDC:
 
     # --- people ------------------------------------------------------
 
-    def add(self, sub: str, email: str, roles: list[str] | None) -> FakeUser:
-        user = FakeUser(sub, email, roles)
+    def add(
+        self, sub: str, email: str, roles: list[str] | None, *, email_verified: bool = True
+    ) -> FakeUser:
+        user = FakeUser(sub, email, roles, email_verified)
         self.users[sub] = user
         return user
 
@@ -176,6 +182,7 @@ class FakeOIDC:
     def authorize(self, authorization_url: str, sub: str) -> tuple[str, str]:
         """What the login page does for `sub`: returns (code, state)."""
         query = {k: v[0] for k, v in parse_qs(urlsplit(authorization_url).query).items()}
+        self.authorizations.append(query)
         assert query["client_id"] == self.client_id
         assert query["response_type"] == "code"
         assert query["code_challenge_method"] == "S256"
@@ -298,7 +305,11 @@ class FakeOIDC:
         user = self.users[sub]
         return httpx.Response(
             200,
-            json={"sub": self.userinfo_sub or sub, "email": user.email, "email_verified": True},
+            json={
+                "sub": self.userinfo_sub or sub,
+                "email": user.email,
+                "email_verified": user.email_verified,
+            },
         )
 
     def _revoke(self, request: httpx.Request) -> httpx.Response:

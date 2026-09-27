@@ -115,6 +115,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory import logging as log_setup
+from chatmemory.adapters.discord.accounts import LinkAnnouncer
 from chatmemory.adapters.discord.acl import LiveGuild, PermissionCaches, _Guild
 from chatmemory.adapters.discord.bot import (
     CyberFriendClient,
@@ -164,6 +165,7 @@ from chatmemory.composition import (
     build_channel_listing,
     build_conversations,
     build_feature_requests,
+    build_link_announcements,
     build_live_scope,
     build_notification_delivery,
     build_notification_preferences,
@@ -514,6 +516,8 @@ async def scope_loop(scope: LiveScope, state: HealthState) -> None:
 #: long after that window it takes to notice. A pass over an empty queue is
 #: one indexed scan that finds nothing.
 NOTIFICATION_DRAIN_INTERVAL_SECONDS = 15.0
+LINK_NOTICE_INTERVAL_SECONDS = 30.0
+"""How soon after linking on the web the person is DMed about it."""
 
 
 async def scheduled_task_loop(
@@ -613,6 +617,29 @@ async def alert_loop(
         await asyncio.sleep(interval)
 
 
+async def link_notice_loop(
+    announcer: LinkAnnouncer,
+    state: HealthState,
+    interval: float = LINK_NOTICE_INTERVAL_SECONDS,
+    ready: asyncio.Event | None = None,
+) -> None:
+    """DM each person whose CyberdyneAuth account was just linked on the web.
+
+    The admin process makes the link; only this process can reach the person,
+    so it looks for links nobody has been told about. Absorbs everything: an
+    unsent notice stays unannounced and is tried next pass.
+    """
+    if ready is not None:
+        await ready.wait()
+    while True:
+        try:
+            sent = await announcer.announce()
+            state.details["link_notices"] = {"sent": sent, "last_run_at": time.time()}
+        except Exception:
+            log.exception("accounts.link_notices_failed")
+        await asyncio.sleep(interval)
+
+
 async def run_beside_scope(
     work: Coroutine[Any, Any, None],
     scope: LiveScope,
@@ -659,6 +686,9 @@ class Process:
     conversations: Conversations
     facts: PersonalFactsService
     edges: Edges
+    #: "Linked to a***@..., not you? [Unlink]" for links made on the web.
+    #: None unless `/account` is offered.
+    link_announcer: LinkAnnouncer | None = None
 
 
 async def assemble(settings: Settings, edges: Edges) -> Process:
@@ -738,8 +768,12 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
     # `/account`, offered only when ACCOUNT_PROVISIONING_ENABLED and a
     # provisioner is at the edge. Nothing reaches CyberdyneAuth otherwise.
     accounts = build_accounts(settings, stack.engine, edges.account_provisioner, edges.clock)
+    link_announcer = None
     if accounts is not None:
         graph.client.attach_accounts(accounts)
+        link_announcer = graph.client.link_announcer(
+            build_link_announcements(stack.engine, edges.clock)
+        )
     return Process(
         graph=graph,
         stack=stack,
@@ -747,6 +781,7 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         conversations=conversations,
         facts=facts,
         edges=edges,
+        link_announcer=link_announcer,
     )
 
 
@@ -820,6 +855,10 @@ async def main() -> None:
                 clock=process.edges.clock,
             )
         )
+    # "Linked to a***@..., not you? [Unlink]", for links the admin process
+    # made. Only with `/account`, and here because this process reaches people.
+    if process.link_announcer is not None:
+        drains.append(link_notice_loop(process.link_announcer, state, ready=gateway_ready))
     await run_beside_scope(
         client.start(settings.discord_token.get_secret_value()), scope, state, drains
     )

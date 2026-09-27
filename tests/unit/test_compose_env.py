@@ -128,6 +128,26 @@ def test_account_provisioning_settings_reach_the_bot(setting: str, default: str)
     assert f"{setting}=${{{setting}:-{default}}}" in service_block("bot")
 
 
+@pytest.mark.parametrize(
+    ("setting", "default"),
+    [
+        ("ACCOUNT_PROVISIONING_ENABLED", "false"),
+        ("PROVISIONING_EMAIL_KEY", ""),
+        ("TRACING_ENABLED", "false"),
+        ("TRACE_RETENTION_DAYS", "90"),
+    ],
+)
+def test_the_user_area_settings_reach_the_admin_service(setting: str, default: str) -> None:
+    """The user area runs in the admin service: its switch, the key `/link`
+    compares emails with, and the retention `/me/privacy` states."""
+    assert f"{setting}=${{{setting}:-{default}}}" in service_block("admin")
+
+
+@pytest.mark.parametrize("setting", ["MEMORY_RETENTION_DAYS", "BACKUP_RETENTION_DAYS"])
+def test_the_retention_the_user_area_states_reaches_the_admin_service(setting: str) -> None:
+    assert f"{setting}=${{{setting}}}" in service_block("admin")
+
+
 def service_block(name: str) -> str:
     match = re.search(rf"^  {name}:$(.*?)(?=^  \w+:$|\Z)", COMPOSE, re.M | re.S)
     assert match, f"service {name} missing from docker-compose.yml"
@@ -300,8 +320,22 @@ def admin_service(compose_text: str = COMPOSE) -> dict[str, Any]:
 
 
 # Non-secret values the console reads for its own sake: the Langfuse host
-# (never its keys) lets it warn at startup when Langfuse is not on v3.
-CONSOLE_EXTRAS = frozenset({"DATABASE_URL", "LANGFUSE_HOST"})
+# (never its keys) lets it warn at startup when Langfuse is not on v3. The user
+# area adds its switch, the HMAC key `/link` compares a signed-in email with
+# (a keyed hash, not a credential for anything), and the retention periods
+# `/me/privacy` states.
+CONSOLE_EXTRAS = frozenset(
+    {
+        "DATABASE_URL",
+        "LANGFUSE_HOST",
+        "ACCOUNT_PROVISIONING_ENABLED",
+        "PROVISIONING_EMAIL_KEY",
+        "TRACING_ENABLED",
+        "TRACE_RETENTION_DAYS",
+        "MEMORY_RETENTION_DAYS",
+        "BACKUP_RETENTION_DAYS",
+    }
+)
 
 
 def unexpected_console_variables(service: dict[str, Any]) -> list[str]:

@@ -137,7 +137,15 @@ The email typed in Discord is unverified, so a link is never made on it.
    `person_account_link(person_id UNIQUE, issuer, sub UNIQUE, linked_at)` and
    marks the code used.
 4. The bot DMs "Linked to a***@domain, not you? [Unlink]". Unlink deletes the
-   link and revokes user sessions.
+   link and revokes user sessions. The link row keeps only the masked address
+   (`email_hint`) for this message, and `notified_at`; the bot looks for links
+   with no `notified_at` every 30 seconds. [Unlink] is a persistent button
+   that acts on whoever presses it (only they can see their DM).
+
+All user sign-ins share the console's redirect URI: the login record's
+`purpose` (`admin`, `user`, `link`, `fresh`) decides which callback finishes
+it. A CyberdyneAuth account already linked to another person is refused;
+relinking a person to a new account ends the old account's user sessions.
 
 A forwarded or leaked code is useless without signing in as the consented,
 verified email.
@@ -159,6 +167,15 @@ verified email.
   profile is linked to this account. Link one from Discord with /account."
 - CSRF protection is the same as the admin console (custom header, Origin
   check, SameSite=Strict).
+
+Besides the routes above, the user area has `GET /me/session` (email, linked,
+fresh), `POST /me/logout`, and two public starts, `GET /auth/user/login` and
+`GET /auth/user/fresh` (`max_age=300`). A web suggestion is stored with
+`source_kind = 'web'`.
+
+The web dashboard names and counts no archived channel: which channels a
+person may read is the Discord ACL, which the admin process cannot ask, so it
+fails closed and `/privacy` in Discord remains where channel counts are shown.
 
 ### Web erasure
 

@@ -304,6 +304,17 @@ services:
       - ADMIN_PUBLIC_URL=${ADMIN_PUBLIC_URL:-}
       # Optional; unset means `openid email profile`.
       - ADMIN_OIDC_SCOPES=${ADMIN_OIDC_SCOPES:-}
+      # The web user area (docs/admin-console.md, "The user area"): on with
+      # sign-in and the same switch and HMAC key as the bot's `/account`,
+      # which `/link` compares the signed-in email with. `/me/privacy` states
+      # retention from the same variables that enforce it elsewhere; unset
+      # BACKUP_RETENTION_DAYS says no backups are kept.
+      - ACCOUNT_PROVISIONING_ENABLED=${ACCOUNT_PROVISIONING_ENABLED:-false}
+      - PROVISIONING_EMAIL_KEY=${PROVISIONING_EMAIL_KEY:-}
+      - TRACING_ENABLED=${TRACING_ENABLED:-false}
+      - TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}
+      - MEMORY_RETENTION_DAYS=${MEMORY_RETENTION_DAYS}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}
       # The host only, no keys: read at startup to warn when Langfuse is not
       # on v3 (docs/operations.md, "Langfuse version").
       - LANGFUSE_HOST=${LANGFUSE_HOST:-}
