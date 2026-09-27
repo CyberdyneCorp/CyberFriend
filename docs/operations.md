@@ -758,7 +758,11 @@ FEDERATION_AUTH_CYBERWEALTH_SCOPE=cyberwealth:intel.read
 ```
 
 `<NAME>` is the server name upper-cased, with `-` written `_`. Any federated
-server can be given a credential this way. The client needs the
+server can be given a credential this way, but its five variables must also
+be declared on the `bot` service in `docker-compose.yml` (the CyberWealth ones
+already are): the platform only passes the variables the compose file names,
+so a credential set only in Coolify never reaches the bot and the server
+answers `401`. The client needs the
 `client_credentials` grant and `cyberwealth` in its allowed audiences, and
 CyberWealth's operators must add its client id to `CW_SERVICE_PRINCIPALS`.
 
@@ -771,9 +775,9 @@ CyberWealth's operators must add its client id to `CW_SERVICE_PRINCIPALS`.
 - **Refused at boot:** a `FEDERATION_AUTH_*` variable naming a server that is
   not in `FEDERATION_SERVERS`, a credential missing its issuer, client id or
   secret, and an issuer or server target that is not `https` (localhost
-  excepted). Like any federation misconfiguration, this logs
-  `composition.federation.misconfigured` and the bot runs without federated
-  tools.
+  excepted). This logs `composition.federation.service_auth_misconfigured`
+  and the bot runs without its remote MCP servers for that boot; the local
+  web, market and wallet tools, which carry no credential, stay registered.
 - **Issuer down.** The server is unreachable for that boot or that run, and the
   answer says its data is missing. The rest keeps working.
 

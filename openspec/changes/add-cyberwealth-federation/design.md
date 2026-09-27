@@ -54,9 +54,19 @@ refused:
   A bearer on plain HTTP is a bearer anyone on the path can replay.
 
 `environ` is `os.environ` over the `.env` file, the same sources `Settings`
-reads. Coolify injects every app variable into every service, so nothing
-here assumes the secret is absent from other processes. Only the bot process
-builds federation, so only it uses the secret.
+reads. The variables reach the bot only because `docker-compose.yml` declares
+them on its service (`tests/unit/test_compose_env.py` holds every operator
+setting to that): a variable set in the platform but not declared there never
+reaches the process, and the server is opened without a bearer. So each new
+credentialled server needs its five `FEDERATION_AUTH_<NAME>_*` lines added to
+the bot service. Declaring them for the bot alone is not a secrecy boundary,
+and nothing here assumes the secret is absent from other processes; only the
+bot process builds federation, so only it uses the secret.
+
+A credential that cannot be honoured (below) drops the remote MCP servers
+for that boot and logs `composition.federation.service_auth_misconfigured`.
+The local web, market and wallet tools never carry a credential and stay
+registered.
 
 ### Where the personal gate sits
 

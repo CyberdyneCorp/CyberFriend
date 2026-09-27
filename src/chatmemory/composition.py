@@ -59,6 +59,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
+from typing import TypeGuard
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -874,6 +875,52 @@ def with_service_auth(
     )
 
 
+def has_servers(config: FederationConfig | None) -> TypeGuard[FederationConfig]:
+    """Whether anything -- remote or local -- is left to connect to."""
+    return config is not None and bool(config.servers)
+
+
+def without_remote_servers(config: FederationConfig | None) -> FederationConfig | None:
+    """`config` with its remote MCP servers, and every tool listed for them, gone.
+
+    Every server in a config built from settings is remote -- the local
+    providers are merged in afterwards -- so this keeps only the limits.
+    """
+    if config is None:
+        return None
+    return replace(config, servers=(), allowlist=(), _by_name={})
+
+
+def _authenticate_remote_servers(
+    config: FederationConfig | None,
+    factory: SessionFactory | None,
+    *,
+    transport: httpx.AsyncBaseTransport | None,
+    environ: Mapping[str, str] | None,
+    mcp_transport: httpx2.AsyncBaseTransport | None,
+) -> tuple[FederationConfig | None, SessionFactory | None]:
+    """`with_service_auth`, or -- for a credential it refuses -- no remote servers.
+
+    A credential that cannot be honoured costs the remote servers whose calls
+    it was meant to authenticate, and nothing else: the web, market and wallet
+    tools merged in afterwards never carry one. `environ` None reads the
+    process environment over `.env`.
+    """
+    if environ is None:
+        environ = federation_auth_environment()
+    try:
+        return config, with_service_auth(
+            config, factory, transport=transport, environ=environ, mcp_transport=mcp_transport
+        )
+    except FederationConfigurationError as exc:
+        log.error(
+            "composition.federation.service_auth_misconfigured",
+            error=str(exc),
+            dropped=sorted(s.name for s in config.servers) if config else [],
+        )
+        return without_remote_servers(config), factory
+
+
 async def build_federation(
     settings: Settings,
     factory: SessionFactory | None = None,
@@ -906,18 +953,18 @@ async def build_federation(
     """
     try:
         config = build_federation_config(settings)
-        # Innermost: only remote MCP servers carry a service credential, and
-        # the local providers below open themselves before reaching it.
-        factory = with_service_auth(
-            config,
-            factory,
-            transport=transport,
-            environ=federation_auth_environment() if auth_environ is None else auth_environ,
-            mcp_transport=mcp_transport,
-        )
     except FederationConfigurationError as exc:
         log.error("composition.federation.misconfigured", error=str(exc))
         return None
+    # Innermost: only remote MCP servers carry a service credential, and the
+    # local providers below open themselves before reaching it.
+    config, factory = _authenticate_remote_servers(
+        config,
+        factory,
+        transport=transport,
+        environ=auth_environ,
+        mcp_transport=mcp_transport,
+    )
 
     # Local providers -- Wikipedia, and SerpApi when a key is configured.
     # They are not remote MCP servers, but they are governed by the same
@@ -978,7 +1025,7 @@ async def build_federation(
         else:
             log.warning("composition.wallet_tools.none_available", reason="no INFURA_KEY")
 
-    if config is None:
+    if not has_servers(config):
         log.info("composition.federation.disabled", reason="no servers configured")
         return None
 

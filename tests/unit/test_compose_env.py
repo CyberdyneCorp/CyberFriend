@@ -51,6 +51,14 @@ DEPLOYMENT_SETTINGS = {
     # gate would be configured, reported at startup, and still unreachable.
     "FEDERATION_CREDENTIAL_HOLDERS": ("bot", "admin"),
     "FEDERATION_MAX_TOOLS_PER_RUN": ("bot", "admin"),
+    # CyberWealth's service credential. Undeclared, the bot sees none of it,
+    # opens CyberWealth without a bearer, gets 401 and reports the server
+    # unreachable while the platform shows the credential as set.
+    "FEDERATION_AUTH_CYBERWEALTH_ISSUER": ("bot",),
+    "FEDERATION_AUTH_CYBERWEALTH_CLIENT_ID": ("bot",),
+    "FEDERATION_AUTH_CYBERWEALTH_CLIENT_SECRET": ("bot",),
+    "FEDERATION_AUTH_CYBERWEALTH_AUDIENCE": ("bot",),
+    "FEDERATION_AUTH_CYBERWEALTH_SCOPE": ("bot",),
     "WEB_TOOLS_ENABLED": ("bot", "admin"),
     "SERPAPI_KEY": ("bot",),
     # Market data is merged into the bot's federation; declared here or an

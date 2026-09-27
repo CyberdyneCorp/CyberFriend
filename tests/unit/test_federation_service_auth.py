@@ -15,6 +15,7 @@ import base64
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -55,6 +56,7 @@ from chatmemory.app.authorization import (
 from chatmemory.app.memory import PUBLIC_SOURCE_SYSTEMS, answer_provenance
 from chatmemory.app.reasoning.evidence import SourcedCitation
 from chatmemory.composition import build_federation
+from chatmemory.config import federation_auth_environment
 from chatmemory.domain.audience import Audience, DeliveryMode
 from chatmemory.domain.identity import ChannelRef
 from chatmemory.ports.answers import Answer
@@ -473,7 +475,7 @@ async def test_build_federation_sends_the_bearer_from_the_environment() -> None:
     assert headers and set(headers) == {"Bearer token-1"}
 
 
-async def test_a_bad_credential_disables_federation_with_an_error() -> None:
+async def test_a_bad_credential_drops_the_remote_servers_with_an_error() -> None:
     with capture_logs() as logs:
         tools = await build_federation(
             settings(
@@ -482,9 +484,53 @@ async def test_a_bad_credential_disables_federation_with_an_error() -> None:
             ),
             auth_environ=ENV,  # names cyberwealth, which is not configured
         )
-    assert tools is None
-    assert any(e["event"] == "composition.federation.misconfigured" for e in logs)
+    assert tools is None  # issues was the only server, and nothing local is on
+    assert any(e["event"] == "composition.federation.service_auth_misconfigured" for e in logs)
     assert SECRET not in json.dumps(logs, default=str)
+
+
+async def test_a_bad_credential_keeps_the_local_tools() -> None:
+    """A refused credential costs the remote servers it was for, not Wikipedia."""
+    with capture_logs() as logs:
+        tools = await build_federation(
+            settings(
+                federation_servers="issues=https://issues.example/mcp",
+                federation_tool_allowlist="issues:search:ro",
+                web_tools_enabled=True,
+            ),
+            auth_environ=ENV,  # names cyberwealth, which is not configured
+        )
+    assert tools is not None
+    try:
+        assert "wikipedia:search" in tools.federation.permits
+        assert not any(name.startswith("issues:") for name in tools.federation.permits)
+    finally:
+        await tools.federation.aclose()
+    refused = [e for e in logs if e["event"] == "composition.federation.service_auth_misconfigured"]
+    assert refused and refused[0]["dropped"] == ["issues"]
+    assert SECRET not in json.dumps(logs, default=str)
+
+
+def test_the_process_environment_supplies_credentials_over_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The only production source of the credentials: `.env` under the process."""
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "FEDERATION_AUTH_CYBERWEALTH_CLIENT_ID=from-dotenv\n"
+        "FEDERATION_AUTH_CYBERWEALTH_AUDIENCE=cyberwealth\n"
+        "DISCORD_TOKEN=not-a-federation-key\n"
+    )
+    monkeypatch.setenv("FEDERATION_AUTH_CYBERWEALTH_CLIENT_ID", "from-process")
+    monkeypatch.setenv("FEDERATION_AUTH_CYBERWEALTH_CLIENT_SECRET", SECRET)
+    monkeypatch.setenv("FEDERATION_SERVERS", "not-a-federation-key-either")
+
+    found = federation_auth_environment(str(dotenv))
+
+    assert found["FEDERATION_AUTH_CYBERWEALTH_CLIENT_ID"] == "from-process"
+    assert found["FEDERATION_AUTH_CYBERWEALTH_CLIENT_SECRET"] == SECRET
+    assert found["FEDERATION_AUTH_CYBERWEALTH_AUDIENCE"] == "cyberwealth"
+    assert all(key.startswith("FEDERATION_AUTH_") for key in found)
 
 
 # --- personal tools and results ------------------------------------------

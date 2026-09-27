@@ -53,6 +53,11 @@ configuration error, not a runtime failure.
 - WHEN a credentialled server's target or its issuer is not HTTPS, other than on localhost
 - THEN startup SHALL report a federation configuration error
 
+#### Scenario: A credential error costs only the remote servers
+- WHEN a service credential is refused at startup and local web, market or wallet tools are enabled
+- THEN the remote MCP servers SHALL NOT be registered for that boot
+- AND the local tools SHALL still be registered
+
 ### Requirement: Personal tools are answered only in direct messages
 
 A federated tool whose name starts with `my_` SHALL be invocable only for an

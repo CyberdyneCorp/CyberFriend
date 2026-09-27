@@ -4,7 +4,8 @@
 - [x] 1.2 `ServiceTokenSource`: discovery, `client_credentials` grant with audience and scope, cache until expiry minus margin, one fetch at a time, secret and token never logged
 - [x] 1.3 `ServiceBearerAuth` (`httpx2.Auth`): bearer on every request, one retry with a fresh token on `401`
 - [x] 1.4 Session factory: an authenticated `httpx2.AsyncClient` per credentialled server, others unchanged; wired in `build_federation`
-- [x] 1.5 Tests: token cached and refreshed; `401` refetches once; the header reaches only its own server; a real MCP server over ASGI sees the bearer; config errors
+- [x] 1.6 Deployment: the CyberWealth `FEDERATION_AUTH_*` variables declared on the bot service in `docker-compose.yml`; a refused credential drops only the remote servers, keeping the local tools
+- [x] 1.5 Tests: token cached and refreshed; `401` refetches once; the header reaches only its own server; a real MCP server over ASGI sees the bearer; config errors; the process environment wins over `.env`; the compose file passes the credential to the bot
 
 ## 2. Personal tools and results
 
