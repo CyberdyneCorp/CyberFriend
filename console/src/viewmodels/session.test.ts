@@ -108,6 +108,19 @@ describe("SessionVM roles", () => {
     expect(vm.canChange).toBe(false);
   });
 
+  it("offers question text only to an admin signed in as a person", () => {
+    const session = fakeSession();
+    const vm = new SessionVM(session, fakeApi());
+    session.signIn(ADMIN);
+    expect(vm.canReadQuestions).toBe(true);
+    session.signIn(OPERATOR);
+    expect(vm.canReadQuestions).toBe(false);
+    // An admin token (sign-in not configured) still may not read it.
+    session.signIn(TOKEN, "cfa_x");
+    expect(vm.canChange).toBe(true);
+    expect(vm.canReadQuestions).toBe(false);
+  });
+
   it("gives nothing to a principal with no console role", () => {
     const session = fakeSession();
     const vm = new SessionVM(session, fakeApi());

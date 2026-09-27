@@ -84,7 +84,8 @@ Last reviewed 2026-09-25.
   there is an answer (#45, #46).
 - **Feature requests** — `/suggest` and `/suggestions`, and six explicit
   suggestion forms in a message, confirmed with a button; no contact details,
-  idempotent, five a day, purged on opt-out.
+  idempotent, five a day, purged on opt-out. Triaged in the admin console
+  (audited); authors who opted in get one DM per status change.
 - **Admin console** — federation, channels, retention, opt-outs and tokens (#22,
   #23, #24).
 - **MCP interface** to the corpus, under the same permission rules; its

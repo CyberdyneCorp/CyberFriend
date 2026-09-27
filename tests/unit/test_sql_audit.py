@@ -47,6 +47,7 @@ SQL_MODULES = (
     "erasure_sql",
     "tracing_notice_sql",
     "accounts_sql",
+    "usage_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -501,6 +502,37 @@ UNSCOPED: dict[str, str] = {
         "write; the requester's answer to 'tell you when its status changes?', "
         "keyed on their person id as well as the row id. Returns no row"
     ),
+    "feature_requests_sql.TRIAGE_PAGE": (
+        "the admin console's list of every suggestion, with the author's display "
+        "name and a count of others with the same text. A suggestion is the "
+        "person's own words given to the team with a disclosure, never channel "
+        "content, so there is no channel to scope by"
+    ),
+    "feature_requests_sql.TRIAGE_COUNT": (
+        "a count of suggestions for the console's pager, optionally one status. "
+        "No content"
+    ),
+    "feature_requests_sql.TRIAGE_ROW": (
+        "one suggestion by id for an admin's triage, locked so the change is "
+        "recorded against the row it was applied to; the person's own words, "
+        "never channel content"
+    ),
+    "feature_requests_sql.TRIAGE_EXISTS": (
+        "a flag: whether the suggestion an admin names as the original exists"
+    ),
+    "feature_requests_sql.TRIAGE_UPDATE": (
+        "write; an admin's status, note and duplicate link on one suggestion, "
+        "keyed on its id. Returns no row"
+    ),
+    "feature_requests_sql.CLAIM_STATUS_NEWS": (
+        "write and read; claims status changes to announce to authors who opted "
+        "in, returning each author's own suggestion and platform id so the bot "
+        "can message them their own words. Never channel content"
+    ),
+    "feature_requests_sql.RELEASE_STATUS_NEWS": (
+        "write; puts back a claim whose message was not sent, keyed on the row "
+        "id and the status it claimed. Returns no row"
+    ),
     # --- privacy_sql: /privacy, the asker's own rows ------------------------
     "privacy_sql.IS_OPTED_OUT": (
         "the asker's own opt-out flag, keyed on their person id"
@@ -643,6 +675,34 @@ UNSCOPED: dict[str, str] = {
     "accounts_sql.DELETE_OLD_CODES": (
         "ingest maintenance; deletes link codes past their day, by age. "
         "Returns no row"
+    ),
+    # --- usage_sql: who the admin usage view must not show ---------------
+    "usage_sql.EXCLUDED_PEOPLE": (
+        "platform ids of opted-out people and people being erased, so the "
+        "usage view can drop them. Ids only, no content"
+    ),
+    "usage_sql.ERASED_PEOPLE": (
+        "platform ids and erasure times, so the usage view drops everything "
+        "up to an erasure. No content"
+    ),
+    "usage_sql.PENDING_TRACES": (
+        "ids of exported traces whose deletion was requested, so the usage "
+        "view leaves them out. No content"
+    ),
+    "usage_sql.NAMES": (
+        "display names for the platform ids in an operator's usage summary; "
+        "a name, never anything the person wrote"
+    ),
+    "usage_sql.PERSON": (
+        "one person's id, name and tracing-notice time, for the audited "
+        "admin questions view. No content"
+    ),
+    "usage_sql.VOICE_BY_PERSON": (
+        "transcribed seconds per person from the voice ledger, excluded "
+        "people left out. Numbers only"
+    ),
+    "usage_sql.VOICE_ANONYMOUS": (
+        "the anonymous voice seconds total folded from erased people. A number"
     ),
 }
 

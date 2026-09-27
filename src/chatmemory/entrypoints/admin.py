@@ -11,9 +11,14 @@ corpus or the bot's accounts: one lets this process act as the `cyberfriend`
 client at CyberdyneAuth, the other decrypts the tokens in `admin_session`.
 Both are in `admin.oidc.config.SECRET_VARS` and are never logged or shown.
 
+With `LANGFUSE_HOST` and the Langfuse key pair set it also holds those keys,
+for the usage view's live reads (`GET /api/public/metrics` and
+`/api/public/traces`). The pair is project-wide -- Langfuse has no read-only
+key -- so it is used server-side only and never reaches a browser.
+
 Its only outbound HTTP is to CyberdyneAuth (discovery, keys, token, userinfo,
-revocation), through the transport `build` is given, like the bot's
-`Edges.http_transport`.
+revocation) and to Langfuse's read APIs, through the transport `build` is
+given, like the bot's `Edges.http_transport`.
 
 Two consequences shape this file:
 
@@ -47,6 +52,7 @@ from pathlib import Path
 import httpx
 import structlog
 import uvicorn
+from pydantic import PositiveInt, TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from starlette.applications import Starlette
 
@@ -61,9 +67,15 @@ from chatmemory.adapters.store.admin_session_postgres import (
     PostgresSessionStore,
 )
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.adapters.store.feature_requests_postgres import PostgresFeatureRequestTriage
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
 from chatmemory.adapters.store.trace_postgres import PostgresTraceIndex
+from chatmemory.adapters.store.usage_postgres import PostgresUsageDirectory
 from chatmemory.adapters.tracing.langfuse import warn_unless_supported
+from chatmemory.adapters.tracing.langfuse_usage import (
+    LangfuseUsageSource,
+    UnconfiguredUsageSource,
+)
 from chatmemory.admin.handlers.federation import make_probe
 from chatmemory.admin.handlers.queries import (
     PostgresChannelDirectory,
@@ -85,9 +97,11 @@ from chatmemory.app.configuration import (
     RuntimeConfiguration,
 )
 from chatmemory.app.optout import OptOutService
+from chatmemory.app.usage import UsageService
 from chatmemory.config import Settings
 from chatmemory.mcp.auth import PostgresTokenStore
 from chatmemory.ports.configuration import ResolvedValue, SettingSource
+from chatmemory.ports.usage import UsageSource
 
 log = structlog.get_logger()
 
@@ -110,6 +124,20 @@ Set (with the client id, secret, session key and public URL, see
 (read-only), and admin rights come only from the identity provider's role.
 Unsetting it again is the break-glass rollback; the other four may stay set.
 """
+
+LANGFUSE_VARS = ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+"""The trace store the usage view reads. All three, or usage is unavailable.
+
+The key pair is project-wide (ingest, read, delete): Langfuse has no read-only
+key. It is used server-side only and never sent to a browser.
+"""
+LANGFUSE_ENVIRONMENT_VAR = "LANGFUSE_ENVIRONMENT"
+TRACE_RETENTION_VAR = "TRACE_RETENTION_DAYS"
+DEFAULT_TRACE_RETENTION_DAYS = 90
+"""What the usage screen states as the trace retention period. It is the
+period the ingest sweep enforces and the bot's `/privacy` states, so it is the
+same variable with the same default, never a number of the console's own."""
+_RETENTION_DAYS: TypeAdapter[int] = TypeAdapter(PositiveInt)
 
 FORBIDDEN_CREDENTIALS = ("DISCORD_TOKEN", "LLM_API_KEY", "SERPAPI_KEY")
 """Credentials this service must not be given.
@@ -188,6 +216,42 @@ def sign_in(
     return SignIn(settings, provider, PostgresLoginStore(engine), PostgresSessionStore(engine))
 
 
+def usage_source(
+    environ: Mapping[str, str], transport: httpx.AsyncBaseTransport | None
+) -> UsageSource:
+    """Langfuse's read APIs when all three variables are set; otherwise unavailable."""
+    host, public_key, secret_key = (environ.get(n, "").strip() for n in LANGFUSE_VARS)
+    if not (host and public_key and secret_key):
+        log.info("admin.usage_unavailable", reason="LANGFUSE_HOST and keys are not all set")
+        return UnconfiguredUsageSource()
+    return LangfuseUsageSource(
+        host,
+        public_key,
+        secret_key,
+        environment=environ.get(LANGFUSE_ENVIRONMENT_VAR, "").strip() or "production",
+        transport=transport,
+    )
+
+
+def trace_retention_days(environ: Mapping[str, str]) -> int | None:
+    """`TRACE_RETENTION_DAYS` as the bot and ingest read it; None when unreadable.
+
+    Parsed as `Settings` parses it (pydantic's lax int, then positive), so
+    '+30' or '1_000' state the period the sweep enforces. Unreadable does not
+    stop the console (a mistyped variable is the worst moment for it to be
+    down), but it states no period rather than a default the sweep is not
+    enforcing: bot and ingest refuse to start on that value.
+    """
+    raw = environ.get(TRACE_RETENTION_VAR, "").strip()
+    if not raw:
+        return DEFAULT_TRACE_RETENTION_DAYS
+    try:
+        return _RETENTION_DAYS.validate_python(raw)
+    except ValidationError:
+        log.warning("admin.trace_retention_unreadable", variable=TRACE_RETENTION_VAR)
+        return None
+
+
 def database_url(environ: Mapping[str, str]) -> str:
     url = environ.get(DATABASE_URL_VAR, "").strip()
     if not url:
@@ -238,7 +302,8 @@ def build(
     `create_async_engine` is lazy, so this does no I/O: the first connection
     happens on the first request or the first refresh, and CyberdyneAuth's
     discovery on the first sign-in (or `main`'s warm-up). `transport` carries
-    every outbound call to CyberdyneAuth; None is the real network.
+    every outbound call, to CyberdyneAuth and to Langfuse's read APIs; None
+    is the real network.
 
     An issuer without the other sign-in settings raises `MisconfiguredSignIn`,
     naming what is missing: the issuer alone would downscope every token to
@@ -274,6 +339,12 @@ def build(
         ),
         mcp_tokens=PostgresTokenStore(engine),
         probe=make_probe(),
+        feature_requests=PostgresFeatureRequestTriage(engine),
+        usage=UsageService(
+            usage_source(environ, transport),
+            PostgresUsageDirectory(engine),
+            retention_days=trace_retention_days(environ),
+        ),
     )
     signing_in = sign_in(settings, engine, transport)
     return ConsoleProcess(
