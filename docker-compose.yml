@@ -298,9 +298,17 @@ services:
       - ADMIN_PUBLIC_URL=${ADMIN_PUBLIC_URL:-}
       # Optional; unset means `openid email profile`.
       - ADMIN_OIDC_SCOPES=${ADMIN_OIDC_SCOPES:-}
-      # The host only, no keys: read at startup to warn when Langfuse is not
-      # on v3 (docs/operations.md, "Langfuse version").
+      # The usage view reads Langfuse live (docs/admin-console.md, "Usage").
+      # The host is also read at startup to warn when Langfuse is not on v3.
+      # The key pair is project-wide and is used server-side only; without it
+      # the usage view says usage is unavailable.
       - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_ENVIRONMENT=${LANGFUSE_ENVIRONMENT:-production}
+      # The usage screen states how long traces are kept; the same period the
+      # ingest sweep enforces and /privacy states.
+      - TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}
       # Its own domain. Separate from the MCP one so the console can be closed
       # to the internet without taking retrieval with it.
       - SERVICE_FQDN_ADMIN_8083

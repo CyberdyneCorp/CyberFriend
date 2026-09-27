@@ -9,6 +9,10 @@
  * appears in this file, the console has started rendering something the API
  * promised never to send.
  *
+ * The single exception is `UsageQuestion.question`: the words a person asked
+ * the assistant, which the API returns only to an admin signed in with
+ * CyberdyneAuth, never with the answer or anything it quoted.
+ *
  * Nothing here names an operator either. The credential decides who is
  * acting; a request that could name one would make the audit trail an
  * assertion rather than a fact.
@@ -222,4 +226,73 @@ export interface FeatureRequestPatch {
 
 export interface FeatureRequestTriaged extends Changed {
   request: FeatureRequest;
+}
+
+/** How GET /api/usage/summary groups its rows. */
+export type UsageGroup = "person" | "feature" | "model" | "tool";
+
+/** Inclusive whole UTC days, as `YYYY-MM-DD`. */
+export interface UsageWindow {
+  from: string;
+  to: string;
+}
+
+/**
+ * One row of the usage summary. A figure that does not apply to the grouping
+ * is null (a model has no tool calls), which is not the same as zero.
+ */
+export interface UsageRow {
+  /** A platform user id, a feature, a model or a tool name. */
+  key: string;
+  /** A person's current display name; null when none is known, or not a person. */
+  name: string | null;
+  questions: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  /** USD, an estimate from the trace store's price table. */
+  cost: number | null;
+  tool_calls: number | null;
+  tools: string[];
+  voice_seconds: number | null;
+}
+
+export interface UsageTotals {
+  questions: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+  tool_calls: number;
+  voice_seconds: number;
+}
+
+/** GET /api/usage/summary. Counts only, never text. */
+export interface UsageSummary extends UsageWindow {
+  group: UsageGroup;
+  /** "traced question runs": the totals undercount by design. */
+  label: string;
+  /** How long a trace is kept; null when the API could not read the setting. */
+  retention_days: number | null;
+  rows: UsageRow[];
+  totals: UsageTotals;
+}
+
+/** One question a person asked: their own words and metadata, nothing of the answer. */
+export interface UsageQuestion {
+  timestamp: string;
+  feature: string;
+  tools: string[];
+  question: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost: number | null;
+}
+
+/** GET /api/usage/people/{id}/questions: admin signed in with CyberdyneAuth only. */
+export interface PersonQuestions extends UsageWindow {
+  person: { platform_user_id: string; person_id: number | null; name: string | null };
+  page: number;
+  total_pages: number;
+  /** Questions traced before the person was told they are recorded: counted, never shown. */
+  hidden_before_notice: number;
+  questions: UsageQuestion[];
 }

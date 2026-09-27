@@ -225,6 +225,7 @@ OPERATOR_READS = {
     "/api/optouts",
     "/api/tokens",
     "/api/feature-requests",
+    "/api/usage/summary",
 }
 
 

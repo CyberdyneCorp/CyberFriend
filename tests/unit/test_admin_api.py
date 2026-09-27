@@ -38,6 +38,7 @@ from chatmemory.app.authorization import ToolEffect
 from chatmemory.app.configuration import ConfigurationEditor, RuntimeConfiguration
 from chatmemory.app.optout import OptOutService, PersonPurge
 from chatmemory.app.tokens import InMemoryTokenStore, TokenRecord
+from chatmemory.app.usage import UsageService
 from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints.admin import environment_baseline
 from chatmemory.ports.configuration import StoredSetting
@@ -50,6 +51,7 @@ from chatmemory.ports.feature_requests import (
     TriageRefusal,
     TriageResult,
 )
+from tests.unit.usage_fakes import FakeUsageDirectory, FakeUsageSource
 
 ANA = Operator("ana")
 BEN = Operator("ben")
@@ -302,6 +304,7 @@ async def build_console(
     oidc_configured: bool = False,
     sign_in: SignIn | None = None,
     suggestions: Sequence[TriageEntry] = (),
+    usage: UsageService | None = None,
 ) -> Console:
     tokens = InMemoryOperatorTokens()
     issued = await tokens.issue(ANA, "laptop")
@@ -326,6 +329,7 @@ async def build_console(
         mcp_tokens=ReviewAndRevokeOnly(mcp_tokens),
         probe=probe,
         feature_requests=feature_requests,
+        usage=usage or UsageService(FakeUsageSource(), FakeUsageDirectory(), retention_days=90),
     )
     app = build_app(services, tokens, oidc_configured=oidc_configured, sign_in=sign_in)
     return Console(

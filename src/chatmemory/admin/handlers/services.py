@@ -27,6 +27,7 @@ from chatmemory.admin.handlers.queries import (
 from chatmemory.app.configuration import ConfigurationEditor, RuntimeConfiguration
 from chatmemory.app.optout import OptOutService
 from chatmemory.app.tokens import TokenDirectory
+from chatmemory.app.usage import UsageService
 from chatmemory.ports.feature_requests import FeatureRequestTriage
 
 ServerProbe = Callable[[ServerConfig], Awaitable[ServerDiscovery]]
@@ -45,7 +46,9 @@ class AdminServices:
     Note what is absent: no Discord client, no model client, no search
     backend. The console configures the agent and has no route to the corpus'
     content or to the credentials the agent runs on, and the way that is
-    guaranteed is that it is never handed either.
+    guaranteed is that it is never handed either. The one exception, `usage`,
+    holds the Langfuse keys server-side and returns only a person's own
+    questions, to an admin signed in as a person.
     """
 
     #: The settings in force, re-read on a cadence, with provenance.
@@ -75,3 +78,7 @@ class AdminServices:
     #: What people suggested, and the admin's triage of it. A suggestion is
     #: the person's own words given to the team, never corpus content.
     feature_requests: FeatureRequestTriage
+    #: Usage and cost, read live from the trace store with exclusions applied.
+    #: The only port here that returns content: a person's own questions, for
+    #: an admin signed in as a person (`admin_oidc`), audited.
+    usage: UsageService

@@ -295,6 +295,46 @@ def test_the_baseline_agrees_with_the_settings_class() -> None:
     assert baseline["ask_min_confidence"].value == settings.ask_min_confidence
 
 
+def test_the_usage_screen_states_the_retention_the_sweep_enforces() -> None:
+    """Same variable, same default as the bot and ingest: the console never
+    states a period of its own."""
+    from chatmemory.config import Settings
+
+    default = Settings.model_fields["trace_retention_days"].default
+
+    assert admin.trace_retention_days({}) == default
+    assert admin.trace_retention_days({"TRACE_RETENTION_DAYS": " 30 "}) == 30
+
+
+@pytest.mark.parametrize("raw", ["banana", "0", "-5", "３０", "30.5", "1e2"])
+def test_an_unreadable_retention_states_no_period_and_still_starts(raw: str) -> None:
+    assert admin.trace_retention_days({"TRACE_RETENTION_DAYS": raw}) is None
+
+
+@pytest.mark.parametrize("raw", ["30", " 30 ", "+30", "30.0", "1_000", "banana", "0", "30.5"])
+def test_the_console_reads_the_retention_exactly_as_settings_does(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whatever the sweep and `/privacy` enforce, the console states; whatever
+    stops bot and ingest from starting, the console states no period for."""
+    from pydantic import ValidationError
+
+    from chatmemory.config import Settings
+
+    monkeypatch.setenv("TRACE_RETENTION_DAYS", raw)
+    try:
+        expected: int | None = Settings(
+            discord_token="x",  # type: ignore[call-arg]
+            discord_guild_id=1,
+            database_url="postgresql+asyncpg://u:p@localhost/db",
+            llm_api_key="k",
+        ).trace_retention_days
+    except ValidationError:
+        expected = None
+
+    assert admin.trace_retention_days({"TRACE_RETENTION_DAYS": raw}) == expected
+
+
 # --- the interface -----------------------------------------------------
 
 

@@ -20,6 +20,7 @@ import { SessionVM } from "./session.svelte";
 import { SettingsVM } from "./settings.svelte";
 import { StatusVM } from "./status.svelte";
 import { TokensVM } from "./tokens.svelte";
+import { UsageVM } from "./usage.svelte";
 
 /** Where an unknown address lands. */
 export const HOME = "/status";
@@ -66,6 +67,10 @@ export class ConsoleVM {
 
   featureRequests(): FeatureRequestsVM {
     return new FeatureRequestsVM(this.#api);
+  }
+
+  usage(): UsageVM {
+    return new UsageVM(this.#api, () => this.session.canReadQuestions);
   }
 
   audit(): AuditVM {

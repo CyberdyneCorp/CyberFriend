@@ -43,6 +43,12 @@ export class SessionVM {
   /** Whether to show controls that change something. Hiding them is a courtesy; the API refuses. */
   readonly canChange = $derived(allows(this.role, "admin"));
   readonly viaToken = $derived(this.principal?.via === "token");
+  /**
+   * Whether to offer a person's question text: an admin signed in as a person
+   * through CyberdyneAuth, never a token whatever its role. The API refuses
+   * everybody else; this only keeps the button off screens it would fail on.
+   */
+  readonly canReadQuestions = $derived(this.canChange && this.principal?.via === "oidc");
   readonly showTokenForm = $derived(this.signInOffered === false || this.tokenRequested);
   readonly canSubmit = $derived(!this.checking && this.candidate.trim() !== "");
   readonly loginUrl: string;

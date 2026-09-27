@@ -46,6 +46,7 @@ SQL_MODULES = (
     "privacy_sql",
     "erasure_sql",
     "tracing_notice_sql",
+    "usage_sql",
 )
 
 VIEWER_BIND = ":channel_ids"
@@ -622,6 +623,34 @@ UNSCOPED: dict[str, str] = {
     "tracing_notice_sql.CLAIM_NOTICE": (
         "write; a notice version and time on the asker's own person row, "
         "refused for an opted-out person. No content"
+    ),
+    # --- usage_sql: who the admin usage view must not show ---------------
+    "usage_sql.EXCLUDED_PEOPLE": (
+        "platform ids of opted-out people and people being erased, so the "
+        "usage view can drop them. Ids only, no content"
+    ),
+    "usage_sql.ERASED_PEOPLE": (
+        "platform ids and erasure times, so the usage view drops everything "
+        "up to an erasure. No content"
+    ),
+    "usage_sql.PENDING_TRACES": (
+        "ids of exported traces whose deletion was requested, so the usage "
+        "view leaves them out. No content"
+    ),
+    "usage_sql.NAMES": (
+        "display names for the platform ids in an operator's usage summary; "
+        "a name, never anything the person wrote"
+    ),
+    "usage_sql.PERSON": (
+        "one person's id, name and tracing-notice time, for the audited "
+        "admin questions view. No content"
+    ),
+    "usage_sql.VOICE_BY_PERSON": (
+        "transcribed seconds per person from the voice ledger, excluded "
+        "people left out. Numbers only"
+    ),
+    "usage_sql.VOICE_ANONYMOUS": (
+        "the anonymous voice seconds total folded from erased people. A number"
     ),
 }
 
