@@ -21,9 +21,9 @@ class PostgresUsageDirectory:
 
     async def exclusions(self, window: UsageWindow) -> UsageExclusions:
         async with self._engine.connect() as conn:
-            people = (await conn.execute(sql.EXCLUDED_PEOPLE)).scalars().all()
+            people: Sequence[str] = (await conn.execute(sql.EXCLUDED_PEOPLE)).scalars().all()
             erased = (await conn.execute(sql.ERASED_PEOPLE)).all()
-            pending = (
+            pending: Sequence[str] = (
                 await conn.execute(
                     sql.PENDING_TRACES,
                     {"confirmed_after": datetime.now(UTC) - DELETION_LAG},

@@ -179,7 +179,7 @@ def _environ(database_url: str) -> dict[str, str]:
 async def _seed(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         for uid, name in ((ANA, "Ana"), (OLLY, "Olly"), (ERIN, "")):
-            pid = (
+            pid: int = (
                 await conn.execute(
                     text("INSERT INTO person (display_name) VALUES (:n) RETURNING id"),
                     {"n": name},
