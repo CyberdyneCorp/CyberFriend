@@ -15,17 +15,17 @@ the console hammer the issuer.
 from __future__ import annotations
 
 import asyncio
-import base64
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 import httpx
 import jwt
 import structlog
 
+from chatmemory.adapters.oidc_client import client_auth, token_auth_methods
 from chatmemory.admin.oidc.config import SignInSettings
 
 log = structlog.get_logger()
@@ -128,7 +128,6 @@ class OIDCProvider:
         issuer = _text(doc, "issuer")
         if issuer.rstrip("/") != self._settings.issuer.rstrip("/"):
             raise ProviderUnavailable("discovery names a different issuer")
-        methods = doc.get("token_endpoint_auth_methods_supported")
         return Discovery(
             issuer=issuer,
             authorization_endpoint=_text(doc, "authorization_endpoint"),
@@ -137,9 +136,7 @@ class OIDCProvider:
             jwks_uri=_text(doc, "jwks_uri"),
             end_session_endpoint=_optional_text(doc, "end_session_endpoint"),
             revocation_endpoint=_optional_text(doc, "revocation_endpoint"),
-            token_auth_methods=tuple(m for m in methods if isinstance(m, str))
-            if isinstance(methods, list)
-            else (),
+            token_auth_methods=token_auth_methods(doc),
         )
 
     async def _fetch_keys(self) -> None:
@@ -247,14 +244,8 @@ class OIDCProvider:
         )
 
     def _client_auth(self, form: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
-        """client_secret_basic unless the issuer offers only client_secret_post."""
-        client_id, secret = self._settings.client_id, self._settings.client_secret
         methods = self._discovery.token_auth_methods if self._discovery else ()
-        if methods and "client_secret_basic" not in methods and "client_secret_post" in methods:
-            return {**form, "client_id": client_id, "client_secret": secret}, {}
-        # RFC 6749 2.3.1: form-encode each half before the Basic encoding.
-        pair = f"{quote(client_id, safe='')}:{quote(secret, safe='')}"
-        return form, {"Authorization": "Basic " + base64.b64encode(pair.encode()).decode()}
+        return client_auth(form, self._settings.client_id, self._settings.client_secret, methods)
 
     async def _get_json(
         self, url: str, headers: Mapping[str, str] | None = None

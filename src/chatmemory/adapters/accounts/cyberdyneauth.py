@@ -26,16 +26,15 @@ email, the name or a token: only statuses.
 
 from __future__ import annotations
 
-import base64
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 import structlog
 
+from chatmemory.adapters.oidc_client import client_auth, token_auth_methods
 from chatmemory.ports.accounts import (
     ProvisioningInvalidName,
     ProvisioningRateLimited,
@@ -124,9 +123,10 @@ class CyberdyneAuthProvisioner:
         if self._token is not None and self._token.expires_at - TOKEN_EXPIRY_MARGIN_SECONDS > now:
             return self._token.value
         endpoint = await self._discovery(http)
-        data, headers = _client_auth(
+        data, headers = client_auth(
             {"grant_type": "client_credentials", "scope": SCOPE},
-            self._client,
+            self._client.client_id,
+            self._client.client_secret,
             endpoint.auth_methods,
         )
         response = await http.post(endpoint.token_endpoint, data=data, headers=headers)
@@ -146,13 +146,7 @@ class CyberdyneAuthProvisioner:
             raise ProvisioningUnavailable("discovery names a different issuer")
         if not isinstance(token_endpoint, str) or not token_endpoint:
             raise ProvisioningUnavailable("discovery names no token endpoint")
-        methods = doc.get("token_endpoint_auth_methods_supported")
-        self._endpoint = _Endpoint(
-            token_endpoint=token_endpoint,
-            auth_methods=tuple(m for m in methods if isinstance(m, str))
-            if isinstance(methods, list)
-            else (),
-        )
+        self._endpoint = _Endpoint(token_endpoint, token_auth_methods(doc))
         return self._endpoint
 
 
@@ -175,17 +169,6 @@ def _raise_unless_accepted(status: int) -> None:
     if status == httpx.codes.UNPROCESSABLE_ENTITY:
         raise ProvisioningInvalidName("name refused")
     raise ProvisioningUnavailable(f"unexpected status {status}")
-
-
-def _client_auth(
-    form: dict[str, str], client: ProvisioningClient, methods: tuple[str, ...]
-) -> tuple[dict[str, str], dict[str, str]]:
-    """client_secret_basic unless the issuer offers only client_secret_post."""
-    if methods and "client_secret_basic" not in methods and "client_secret_post" in methods:
-        return {**form, "client_id": client.client_id, "client_secret": client.client_secret}, {}
-    # RFC 6749 2.3.1: form-encode each half before the Basic encoding.
-    pair = f"{quote(client.client_id, safe='')}:{quote(client.client_secret, safe='')}"
-    return form, {"Authorization": "Basic " + base64.b64encode(pair.encode()).decode()}
 
 
 def _bearer(body: Mapping[str, Any], now: float) -> _Token:

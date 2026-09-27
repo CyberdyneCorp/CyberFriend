@@ -31,14 +31,19 @@ purged through `purge_person_derived` (add-privacy-dashboard).
   `client_credentials` client whose only scope is `users:provision`. It is not
   the admin BFF client.
 - Body `{email, name?, locale?}`. Nothing else.
-- Response: always 202 `{"status": "accepted"}`. No `sub`, no "exists" flag.
-  The response is the same whether the account was created, already existed,
-  or was silently throttled.
+- Response to a valid request: 202 `{"status": "accepted"}`. No `sub`, no
+  "exists" flag. The response is the same whether the account was created,
+  already existed, or was silently throttled.
+- 422 when the `name` is refused by CyberdyneAuth's name rules. It judges the
+  name alone, before any lookup, so it is the same for a known and an unknown
+  email.
 - CyberdyneAuth creates an unverified, passwordless account with
   `created_via = client:<client_id>` and sends an invitation email. Accepting
   the invitation sets a password and verifies the email.
 - An existing email gets a neutral notice at most once per 24 hours.
 - Per-client rate limit: 429. Per-email throttle: silent (still 202).
+- Neither 422 nor 429 depends on whether the email has an account, so no
+  answer the contract allows can reveal one.
 
 **The invitation goes to the email's owner, who must accept it.** A Discord
 person who enters someone else's address causes, at most, one invitation (or

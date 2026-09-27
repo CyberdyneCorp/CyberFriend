@@ -49,6 +49,9 @@ class FakeCyberdyneAuth:
     expires_in: int | None = 300
     discovered_issuer: str = ISSUER
     auth_methods: list[str] = field(default_factory=lambda: ["client_secret_basic"])
+    token_type: str = "Bearer"
+    names_token_endpoint: bool = True
+    discoveries: int = 0
     token_requests: list[httpx.Request] = field(default_factory=list)
     provisions: list[httpx.Request] = field(default_factory=list)
     issued: int = 0
@@ -59,6 +62,7 @@ class FakeCyberdyneAuth:
     def handle(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if url == f"{ISSUER}/.well-known/openid-configuration":
+            self.discoveries += 1
             return httpx.Response(200, json=self._discovery())
         if url == TOKEN_URL:
             return self._token(request)
@@ -71,18 +75,23 @@ class FakeCyberdyneAuth:
         return httpx.Response(404)
 
     def _discovery(self) -> dict[str, Any]:
-        return {
+        doc: dict[str, Any] = {
             "issuer": self.discovered_issuer,
-            "token_endpoint": TOKEN_URL,
             "token_endpoint_auth_methods_supported": self.auth_methods,
         }
+        if self.names_token_endpoint:
+            doc["token_endpoint"] = TOKEN_URL
+        return doc
 
     def _token(self, request: httpx.Request) -> httpx.Response:
         self.token_requests.append(request)
         if self.token_status != 200:
-            return httpx.Response(self.token_status, json={"error": "invalid_client"})
+            # A refusal that still looks like a token: only the status tells.
+            return httpx.Response(
+                self.token_status, json={"access_token": "refused", "token_type": "Bearer"}
+            )
         self.issued += 1
-        body: dict[str, Any] = {"access_token": f"tok-{self.issued}", "token_type": "Bearer"}
+        body: dict[str, Any] = {"access_token": f"tok-{self.issued}", "token_type": self.token_type}
         if self.expires_in is not None:
             body["expires_in"] = self.expires_in
         return httpx.Response(200, json=body)
@@ -237,6 +246,76 @@ async def test_discovery_naming_another_issuer_sends_nothing() -> None:
 
     assert fake.token_requests == []
     assert fake.provisions == []
+
+
+async def test_a_token_that_is_not_bearer_sends_nothing() -> None:
+    fake = FakeCyberdyneAuth(token_type="mac")
+
+    with pytest.raises(ProvisioningUnavailable):
+        await provisioner(fake).request_account(REQUEST)
+
+    assert fake.provisions == []
+
+
+async def test_discovery_naming_no_token_endpoint_sends_nothing() -> None:
+    fake = FakeCyberdyneAuth(names_token_endpoint=False)
+
+    with pytest.raises(ProvisioningUnavailable):
+        await provisioner(fake).request_account(REQUEST)
+
+    assert fake.token_requests == []
+    assert fake.provisions == []
+
+
+async def test_discovery_is_fetched_once() -> None:
+    fake, clock = FakeCyberdyneAuth(expires_in=60), Monotonic()
+    adapter = provisioner(fake, clock)
+
+    await adapter.request_account(REQUEST)
+    clock.now += 3600  # the token is renewed; the endpoint is not rediscovered
+    await adapter.request_account(REQUEST)
+
+    assert len(fake.token_requests) == 2
+    assert fake.discoveries == 1
+
+
+async def test_basic_credentials_are_form_encoded_first() -> None:
+    """RFC 6749 2.3.1: a secret with reserved characters is percent-encoded."""
+    fake = FakeCyberdyneAuth()
+    client = ProvisioningClient(issuer=ISSUER, client_id="cf:prov", client_secret="a+b/c=d:e")
+
+    await CyberdyneAuthProvisioner(client, transport=fake.transport()).request_account(REQUEST)
+
+    (token_request,) = fake.token_requests
+    basic = base64.b64encode(b"cf%3Aprov:a%2Bb%2Fc%3Dd%3Ae").decode()
+    assert token_request.headers["Authorization"] == f"Basic {basic}"
+
+
+async def test_the_configured_timeout_reaches_every_request() -> None:
+    seen: list[dict[str, float | None]] = []
+    fake = FakeCyberdyneAuth()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return fake.handle(request)
+
+    adapter = CyberdyneAuthProvisioner(
+        CLIENT, transport=httpx.MockTransport(handle), timeout_seconds=2.5
+    )
+    await adapter.request_account(REQUEST)
+
+    assert len(seen) == 3
+    assert all(set(t.values()) == {2.5} for t in seen)
+
+
+async def test_the_kept_token_is_not_in_its_repr() -> None:
+    fake = FakeCyberdyneAuth()
+    adapter = provisioner(fake)
+
+    await adapter.request_account(REQUEST)
+
+    assert adapter._token is not None
+    assert "tok-1" not in repr(adapter._token)
 
 
 async def test_no_answer_is_unavailable() -> None:

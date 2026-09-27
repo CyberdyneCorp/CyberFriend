@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 import discord
 import pytest
+import structlog
 from pydantic import ValidationError
 
 from chatmemory.adapters.discord.accounts import consent_text, result_text, text
@@ -348,6 +349,35 @@ async def test_a_refused_request_says_try_later_and_is_not_counted(refusal: Exce
     assert store.requests == {}
     provisioner.refusal = None
     assert (await accounts.confirm(LEO, draft)).outcome is ProvisioningOutcome.REQUESTED
+
+
+async def test_a_refused_name_warns_the_operator_without_the_name_or_email() -> None:
+    """A 422 on a name `account_name` passed means the name rules drifted apart."""
+    provisioner = RecordingProvisioner()
+    accounts = service(provisioner=provisioner)
+    draft = await accounts.draft(LEO, "", Language.ENGLISH)
+    provisioner.refusal = ProvisioningInvalidName()
+
+    with structlog.testing.capture_logs() as logs:
+        await accounts.confirm(LEO, draft)
+
+    rejected = [e for e in logs if e["event"] == "accounts.provisioning_name_rejected"]
+    assert [e["log_level"] for e in rejected] == ["warning"]
+    written = repr(logs)
+    assert EMAIL not in written and EVERYTHING["full_name"] not in written
+
+
+@pytest.mark.parametrize("refusal", [ProvisioningRateLimited(), ProvisioningUnavailable()])
+async def test_other_refusals_do_not_warn_about_the_name(refusal: Exception) -> None:
+    provisioner = RecordingProvisioner()
+    accounts = service(provisioner=provisioner)
+    draft = await accounts.draft(LEO, "", Language.ENGLISH)
+    provisioner.refusal = refusal
+
+    with structlog.testing.capture_logs() as logs:
+        await accounts.confirm(LEO, draft)
+
+    assert [e["log_level"] for e in logs if e["event"].startswith("accounts.")] == ["info"]
 
 
 async def test_an_unexpected_failure_is_uncounted_too() -> None:
