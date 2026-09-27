@@ -237,3 +237,23 @@ async def test_a_non_numeric_person_is_refused(rigged: Rigged) -> None:
     console = await rigged.console()
     ana = rigged.browser(console, "ana-sub")
     assert ana.get("/api/usage/people/ana/questions").status_code == 400
+
+
+@pytest.mark.parametrize("user_id", ["%C2%B2", "%D9%A3", "1" * 25])
+async def test_a_non_ascii_or_oversized_id_is_a_400_not_a_500(
+    rigged: Rigged, user_id: str
+) -> None:
+    # Regression: '²' passed `str.isdigit` and failed in `int()` as a 500.
+    console = await rigged.console()
+    ana = rigged.browser(console, "ana-sub")
+    assert ana.get(f"/api/usage/people/{user_id}/questions").status_code == 400
+    assert rigged.source.question_calls == []
+
+
+@pytest.mark.parametrize("page", ["9" * 5000, "1001", "0", "x"])
+async def test_a_bad_page_is_a_400_not_a_500(rigged: Rigged, page: str) -> None:
+    console = await rigged.console()
+    ana = rigged.browser(console, "ana-sub")
+    response = ana.get(QUESTIONS, params={**WINDOW, "page": page})
+    assert response.status_code == 400
+    assert rigged.source.question_calls == []

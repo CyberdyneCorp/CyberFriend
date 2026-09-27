@@ -30,6 +30,9 @@ class FakeUsageSource:
     rows: UsageRows = field(default_factory=UsageRows)
     questions_held: dict[str, list[TracedQuestion]] = field(default_factory=dict)
     down: bool = False
+    #: A store that ignores the `since` bound of `questions`, as a loosened
+    #: query would: what the service filters itself must still hold.
+    ignores_since: bool = False
     aggregate_calls: list[tuple[UsageWindow, frozenset[str]]] = field(default_factory=list)
     question_calls: list[tuple[str, datetime, datetime, int]] = field(default_factory=list)
 
@@ -63,7 +66,11 @@ class FakeUsageSource:
     ) -> QuestionPage:
         self._check()
         self.question_calls.append((user_id, since, until, page))
-        found = [q for q in self.questions_held.get(user_id, []) if since <= q.timestamp < until]
+        found = [
+            q
+            for q in self.questions_held.get(user_id, [])
+            if (self.ignores_since or since <= q.timestamp) and q.timestamp < until
+        ]
         found.sort(key=lambda q: q.timestamp, reverse=True)
         return QuestionPage(tuple(found), page, 1 if found else 0)
 

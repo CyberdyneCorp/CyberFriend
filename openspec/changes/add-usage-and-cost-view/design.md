@@ -120,7 +120,11 @@ is no rollup table and no sync loop.
     `[userId, name]`, metrics `[count]`. Every query groups by `userId`, so
     exclusion can be applied before anything is summed.
   - `row_limit` is 1000. A window whose result reaches it is split in halves
-    until it fits.
+    until it fits; a single day that still reaches it is "usage unavailable",
+    never a partial count.
+  - The observations view filters on the observation's own `environment`
+    (Langfuse stores one sent without it as `default`), so the tracer sets
+    `environment` on every generation and span, not only on the trace.
 - **Cache:** an in-process TTL cache (5 minutes) keyed by window and by the
   set of deletion-requested trace ids in it, holding the per-user, per-day
   rows before people are excluded (one fetch serves every grouping). Person
@@ -146,10 +150,15 @@ is no rollup table and no sync loop.
 - platform ids of people with a completed erasure: rows up to and including
   the day of `person.erased_before` are excluded (day granularity for counts;
   exact timestamp for text);
-- trace ids in `trace_export` with `deletion_requested_at` set, created in
-  the window (a day's slack either side), not yet confirmed or confirmed
-  within the last day (Langfuse deletes asynchronously). They are left out of
-  counts by the metrics query and dropped from question text.
+- trace ids in `trace_export` with `deletion_requested_at` set, not yet
+  confirmed or confirmed within the last day (Langfuse deletes
+  asynchronously), whatever their `created_at` (a trace found by the asker
+  search or the retention sweep is recorded when found, not when traced).
+  A trace whose asker is excluded whole is not listed: it adds nothing and
+  lengthens the query. They are left out of counts by the metrics query and
+  dropped from question text. They travel in the GET query string, so above
+  250 ids the read is "usage unavailable" on purpose rather than a request
+  line the server refuses.
 
 Aggregates drop excluded user rows before summing. The questions endpoint
 returns an empty page for an excluded person, and otherwise drops excluded

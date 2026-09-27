@@ -30,12 +30,14 @@ from chatmemory.admin.audit import applied
 from chatmemory.admin.handlers.services import AdminServices
 from chatmemory.admin.handlers.support import Refused, acting_operator
 from chatmemory.app.usage import (
+    BadPage,
     BadWindow,
     Grouping,
     QuestionsView,
     UsageLine,
     UsageSummary,
     page_of,
+    platform_id,
     window_of,
 )
 from chatmemory.ports.usage import UsageUnavailable, UsageWindow, ViewedPerson
@@ -60,11 +62,11 @@ def routes(services: AdminServices) -> list[Route]:
         return JSONResponse(_summary(found))
 
     async def questions(request: Request) -> JSONResponse:
-        user_id = str(request.path_params["id"])
-        if not user_id.isdigit():
+        user_id = platform_id(str(request.path_params["id"]))
+        if user_id is None:
             raise Refused("id must be a numeric platform account id")
         window = _window(request)
-        page = page_of(request.query_params.get("page"))
+        page = _page(request)
         person = await usage.person(user_id)
         viewer = acting_operator()
         # Recorded before the trace store is read: an attempt to view is on
@@ -98,6 +100,13 @@ def _window(request: Request) -> UsageWindow:
             datetime.now(UTC).date(),
         )
     except BadWindow as exc:
+        raise Refused(str(exc)) from exc
+
+
+def _page(request: Request) -> int:
+    try:
+        return page_of(request.query_params.get("page"))
+    except BadPage as exc:
         raise Refused(str(exc)) from exc
 
 

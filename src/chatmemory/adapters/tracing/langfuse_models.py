@@ -7,9 +7,10 @@ upserted here through `/api/public/models`.
 
 The configured models -- `CHAT_MODEL`, `EXTRACTION_MODEL`, `EMBEDDING_MODEL`
 and `MEDIA_AUDIO_MODEL` -- are checked too (`plan_prices`): each must be
-priced by the table, by a price given on the command line, or by a definition
-Langfuse manages itself. One that is none of those is reported as missing and
-nothing is written: a price is never guessed.
+priced by the table, by a price given on the command line, by a definition
+Langfuse manages itself, or by one of ours already in Langfuse (an earlier
+`--price`, which a run without the flag leaves as it is). One that is none of
+those is reported as missing and nothing is written: a price is never guessed.
 
 An ops step, run by hand (`scripts/langfuse_models.py`), never at startup:
 idempotent, so running it twice changes nothing the second time. Langfuse has
@@ -94,24 +95,46 @@ def _matches(pattern: str, model_name: str) -> bool:
         return False
 
 
+@dataclass(frozen=True, slots=True)
+class KnownPatterns:
+    """The match patterns of the definitions already in Langfuse, by owner."""
+
+    managed: Sequence[str] = ()
+    """Langfuse's own, which it prices itself."""
+    ours: Sequence[str] = ()
+    """User-defined: this script's, from the table or an earlier `--price`."""
+
+
+@dataclass(frozen=True, slots=True)
+class PricePlan:
+    #: What to upsert: the table's rows, a flag's price replacing a row of that name.
+    prices: list[ModelPrice]
+    #: Configured models nothing prices: the run must stop.
+    missing: list[str]
+    #: Configured models priced only by a definition of ours already in
+    #: Langfuse (an earlier `--price`), which this run leaves as it is.
+    earlier: list[str]
+
+
 def plan_prices(
     configured: Sequence[str],
     table: Sequence[ModelPrice],
     flags: Sequence[ModelPrice],
-    managed_patterns: Sequence[str],
-) -> tuple[list[ModelPrice], list[str]]:
-    """What to upsert, and which configured models have no price anywhere.
-
-    The table's rows, with a flag's price replacing a row of the same name.
-    A configured model is priced when a row to upsert or a Langfuse-managed
-    definition matches it; otherwise it is missing.
-    """
+    known: KnownPatterns,
+) -> PricePlan:
+    """What to upsert, and how each configured model is priced, if at all."""
     by_name = {price.model_name: price for price in table}
     by_name.update((price.model_name, price) for price in flags)
     prices = list(by_name.values())
-    patterns = [price.match_pattern for price in prices] + list(managed_patterns)
-    missing = [name for name in configured if not any(_matches(p, name) for p in patterns)]
-    return prices, missing
+    now = [price.match_pattern for price in prices] + list(known.managed)
+    unpriced = [name for name in configured if not _any_matches(now, name)]
+    earlier = [name for name in unpriced if _any_matches(known.ours, name)]
+    missing = [name for name in unpriced if name not in earlier]
+    return PricePlan(prices, missing, earlier)
+
+
+def _any_matches(patterns: Sequence[str], model_name: str) -> bool:
+    return any(_matches(p, model_name) for p in patterns)
 
 
 def load_price_table(path: Path) -> list[ModelPrice]:
@@ -176,17 +199,17 @@ class LangfuseModelSync:
             response.raise_for_status()
         return "updated" if current else "created"
 
-    async def managed_patterns(self) -> list[str]:
-        """The match patterns of the definitions Langfuse manages (and prices) itself."""
+    async def known_patterns(self) -> KnownPatterns:
+        """The match patterns of every definition in Langfuse, Langfuse's own and ours."""
         async with httpx.AsyncClient(
             timeout=self._timeout, transport=self._transport, auth=self._auth
         ) as client:
             rows = await self._definitions(client)
-        return [
-            str(row["matchPattern"])
-            for row in rows
-            if row.get("isLangfuseManaged") and row.get("matchPattern")
-        ]
+        patterned = [row for row in rows if row.get("matchPattern")]
+        return KnownPatterns(
+            managed=[str(r["matchPattern"]) for r in patterned if r.get("isLangfuseManaged")],
+            ours=[str(r["matchPattern"]) for r in patterned if not r.get("isLangfuseManaged")],
+        )
 
     async def _ours(self, client: httpx.AsyncClient) -> dict[str, list[dict[str, Any]]]:
         """Our definitions by name, across every page; Langfuse's own left out."""

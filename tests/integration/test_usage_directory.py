@@ -86,26 +86,42 @@ async def test_opted_out_erasing_and_erased_people_are_excluded(clean: AsyncEngi
     assert not exclusions.excludes_person("11")
 
 
-async def test_pending_deletions_in_the_window_are_listed(clean: AsyncEngine) -> None:
+async def test_every_pending_deletion_is_listed_whenever_it_was_recorded(
+    clean: AsyncEngine,
+) -> None:
+    # Regression: the list was bounded by `created_at` around the window, but
+    # a trace found by the asker search or the retention sweep is recorded
+    # with the time it was found, so a past window counted it again.
+    await _people(clean)
     now = datetime.now(UTC)
+    past = window_of(
+        (TODAY - timedelta(days=60)).isoformat(), (TODAY - timedelta(days=40)).isoformat(), TODAY
+    )
     rows = {
-        "pending": (now - timedelta(days=2), now, None),
-        "confirmed-just-now": (now - timedelta(days=2), now, now - timedelta(hours=1)),
-        "confirmed-long-ago": (now - timedelta(days=9), now, now - timedelta(days=8)),
-        "outside-window": (now - timedelta(days=200), now, None),
-        "kept": (now - timedelta(days=2), None, None),
+        "pending": (now - timedelta(days=2), now, None, None),
+        "found-today": (now, now, None, 11),
+        "confirmed-just-now": (now - timedelta(days=2), now, now - timedelta(hours=1), None),
+        "confirmed-long-ago": (now - timedelta(days=9), now, now - timedelta(days=8), None),
+        "recorded-long-ago": (now - timedelta(days=200), now, None, None),
+        "kept": (now - timedelta(days=2), None, None, None),
+        # Asked by a person excluded whole: redundant, and it would only
+        # lengthen the trace store's query.
+        "opted-out-asker": (now, now, None, 23),
+        "erasing-asker": (now, now, None, 33),
     }
-    for trace_id, (created, requested, deleted) in rows.items():
+    for trace_id, (created, requested, deleted, asker) in rows.items():
         await _run(
             clean,
-            "INSERT INTO trace_export (trace_id, created_at, deletion_requested_at, deleted_at) "
-            "VALUES (:t, :c, :r, :d)",
-            t=trace_id, c=created, r=requested, d=deleted,
+            "INSERT INTO trace_export "
+            "(trace_id, created_at, deletion_requested_at, deleted_at, asker_platform_user_id) "
+            "VALUES (:t, :c, :r, :d, :a)",
+            t=trace_id, c=created, r=requested, d=deleted, a=asker,
         )
 
-    exclusions = await PostgresUsageDirectory(clean).exclusions(WINDOW)
-
-    assert exclusions.trace_ids == frozenset({"pending", "confirmed-just-now"})
+    directory = PostgresUsageDirectory(clean)
+    expected = frozenset({"pending", "found-today", "confirmed-just-now", "recorded-long-ago"})
+    assert (await directory.exclusions(WINDOW)).trace_ids == expected
+    assert (await directory.exclusions(past)).trace_ids == expected
 
 
 async def test_an_opt_out_applies_to_the_next_read(clean: AsyncEngine) -> None:

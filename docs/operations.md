@@ -462,12 +462,13 @@ The script also checks the **configured** models: `CHAT_MODEL`,
 `EXTRACTION_MODEL`, `EMBEDDING_MODEL` and `MEDIA_AUDIO_MODEL` (their defaults
 when unset), read from its own environment, so export them as the deployment
 has them. Each must be priced by a table row, by a Langfuse-managed
-definition, or by `--price NAME=INPUT,OUTPUT` (USD per million input and
-output tokens, from the provider's price list). A configured model with none
-of those is named and **nothing is written**: prices are never guessed. A
-`--price` registers the model with the pattern `(?i)^(openai/)?(<name>)(-YYYY-MM-DD)?$`
-and replaces a table row of the same name; add it to the table afterwards so
-the next run keeps it.
+definition, by `--price NAME=INPUT,OUTPUT` (USD per million input and
+output tokens, from the provider's price list), or by a definition an earlier
+`--price` left in Langfuse (reported as "priced by an earlier --price" and
+left as it is). A configured model with none of those is named and **nothing
+is written**: prices are never guessed. A `--price` registers the model with
+the pattern `(?i)^(openai/)?(<name>)(-YYYY-MM-DD)?$` and replaces a table row
+of the same name; add it to the table so a changed price is reviewed like code.
 
 Production runs `gpt-5.4-mini` (chat and extraction) and
 `text-embedding-3-small`. Langfuse prices the embedding model; whether it

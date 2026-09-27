@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import base64
 import json
-from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -48,8 +47,31 @@ def _trace(trace_id: str, user: int, at: datetime, question: str, **extra: Any) 
     }
 
 
+def _generation(trace: dict[str, Any], tokens: int, **extra: Any) -> dict[str, Any]:
+    """A generation as the observations view sees it: its own environment."""
+    return {
+        "traceId": trace["id"],
+        "userId": trace["userId"],
+        "traceName": trace["name"],
+        "name": "synthesis",
+        "type": "GENERATION",
+        "providedModelName": "gpt-5.4-mini",
+        "environment": trace["environment"],
+        "tags": trace["tags"],
+        "timestamp": trace["timestamp"],
+        "inputTokens": tokens,
+        "outputTokens": tokens // 10,
+        "totalCost": tokens / 100_000,
+        **extra,
+    }
+
+
 class FakeLangfuse:
-    """Langfuse's v1 reads over `held`, honouring the filters a query sends."""
+    """Langfuse's v1 reads over `held`, honouring the filters a query sends.
+
+    The observations view filters on the observation's own `environment`, as
+    Langfuse's does: one stored without it is "default" and never matches.
+    """
 
     def __init__(self) -> None:
         self.held = [
@@ -59,6 +81,17 @@ class FakeLangfuse:
             _trace("olly", OLLY, NOTICE + timedelta(days=1), "olly opted out"),
             _trace("erin", ERIN, NOTICE - timedelta(days=2), "erin erased this"),
             _trace("staging", ANA, NOTICE + timedelta(days=1), "staging", environment="staging"),
+        ]
+        by_id = {t["id"]: t for t in self.held}
+        self.observations = [
+            _generation(by_id["ana-after"], 1000),
+            _generation(by_id["ana-before"], 200),
+            _generation(by_id["ana-pending"], 30_000),
+            _generation(by_id["olly"], 40_000),
+            _generation(by_id["erin"], 50_000),
+            _generation(by_id["staging"], 60_000),
+            # What the tracer sent before it set `environment` on observations.
+            _generation(by_id["ana-after"], 70_000, environment="default"),
         ]
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -75,15 +108,28 @@ class FakeLangfuse:
         return httpx.Response(200, json={"data": rows, "meta": {"page": 1, "totalPages": 1}})
 
     def _metrics(self, query: dict[str, Any]) -> list[dict[str, Any]]:
-        if query["view"] != "traces":
-            return []
-        rows = [r for r in self.held if self._passes(r, query)]
+        held = self.held if query["view"] == "traces" else self.observations
+        rows = [r for r in held if self._passes(r, query)]
         if not query["dimensions"]:
             return [{"count_count": len(rows)}]
-        counts = Counter((r["userId"], r["name"], r["timestamp"][:10]) for r in rows)
+        fields = [d["field"] for d in query["dimensions"]]
+        groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for r in rows:
+            groups.setdefault((*(r[f] for f in fields), r["timestamp"][:10]), []).append(r)
         return [
-            {"userId": u, "name": n, "time_dimension": d, "count_count": c}
-            for (u, n, d), c in counts.items()
+            {
+                **dict(zip(fields, key, strict=False)),
+                "time_dimension": key[-1],
+                **{
+                    f"{m['aggregation']}_{m['measure']}": (
+                        len(members)
+                        if m["aggregation"] == "count"
+                        else sum(r[m["measure"]] for r in members)
+                    )
+                    for m in query["metrics"]
+                },
+            }
+            for key, members in groups.items()
         ]
 
     @staticmethod
@@ -210,6 +256,10 @@ async def test_counts_leave_out_opted_out_erased_pending_and_foreign_traces(
     assert [(r["key"], r["name"], r["questions"]) for r in body["rows"]] == [
         (str(ANA), "Ana", 2)
     ]
+    # Tokens and cost of Ana's two production generations only: not the
+    # pending, opted-out, erased or staging ones, nor one stored as "default".
+    assert (body["totals"]["input_tokens"], body["totals"]["output_tokens"]) == (1200, 120)
+    assert body["totals"]["cost"] == 0.012
     assert refused.status_code == 403
 
 

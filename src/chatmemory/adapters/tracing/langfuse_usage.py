@@ -12,7 +12,14 @@ it must not show before anything is summed.
 *   tool calls: observations view, spans, `[userId, traceName, name]`, count.
 
 A result that reaches `ROW_LIMIT` rows may be truncated, so its window is split
-in halves until each half fits (down to one day).
+in halves until each half fits. A single day that still reaches it is
+`UsageUnavailable`: partial counts are never shown as current.
+
+The traces whose deletion was requested go in the query itself, as a `none of`
+filter inside the `query` GET parameter. More than `MAX_EXCLUDED_TRACES` of
+them would make a request line longer than servers accept (Node's default
+header limit is 16 KiB), so above that the store is `UsageUnavailable` on
+purpose, until the deletions are confirmed, rather than failing at random.
 
 The trace list is re-checked row by row -- environment, tag, trace name and
 asker -- so a server that ignored a filter still cannot put another
@@ -55,6 +62,8 @@ PAGE_SIZE = 50
 MAX_QUESTION_CHARS = 2000
 """A question longer than this is cut: the view is for reading, not for export."""
 TOOL_TAG = "tool:"
+MAX_EXCLUDED_TRACES = 250
+"""About 11 KiB of URL-encoded ids: a metrics request stays under 16 KiB."""
 
 Row = dict[str, Any]
 
@@ -80,7 +89,7 @@ class LangfuseUsageSource:
     async def aggregate(
         self, window: UsageWindow, excluded_trace_ids: Collection[str]
     ) -> UsageRows:
-        excluded = sorted(excluded_trace_ids)
+        excluded = _excluded(excluded_trace_ids)
         async with self._client() as client:
             traces, models, tools = await asyncio.gather(
                 self._split(client, window, lambda w: self._runs_query(w, excluded)),
@@ -107,7 +116,7 @@ class LangfuseUsageSource:
             "filters": [
                 *self._scope(),
                 _equals("userId", user_id),
-                *_none_of("id", sorted(excluded_trace_ids)),
+                *_none_of("id", _excluded(excluded_trace_ids)),
             ],
             "fromTimestamp": _stamp(since),
             "toTimestamp": _stamp(until),
@@ -123,10 +132,11 @@ class LangfuseUsageSource:
         build: Callable[[UsageWindow], Row],
     ) -> list[Row]:
         rows = await self._metrics(client, build(window))
-        if len(rows) < ROW_LIMIT or window.days <= 1:
-            if len(rows) >= ROW_LIMIT:
-                log.warning("usage.row_limit_reached", day=window.start.date().isoformat())
+        if len(rows) < ROW_LIMIT:
             return rows
+        if window.days <= 1:
+            log.warning("usage.row_limit_reached", day=window.start.date().isoformat())
+            raise UsageUnavailable("one day of usage is more than a metrics answer holds")
         middle = window.start + timedelta(days=window.days // 2)
         first = await self._split(client, UsageWindow(window.start, middle), build)
         second = await self._split(client, UsageWindow(middle, window.end), build)
@@ -249,6 +259,13 @@ class LangfuseUsageSource:
 
 def _equals(column: str, value: str) -> Row:
     return {"column": column, "operator": "=", "value": value, "type": "string"}
+
+
+def _excluded(trace_ids: Collection[str]) -> list[str]:
+    if len(trace_ids) > MAX_EXCLUDED_TRACES:
+        log.warning("usage.too_many_pending_deletions", count=len(trace_ids))
+        raise UsageUnavailable("too many traces are awaiting deletion to leave them out")
+    return sorted(trace_ids)
 
 
 def _none_of(column: str, values: list[str]) -> list[Row]:

@@ -23,6 +23,7 @@ never traced, so this is an undercount by design, and labelled as one.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -48,6 +49,10 @@ DEFAULT_WINDOW_DAYS = 30
 CACHE_SECONDS = 300.0
 CACHE_ENTRIES = 32
 TOTALS_LABEL = "traced question runs"
+MAX_PAGE = 1000
+"""50 questions a page: far beyond a 90-day window of anybody's questions."""
+BIGINT_MAX = 2**63 - 1
+_DIGITS = re.compile(r"[0-9]{1,19}")
 VOICE_FEATURE = "voice"
 """Voice minutes are shown as a feature of their own; they are not traced runs."""
 
@@ -64,6 +69,10 @@ class Grouping(StrEnum):
 
 class BadWindow(ValueError):
     """A window the console will not read: malformed, reversed or too long."""
+
+
+class BadPage(ValueError):
+    """A page number the console will not read: not 1..MAX_PAGE in ASCII digits."""
 
 
 def window_of(start: str | None, end: str | None, today: date) -> UsageWindow:
@@ -317,7 +326,22 @@ def _totals(rows: UsageRows, voice: VoiceUsage) -> UsageTotals:
     )
 
 
+def platform_id(raw: str) -> str | None:
+    """`raw` if it is a platform account id (ASCII digits that fit a bigint), else None.
+
+    `str.isdigit` is not enough: it accepts '²' and other non-ASCII digits,
+    which `int()` then refuses, and any length.
+    """
+    if not _DIGITS.fullmatch(raw) or int(raw) > BIGINT_MAX:
+        return None
+    return raw
+
+
 def page_of(raw: str | None) -> int:
-    """A 1-based page number; anything else is page 1."""
-    return int(raw) if raw and raw.isdigit() and int(raw) > 0 else 1
+    """A 1-based page number, page 1 when absent; anything malformed is `BadPage`."""
+    if raw is None or raw == "":
+        return 1
+    if not _DIGITS.fullmatch(raw) or not 1 <= int(raw) <= MAX_PAGE:
+        raise BadPage(f"page must be a whole number from 1 to {MAX_PAGE}")
+    return int(raw)
 

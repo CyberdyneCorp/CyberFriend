@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ import pytest
 
 from chatmemory.adapters.tracing.langfuse import APP_TAG
 from chatmemory.adapters.tracing.langfuse_usage import (
+    MAX_EXCLUDED_TRACES,
     MAX_QUESTION_CHARS,
     ROW_LIMIT,
     LangfuseUsageSource,
@@ -140,6 +142,48 @@ async def test_a_result_at_the_row_limit_is_split_until_it_fits() -> None:
     )
     assert spans == [("2026-09-01", "2026-09-03"), ("2026-09-01", "2026-09-05"),
                      ("2026-09-03", "2026-09-05")]
+
+
+async def test_a_single_day_still_at_the_row_limit_is_unavailable_not_partial() -> None:
+    # Regression: a one-day slice at the limit was returned truncated, and
+    # the summary showed partial counts as current.
+    fake = FakeMetrics()
+    fake.row_limit_days = {4, 2, 1}
+
+    with pytest.raises(UsageUnavailable):
+        await _source(fake).aggregate(WINDOW, set())
+
+
+async def test_the_most_pending_deletions_still_fit_a_request_line() -> None:
+    fake = FakeMetrics()
+    pending = {str(uuid.uuid4()) for _ in range(MAX_EXCLUDED_TRACES)}
+
+    await _source(fake).aggregate(WINDOW, pending)
+    await _source(fake).count("42", SINCE, UNTIL, pending)
+
+    assert fake.requests
+    # Node's default limit for the request line plus headers is 16 KiB.
+    assert max(len(str(r.url)) for r in fake.requests) < 14 * 1024
+    assert all(
+        set(f["value"]) == pending
+        for q in fake.queries
+        for f in q["filters"]
+        if f["operator"] == "none of"
+    )
+
+
+async def test_more_pending_deletions_than_a_request_holds_is_unavailable() -> None:
+    # Regression: every id went into the GET query unbounded; a few hundred
+    # made the request line longer than the server accepts, and the failure
+    # was accidental. Now it is deliberate, and nothing is sent.
+    fake = FakeMetrics()
+    pending = {str(uuid.uuid4()) for _ in range(MAX_EXCLUDED_TRACES + 1)}
+
+    with pytest.raises(UsageUnavailable):
+        await _source(fake).aggregate(WINDOW, pending)
+    with pytest.raises(UsageUnavailable):
+        await _source(fake).count("42", SINCE, UNTIL, pending)
+    assert fake.requests == []
 
 
 @pytest.mark.parametrize("status", [500, 404, 401])

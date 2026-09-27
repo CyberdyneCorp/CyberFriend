@@ -11,8 +11,9 @@ the model settings as the deployment has them):
 Reads `scripts/langfuse_model_prices.json` by default. Each configured model
 (`CHAT_MODEL`, `EXTRACTION_MODEL`, `EMBEDDING_MODEL`, `MEDIA_AUDIO_MODEL`,
 defaults when unset) must be priced by the table, by a `--price` (USD per
-million input and output tokens), or by Langfuse itself; otherwise the script
-names the missing models and writes nothing. Prices are never guessed.
+million input and output tokens), by Langfuse itself, or by a definition an
+earlier `--price` left in Langfuse; otherwise the script names the missing
+models and writes nothing. Prices are never guessed.
 Idempotent: a second run reports every model `unchanged`. See
 docs/operations.md, "Model prices".
 """
@@ -32,6 +33,7 @@ from chatmemory.adapters.tracing.langfuse_models import (
     MODEL_SETTINGS,
     LangfuseModelSync,
     ModelPrice,
+    PricePlan,
     configured_models,
     load_price_table,
     plan_prices,
@@ -78,15 +80,15 @@ async def run(
         print(str(exc), file=sys.stderr)
         return 2
     configured = configured_models(environ, model_defaults())
-    prices, missing = plan_prices(
-        configured, load_price_table(args.table), flags, await sync.managed_patterns()
+    plan = plan_prices(
+        configured, load_price_table(args.table), flags, await sync.known_patterns()
     )
     print(f"configured models: {', '.join(configured)}")
-    if missing:
-        _report_missing(missing)
+    if plan.missing:
+        _report_missing(plan.missing)
         return 2
-    results = await sync.sync(prices, dry_run=args.dry_run)
-    _report(results, prices, flags, configured, args.dry_run)
+    results = await sync.sync(plan.prices, dry_run=args.dry_run)
+    _report(results, plan, flags, configured, args.dry_run)
     return 0
 
 
@@ -102,16 +104,18 @@ def _report_missing(missing: list[str]) -> None:
 
 def _report(
     results: dict[str, str],
-    prices: list[ModelPrice],
+    plan: PricePlan,
     flags: list[ModelPrice],
     configured: list[str],
     dry_run: bool,
 ) -> None:
     for model, result in results.items():
         print(f"{model}: {result}{' (dry run)' if dry_run and result != 'unchanged' else ''}")
-    ours = {price.model_name for price in prices}
+    ours = {price.model_name for price in plan.prices}
     for model in configured:
-        if model not in ours:
+        if model in plan.earlier:
+            print(f"{model}: priced by an earlier --price (left as it is)")
+        elif model not in ours:
             print(f"{model}: priced by Langfuse or matched by a table row")
     if flags:
         print("add the --price models to the table so the next run keeps them")

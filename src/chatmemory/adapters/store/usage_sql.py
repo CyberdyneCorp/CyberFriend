@@ -34,15 +34,32 @@ WHERE pe.erased_before IS NOT NULL
 
 #: Traces whose deletion was requested and that the trace store may still
 #: hold: not confirmed yet, or confirmed within the last day (Langfuse deletes
-#: asynchronously). Bounded by the window, with a day's slack either side
-#: because the export row is written just after the trace's own timestamp.
+#: asynchronously).
+#:
+#: Not bounded by `created_at`: a trace found by the asker search or by the
+#: retention sweep is recorded with the time it was found, not the time it
+#: was traced, so a window bound would miss it. The set stays small because
+#: confirmed rows age out after a day.
+#:
+#: A trace whose asker is opted out or being erased is left out: that person
+#: is excluded whole, so listing their traces again would only lengthen the
+#: trace store's query (one opt-out marks every trace the person asked).
 PENDING_TRACES = text("""
-SELECT trace_id
-FROM trace_export
-WHERE deletion_requested_at IS NOT NULL
-  AND created_at >= :since
-  AND created_at < :until
-  AND (deleted_at IS NULL OR deleted_at > :confirmed_after)
+SELECT t.trace_id
+FROM trace_export t
+WHERE t.deletion_requested_at IS NOT NULL
+  AND (t.deleted_at IS NULL OR t.deleted_at > :confirmed_after)
+  AND NOT EXISTS (
+        SELECT 1 FROM person_platform_id p
+        WHERE p.platform_user_id = t.asker_platform_user_id
+          AND (
+                EXISTS (SELECT 1 FROM person_opt_out o WHERE o.person_id = p.person_id)
+             OR EXISTS (
+                    SELECT 1 FROM erasure_request e
+                    WHERE e.person_id = p.person_id AND e.completed_at IS NULL
+                )
+          )
+  )
 """)
 
 NAMES = text("""

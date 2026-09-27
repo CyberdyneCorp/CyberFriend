@@ -14,6 +14,7 @@ import pytest
 
 from chatmemory.adapters.tracing.langfuse_models import (
     MODEL_SETTINGS,
+    KnownPatterns,
     ModelPrice,
     configured_models,
     load_price_table,
@@ -87,31 +88,38 @@ def test_a_malformed_flag_is_refused(raw: str) -> None:
 
 def test_an_unknown_configured_model_is_missing_not_guessed() -> None:
     table = load_price_table(TABLE)
-    prices, missing = plan_prices(
+    plan = plan_prices(
         ["gpt-5.4-mini", "text-embedding-3-small", "gpt-4o-mini-transcribe"],
         table,
         [],
-        [str(EMBEDDING_MANAGED["matchPattern"])],
+        KnownPatterns(managed=[str(EMBEDDING_MANAGED["matchPattern"])]),
     )
-    assert missing == ["gpt-5.4-mini"]
-    assert {p.model_name for p in prices} == {p.model_name for p in table}
+    assert plan.missing == ["gpt-5.4-mini"]
+    assert plan.earlier == []
+    assert {p.model_name for p in plan.prices} == {p.model_name for p in table}
 
 
 def test_a_flag_prices_it_and_replaces_a_table_row_of_that_name() -> None:
     table = [ModelPrice("chat-v1", "(?i)^(chat-v1)$", 0.0, 0.0)]
     flags = [price_from_flag("gpt-5.4-mini=0.25,2"), price_from_flag("chat-v1=1,1")]
 
-    prices, missing = plan_prices(["gpt-5.4-mini", "chat-v1"], table, flags, [])
+    plan = plan_prices(["gpt-5.4-mini", "chat-v1"], table, flags, KnownPatterns())
 
-    assert missing == []
-    assert {p.model_name: p.input_price for p in prices} == {
+    assert plan.missing == []
+    assert {p.model_name: p.input_price for p in plan.prices} == {
         "chat-v1": 1 / 1_000_000, "gpt-5.4-mini": 0.25 / 1_000_000,
     }
 
 
 def test_a_managed_pattern_langfuse_cannot_parse_prices_nothing() -> None:
-    _, missing = plan_prices(["m"], [], [], ["(?i)^(m"])
-    assert missing == ["m"]
+    plan = plan_prices(["m"], [], [], KnownPatterns(managed=["(?i)^(m"], ours=["(?i)^(m"]))
+    assert plan.missing == ["m"]
+
+
+def test_a_definition_an_earlier_flag_left_prices_the_model() -> None:
+    known = KnownPatterns(ours=[match_pattern_for("gpt-5.4-mini")])
+    plan = plan_prices(["gpt-5.4-mini"], [], [], known)
+    assert (plan.missing, plan.earlier) == ([], ["gpt-5.4-mini"])
 
 
 def _args(*prices: str, dry_run: bool = False) -> argparse.Namespace:
@@ -147,6 +155,24 @@ async def test_the_script_registers_the_configured_model_given_by_flag() -> None
     # Langfuse prices the embedding model itself: no definition of ours shadows it.
     assert "text-embedding-3-small" not in created
     assert "gpt-4o-mini-transcribe" in created
+
+
+async def test_a_later_run_without_the_flag_keeps_the_earlier_price(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Regression: only table rows, flags and Langfuse-managed definitions
+    # counted, so after `--price gpt-5.4-mini=...` every later run without
+    # the flag stopped with "no price for: gpt-5.4-mini".
+    fake = FakeModels([dict(EMBEDDING_MANAGED)])
+    transport = httpx.MockTransport(fake.handle)
+    assert await _script().run(_args("gpt-5.4-mini=0.25,2"), PROD, transport) == 0
+    created = list(fake.created)
+
+    code = await _script().run(_args(), PROD, transport)
+
+    assert code == 0
+    assert fake.created == created and fake.deleted == []
+    assert "gpt-5.4-mini: priced by an earlier --price" in capsys.readouterr().out
 
 
 async def test_a_dry_run_of_the_script_changes_nothing() -> None:

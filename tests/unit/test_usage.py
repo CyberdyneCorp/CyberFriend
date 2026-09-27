@@ -8,10 +8,12 @@ import pytest
 
 from chatmemory.app.usage import (
     MAX_WINDOW_DAYS,
+    BadPage,
     BadWindow,
     Grouping,
     UsageService,
     page_of,
+    platform_id,
     window_of,
 )
 from chatmemory.ports.usage import (
@@ -90,9 +92,34 @@ def test_a_reversed_or_malformed_window_is_refused(start: str, end: str | None) 
         window_of(start, end, TODAY)
 
 
-@pytest.mark.parametrize(("raw", "page"), [(None, 1), ("0", 1), ("-2", 1), ("x", 1), ("3", 3)])
+@pytest.mark.parametrize(("raw", "page"), [(None, 1), ("", 1), ("1", 1), ("3", 3), ("1000", 1000)])
 def test_a_page_is_one_based(raw: str | None, page: int) -> None:
     assert page_of(raw) == page
+
+
+@pytest.mark.parametrize("raw", ["0", "-2", "x", "1001", "²", "٣", "9" * 5000, " 3"])
+def test_a_malformed_or_huge_page_is_refused_not_a_crash(raw: str) -> None:
+    # Regression: `str.isdigit` let '²' through to `int()` and 5000 digits
+    # past Python's int parsing limit, both a 500.
+    with pytest.raises(BadPage):
+        page_of(raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "kept"),
+    [
+        ("101", "101"),
+        ("9223372036854775807", "9223372036854775807"),
+        ("9223372036854775808", None),
+        ("²", None),
+        ("٣", None),
+        ("1" * 25, None),
+        ("", None),
+        ("-1", None),
+    ],
+)
+def test_a_platform_id_is_ascii_digits_that_fit_a_bigint(raw: str, kept: str | None) -> None:
+    assert platform_id(raw) == kept
 
 
 # --- the summary --------------------------------------------------------------
@@ -296,6 +323,32 @@ async def test_an_erased_persons_questions_up_to_the_erasure_are_gone() -> None:
     assert [q.question for q in view.questions] == ["asked after erasing"]
     # Only what was asked between the erasure and the new notice is counted.
     assert view.hidden_before_notice == 1
+
+
+async def test_text_before_the_notice_is_dropped_even_if_the_store_returns_it() -> None:
+    # Defence in depth: the store is asked from the notice on; a store that
+    # answers with older questions anyway must not get them shown.
+    source = FakeUsageSource(questions_held=_held(), ignores_since=True)
+
+    view = await _service(source, FakeUsageDirectory()).questions(ANA, _ana(), WINDOW, 1)
+
+    assert [q.question for q in view.questions] == ["withdrawn later", "after the notice"]
+    assert all(q.timestamp >= NOTICE for q in view.questions)
+
+
+async def test_text_up_to_an_erasure_is_dropped_even_if_the_store_returns_it() -> None:
+    # Told before the erasure, so only the erasure cut stands between the
+    # store's answer and the screen; the erasure moment itself is gone too.
+    erased = NOTICE + timedelta(hours=1)
+    held = _held()
+    held[ANA].append(_question("new", erased + timedelta(days=3), "asked after erasing"))
+    source = FakeUsageSource(questions_held=held, ignores_since=True)
+    directory = FakeUsageDirectory(exclusion=UsageExclusions(erased_before={ANA: erased}))
+
+    view = await _service(source, directory).questions(ANA, _ana(), WINDOW, 1)
+
+    assert [q.question for q in view.questions] == ["asked after erasing", "withdrawn later"]
+    assert all(q.timestamp > erased for q in view.questions)
 
 
 async def test_questions_are_never_cached() -> None:

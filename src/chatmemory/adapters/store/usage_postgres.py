@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from chatmemory.adapters.store import usage_sql as sql
+from chatmemory.app.usage import platform_id
 from chatmemory.ports.usage import UsageExclusions, UsageWindow, ViewedPerson, VoiceUsage
 
-WINDOW_SLACK = timedelta(days=1)
 DELETION_LAG = timedelta(days=1)
 """How long after Langfuse accepted a deletion its trace is still treated as present."""
 
@@ -26,11 +26,7 @@ class PostgresUsageDirectory:
             pending = (
                 await conn.execute(
                     sql.PENDING_TRACES,
-                    {
-                        "since": window.start - WINDOW_SLACK,
-                        "until": window.end + WINDOW_SLACK,
-                        "confirmed_after": datetime.now(window.end.tzinfo) - DELETION_LAG,
-                    },
+                    {"confirmed_after": datetime.now(UTC) - DELETION_LAG},
                 )
             ).scalars().all()
         return UsageExclusions(
@@ -40,7 +36,7 @@ class PostgresUsageDirectory:
         )
 
     async def names(self, user_ids: Sequence[str]) -> Mapping[str, str]:
-        ids = sorted({int(u) for u in user_ids if u.isdigit()})
+        ids = sorted({int(u) for u in user_ids if platform_id(u)})
         if not ids:
             return {}
         async with self._engine.connect() as conn:
@@ -48,7 +44,7 @@ class PostgresUsageDirectory:
         return {row.user_id: row.display_name for row in rows}
 
     async def person(self, user_id: str) -> ViewedPerson | None:
-        if not user_id.isdigit():
+        if platform_id(user_id) is None:
             return None
         async with self._engine.connect() as conn:
             row = (await conn.execute(sql.PERSON, {"user_id": int(user_id)})).first()
