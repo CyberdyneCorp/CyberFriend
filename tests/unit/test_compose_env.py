@@ -272,12 +272,17 @@ def admin_service(compose_text: str = COMPOSE) -> dict[str, Any]:
     return service
 
 
+# Non-secret values the console reads for its own sake: the Langfuse host
+# (never its keys) lets it warn at startup when Langfuse is not on v3.
+CONSOLE_EXTRAS = frozenset({"DATABASE_URL", "LANGFUSE_HOST"})
+
+
 def unexpected_console_variables(service: dict[str, Any]) -> list[str]:
     baselines = {key.upper() for key in SETTINGS}
     return [
         name
         for name in environment_names(service)
-        if name != "DATABASE_URL"
+        if name not in CONSOLE_EXTRAS
         and not name.startswith(("ADMIN_", "SERVICE_FQDN_"))
         and name not in baselines
     ]
@@ -287,7 +292,8 @@ def test_the_console_environment_is_the_database_its_own_settings_and_nothing_el
     """An allowlist, so a variable pasted into the wrong service fails here.
 
     The console gets `DATABASE_URL`, its own `ADMIN_*` variables (sign-in
-    included), its domain, and the non-secret setting baselines it reports
+    included), its domain, the Langfuse host (not its keys), and the
+    non-secret setting baselines it reports
     provenance for. Anything else -- the bot token, the model key, the search
     key, a tracing key -- is authority it has no use for. The file is parsed
     rather than matched line by line, so a quoted item or the map form of
