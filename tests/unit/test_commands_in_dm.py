@@ -21,6 +21,7 @@ PERSONAL = {
     "suggest", "suggestions", "privacy",
 }
 CHANNEL_ACTIONS = {"index", "unindex"}
+DM_ONLY = {"connect"}
 
 
 @pytest.fixture
@@ -43,7 +44,9 @@ async def registered(monkeypatch: pytest.MonkeyPatch) -> CyberFriendClient:
 async def test_personal_commands_are_global_and_allowed_in_a_dm(
     registered: CyberFriendClient,
 ) -> None:
-    global_commands = {c.name: c for c in registered.tree.get_commands()}
+    global_commands = {
+        c.name: c for c in registered.tree.get_commands() if c.name not in DM_ONLY
+    }
     assert set(global_commands) == PERSONAL
     for name, command in global_commands.items():
         contexts = command.allowed_contexts
@@ -56,3 +59,14 @@ async def test_personal_commands_are_global_and_allowed_in_a_dm(
 async def test_channel_commands_stay_in_the_server_only(registered: CyberFriendClient) -> None:
     in_guild = {c.name for c in registered.tree.get_commands(guild=discord.Object(GUILD_ID))}
     assert in_guild == CHANNEL_ACTIONS
+
+
+async def test_connect_is_offered_in_a_dm_and_not_in_the_server(
+    registered: CyberFriendClient,
+) -> None:
+    """A key typed into a server's command line is in front of the channel."""
+    [connect] = [c for c in registered.tree.get_commands() if c.name in DM_ONLY]
+    contexts = connect.allowed_contexts
+    assert contexts is not None and contexts.dm_channel and not contexts.guild
+    installs = connect.allowed_installs
+    assert installs is not None and not installs.user

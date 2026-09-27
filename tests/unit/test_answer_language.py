@@ -117,8 +117,15 @@ def test_the_reply_is_english_when_asked_in_english() -> None:
 def test_every_command_is_listed() -> None:
     """One command out of six was named. The other five existed and worked."""
     described = describe_capabilities(ALL_TOOLS)
+    in_dm = describe_capabilities(ALL_TOOLS, direct_message=True)
     for command in ALWAYS_AVAILABLE:
-        assert f"`/{command.name}`" in described
+        assert f"`/{command.name}`" in (in_dm if command.direct_only else described)
+
+
+def test_a_dm_only_command_is_described_in_a_dm_and_not_in_a_channel() -> None:
+    """`/connect` takes a key, so Discord lists it in a DM alone."""
+    assert "`/connect`" in describe_capabilities(ALL_TOOLS, direct_message=True)
+    assert "`/connect`" not in describe_capabilities(ALL_TOOLS)
 
 
 def test_a_switched_off_command_is_not_promised() -> None:

@@ -105,6 +105,8 @@ class Command:
     portuguese: str
     guild_only: bool = False
     """Registered on the guild alone, so Discord does not list it in a DM."""
+    direct_only: bool = False
+    """Offered in a DM alone, so Discord does not list it in the server."""
 
     def described(self, language: Language) -> str:
         text = self.portuguese if language is Language.PORTUGUESE else self.english
@@ -157,6 +159,13 @@ PRIVACY = Command(
     "Ver o que eu guardo sobre você e o que eu mantenho",
 )
 
+CONNECT = Command(
+    "connect",
+    "Connect your CyberWealth key, so I can answer about your own finances here",
+    "Conectar sua chave do CyberWealth, para eu responder sobre as suas finanças aqui",
+    direct_only=True,
+)
+
 CHANNELS = Command(
     "channels",
     "List the channels I archive that you can read",
@@ -203,7 +212,7 @@ asking ("tell me when my LP goes out of range") and pressing Confirm; these are
 how somebody sees and stops theirs."""
 
 ALWAYS_AVAILABLE = (
-    ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE, SUGGEST, SUGGESTIONS, PRIVACY,
+    ASK, CHANNELS, INDEX, UNINDEX, FORGET, RESOLVE, SUGGEST, SUGGESTIONS, PRIVACY, CONNECT,
 )
 """Commands the bot registers unconditionally.
 
@@ -403,13 +412,16 @@ class Capabilities:
 
         A DM menu has no guild commands, and telling somebody to pick
         `/index` from a menu that does not have it is the same mistake as
-        listing a command whose feature is off.
+        listing a command whose feature is off. The server's menu has no
+        DM-only command (`/connect`) for the same reason.
         """
-        if not direct_message:
-            return self
         return Capabilities(
             self.external_tools,
-            tuple(c for c in self.commands if not c.guild_only),
+            tuple(
+                c
+                for c in self.commands
+                if not (c.guild_only if direct_message else c.direct_only)
+            ),
             personal_facts=self.personal_facts,
             obligations=self.obligations,
             voice_questions=self.voice_questions,
@@ -555,6 +567,7 @@ def describe_capabilities(
     voice_questions: bool = False,
     obligations: bool = True,
     trace_retention_days: int | None = None,
+    direct_message: bool = False,
 ) -> str:
     return Capabilities(
         tuple(external_tools),
@@ -563,7 +576,7 @@ def describe_capabilities(
         obligations=obligations,
         voice_questions=voice_questions,
         trace_retention_days=trace_retention_days,
-    ).describe(language)
+    ).describe(language, direct_message=direct_message)
 
 
 class SelfDescriptionAnswerService:

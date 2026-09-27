@@ -26,12 +26,20 @@ from types import TracebackType
 import structlog
 
 from chatmemory.adapters.mcp_client.config import FederationConfig, ServerConfig
+from chatmemory.adapters.mcp_client.personal_auth import (
+    KeyedSessionFactory,
+    PersonalKeyRejected,
+)
 from chatmemory.adapters.mcp_client.registry import (
     Registration,
     ServerDiscovery,
     register,
 )
-from chatmemory.adapters.mcp_client.session import ToolSession, default_session_factory
+from chatmemory.adapters.mcp_client.session import (
+    ToolResult,
+    ToolSession,
+    default_session_factory,
+)
 from chatmemory.app.authorization import ContentKind, FencedContent, ToolPermit, fence
 
 log = structlog.get_logger()
@@ -48,6 +56,11 @@ class Failure(StrEnum):
     UNAVAILABLE = "unavailable"
     TOOL_ERROR = "tool_error"
     PERSONAL_WITHHELD = "personal_withheld"
+    #: A personal tool on a server that takes each asker's own key, asked by
+    #: somebody who has not connected one.
+    NO_PERSONAL_KEY = "no_personal_key"
+    #: The server answered 401 to the asker's own key: expired or revoked.
+    KEY_REJECTED = "key_rejected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +112,16 @@ class FederatedResult:
             return f"{self.server} reported an error for {self.tool}."
         if self.failure is Failure.PERSONAL_WITHHELD:
             return f"{self.server} returned personal data, which is only shown in a DM."
+        if self.failure is Failure.NO_PERSONAL_KEY:
+            return (
+                f"{self.server} answers this only with your own key; "
+                "send it to me in a DM to connect it."
+            )
+        if self.failure is Failure.KEY_REJECTED:
+            return (
+                f"{self.server} refused your key (expired or revoked); "
+                "send me a new one in a DM."
+            )
         if self.truncated:
             return f"The result from {self.server} was truncated to fit."
         return None
@@ -126,11 +149,15 @@ class Federation:
         sessions: Mapping[str, ToolSession],
         registration: Registration,
         stack: AsyncExitStack | None = None,
+        keyed: KeyedSessionFactory | None = None,
     ) -> None:
         self._config = config
         self._sessions = dict(sessions)
         self._registration = registration
         self._stack = stack
+        # Opens a connection of its own for a call carrying an asker's key.
+        # None: no call can carry one, and `call(bearer=...)` fails closed.
+        self._keyed = keyed
         # Servers that failed *after* connecting. Kept separate from the
         # startup set so a mid-run death is visible in the answer as a
         # different fact from "it was never up".
@@ -165,7 +192,11 @@ class Federation:
         return startup + midrun
 
     async def call(
-        self, permit: ToolPermit, arguments: Mapping[str, object]
+        self,
+        permit: ToolPermit,
+        arguments: Mapping[str, object],
+        *,
+        bearer: str | None = None,
     ) -> FederatedResult:
         """Invoke one registered tool, bounded in time and in size.
 
@@ -173,7 +204,12 @@ class Federation:
         is `GuardedInvoker`, which is the only caller in production. Keeping
         them apart means the gate cannot be accidentally satisfied by the
         thing it is supposed to guard.
+
+        `bearer` is one asker's own key. The call then goes over a connection
+        opened for it alone, never the shared one.
         """
+        if bearer is not None:
+            return await self._call_keyed(permit, arguments, bearer)
         session = self._sessions.get(permit.server)
         if session is None or permit.server in self._lost:
             return self._failed(permit, Failure.UNAVAILABLE)
@@ -198,6 +234,42 @@ class Federation:
             self._lost[permit.server] = Failure.UNAVAILABLE
             return self._failed(permit, Failure.UNAVAILABLE)
 
+        return self._completed(permit, result)
+
+    async def _call_keyed(
+        self, permit: ToolPermit, arguments: Mapping[str, object], bearer: str
+    ) -> FederatedResult:
+        """One call on a connection carrying the asker's key, then closed.
+
+        A failure here is the asker's, not the server's: it never marks the
+        server lost, so one person's expired key cannot take the shared
+        connection's tools away from everybody else.
+        """
+        server = self._config.server(permit.server)
+        if self._keyed is None or server is None:
+            return self._failed(permit, Failure.UNAVAILABLE)
+        try:
+            async with asyncio.timeout(self._config.timeout_for(permit.server)):
+                async with self._keyed(server, bearer) as session:
+                    result = await session.call_tool(permit.tool, arguments)
+        except TimeoutError:
+            log.warning("federation.keyed_call.timeout", tool=permit.qualified_name)
+            return self._failed(permit, Failure.TIMEOUT)
+        except PersonalKeyRejected:
+            log.info("federation.keyed_call.key_rejected", tool=permit.qualified_name)
+            return self._failed(permit, Failure.KEY_REJECTED)
+        except Exception as exc:  # noqa: BLE001 - any transport error degrades the same way
+            # The type only: an SDK error string is not ours to vouch for, and
+            # this call carried a secret.
+            log.warning(
+                "federation.keyed_call.failed",
+                tool=permit.qualified_name,
+                error=type(exc).__name__,
+            )
+            return self._failed(permit, Failure.UNAVAILABLE)
+        return self._completed(permit, result)
+
+    def _completed(self, permit: ToolPermit, result: ToolResult) -> FederatedResult:
         if result.is_error:
             return self._failed(permit, Failure.TOOL_ERROR)
 
@@ -211,6 +283,10 @@ class Federation:
             truncated=truncated,
             personal=result.personal,
         )
+
+    def not_called(self, permit: ToolPermit, failure: Failure) -> FederatedResult:
+        """The result of a call the gate stopped before it reached the transport."""
+        return self._failed(permit, failure)
 
     def _failed(self, permit: ToolPermit, failure: Failure) -> FederatedResult:
         return FederatedResult(
@@ -241,6 +317,8 @@ class Federation:
 async def connect(
     config: FederationConfig,
     factory: SessionFactory | None = None,
+    *,
+    keyed: KeyedSessionFactory | None = None,
 ) -> Federation:
     """Open every configured server, then register the allowlist against it.
 
@@ -275,4 +353,4 @@ async def connect(
         await stack.aclose()
         raise
 
-    return Federation(config, sessions, registration, stack)
+    return Federation(config, sessions, registration, stack, keyed)

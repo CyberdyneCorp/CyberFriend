@@ -294,6 +294,28 @@
       "nsfw": false,
       "options": [],
       "type": 1
+    },
+    {
+      "contexts": [
+        1
+      ],
+      "default_member_permissions": null,
+      "description": "Connect your CyberWealth key (DM only)",
+      "dm_permission": true,
+      "integration_types": [
+        0
+      ],
+      "name": "connect",
+      "nsfw": false,
+      "options": [
+        {
+          "description": "Your CyberWealth connected-app key (cwk_live_...)",
+          "name": "key",
+          "required": true,
+          "type": 3
+        }
+      ],
+      "type": 1
     }
   ],
   "guild": [

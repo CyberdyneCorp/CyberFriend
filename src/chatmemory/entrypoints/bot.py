@@ -144,6 +144,7 @@ from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.indexing import ChannelPurge, IndexingService
 from chatmemory.app.notifications import NotificationDelivery
+from chatmemory.app.personal_keys import PersonalKeys
 from chatmemory.app.reasoning.contract import RunTracer
 from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import ScheduledTaskRunner
@@ -267,6 +268,7 @@ def build_bot(
     clock: Clock = utc_now,
     voice: VoiceQuestions | None = None,
     capabilities: Capabilities | None = None,
+    personal_keys: PersonalKeys | None = None,
 ) -> BotGraph:
     """Assemble the Discord surface over an already-verified answer service."""
     # Resolvers read live guild state, which does not exist until the
@@ -384,6 +386,10 @@ def build_bot(
         # listing no channel is. Without the engine the command says it cannot
         # show anything here.
         client.attach_privacy(build_privacy(settings, notifications, listing, clock))
+    if personal_keys is not None:
+        # A CyberWealth key sent in a DM or with `/connect`. Without it a key
+        # is refused with a reply, and still never answered or archived.
+        client.attach_personal_keys(personal_keys)
     # Position alerts: the chain read through `alert_transport` (the process's
     # edge), the message through the scheduled-task messenger with no heading
     # of its own, since an alert's text carries one in its own language.
@@ -733,6 +739,9 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # What this deployment runs, for a bare mention. Without it the mention
         # describes only what every deployment has.
         capabilities=stack.capabilities,
+        # The same keys the answer stack's federation reads a bearer from, so
+        # a key connected in a DM is the one the next `my_*` call carries.
+        personal_keys=stack.personal_keys,
     )
     return Process(
         graph=graph,

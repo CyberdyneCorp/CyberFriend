@@ -139,6 +139,11 @@ class FederationConfig:
     max_tools_per_run: int = 5
     max_result_chars: int = 4000
     call_timeout_seconds: float = 15.0
+    #: Servers whose personal (`my_`) tools are called with the asker's own key
+    #: rather than the deployment's identity. Such a tool is registered even
+    #: when the deployment's identity is not shown it: a server lists only what
+    #: the credential asking may call.
+    personal_key_servers: frozenset[str] = frozenset()
     _by_name: dict[str, ServerConfig] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
