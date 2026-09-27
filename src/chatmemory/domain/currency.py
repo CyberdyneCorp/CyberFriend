@@ -74,8 +74,10 @@ SUPPORTED_CODES = frozenset(CURRENCIES)
 
 _NAMES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
-        "BRL": ("real", "reais", "real brasileiro", "reais brasileiros", "brazilian real",
-                "brazilian reais", "r$"),
+        # Number and gender as people type them: "reais brasileiro" too.
+        "BRL": ("real", "reais", "real brasileiro", "reais brasileiros", "reais brasileiro",
+                "real brasileiros", "brazilian real", "brazilian reais", "brazilian reals",
+                "r$"),
         USD: ("dolar", "dolares", "dolar americano", "dolares americanos", "dollar",
               "dollars", "us dollar", "us dollars", "american dollar", "us$"),
         "EUR": ("euro", "euros", "€"),

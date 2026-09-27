@@ -219,11 +219,16 @@ chamar de Leo, nasci em 21/06/1981, meu telefone é …, moro em …, minha cart
 age is not kept: it follows from the birth date. "My name is" with one word is
 the name you're called by; with more, it is your full name. Common typos
 ("walet", "morro") and a missing "é"/"is" before an email, phone or wallet are
-understood.
+understood, and so is a request to remember wrapped around any of them —
+*"guarde na sua memória que eu quero os meus valores em reais brasileiro"*,
+*"lembre que …"*, *"remember that …"*.
 
-`what do you know about me?` (or `o que você sabe sobre mim?`) shows them,
-`what's my phone?` / `qual o meu telefone?` shows one, and `forget my email`
-deletes one. Replies come in the language you wrote in.
+`what do you know about me?` (or `o que você sabe sobre mim?`, also typed as
+`oq vc sabe sobre mim` or with a typo for "você") shows them, `what's my
+phone?` / `qual o meu telefone?` / `você sabe qual é o meu email?` shows one,
+and `forget my email` deletes one. `qual a moeda do meu país?` / `what's my
+currency?` shows the preferred currency, or says how to save one. Replies
+come in the language you wrote in.
 
 Saving another wallet adds it rather than replacing the first. `forget my
 wallet 0x…` (or `…45e0`) / `esqueça minha carteira 0x…` removes that one;
@@ -231,7 +236,11 @@ with several saved, `forget my wallet` alone asks which. `forget my wallets` /
 `esqueça minhas carteiras` removes them all, Ethereum and Bitcoin. `what's my portfolio?`
 sums every saved wallet; a balance, DeFi, activity or alert question reads one, so with
 several saved it asks which (by their last four characters) unless you name it —
-`what's my wallet balance …45e0?`.
+`what's my wallet balance …45e0?`. With none saved and none typed, such a
+question uses the latest address you typed earlier in the same conversation (the
+same DM or channel — never one somebody else wrote or one found in the
+messages), and `a carteira que eu acabei de passar` / `essa carteira` / `the
+wallet I just gave you` asks your last wallet question again with it.
 
 With a preferred currency saved, every dollar figure the assistant reads for
 you is followed by the same figure in that currency, converted in code at the

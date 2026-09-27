@@ -76,6 +76,7 @@ from chatmemory.app.routing import (
     PositionKind,
     Route,
     RoutingDecision,
+    asker_typed_address,
     classify,
     explicit_web_search,
     market_follow_up,
@@ -401,6 +402,10 @@ class ReasoningAnswerService:
         """
         handler = CHAIN_HANDLERS[query.route]
         lookup = _lookup_addresses(question, query)
+        if query.asked is not None:
+            # "A carteira que eu acabei de passar": the earlier question, which
+            # is the asker's own words, is what is asked and rooted against.
+            question = replace(question, text=query.asked)
         addresses = lookup.addresses
         if lookup.choose_from:
             log.info(
@@ -435,6 +440,7 @@ class ReasoningAnswerService:
             route=handler.decision,
             label=str(query.route),
             carried=query.carried,
+            address_source=lookup.source,
             wallets=len(addresses),
         )
         return (
@@ -473,9 +479,33 @@ class _Lookup:
 
     addresses: tuple[str, ...] = ()
     choose_from: tuple[str, ...] = ()
+    #: Where the addresses came from, for the log: "typed" in this question,
+    #: "carried" from an earlier chain question, "asker_typed" earlier in this
+    #: conversation, "saved", or "" for none.
+    source: str = ""
 
 
 def _lookup_addresses(question: Question, query: CryptoQuery) -> _Lookup:
+    """Whose wallets to read, or which saved one to choose.
+
+    With nothing typed, carried or saved, the latest address the asker typed
+    in this conversation -- their own earlier words, recalled for them in
+    this location only, so another person's message or retrieved content is
+    never a source. "Which wallet?" was asked right after a question naming
+    one. The spelled-out address is then rooted in the asker's question like
+    any typed one.
+    """
+    found = _typed_or_saved(question, query)
+    if found.addresses or found.choose_from:
+        return found
+    previous = tuple(turn.question for turn in question.memory.turns)
+    earlier = asker_typed_address(previous)
+    if earlier is None:
+        return found
+    return _Lookup((earlier,), source="asker_typed")
+
+
+def _typed_or_saved(question: Question, query: CryptoQuery) -> _Lookup:
     """Whose wallets to read: what was typed or carried, and the saved ones.
 
     Every saved wallet joins a portfolio question about the asker's own money,
@@ -487,9 +517,10 @@ def _lookup_addresses(question: Question, query: CryptoQuery) -> _Lookup:
     otherwise asks which -- never silently the first.
     """
     typed = query.addresses
+    given = "carried" if query.carried else "typed"
     portfolio = query.route is CryptoRoute.PORTFOLIO
     if not query.mine or (typed and not portfolio):
-        return _Lookup(typed)
+        return _Lookup(typed, source=given if typed else "")
     saved = _saved_wallets(question)
     if not portfolio and len(saved) > 1:
         named = named_by_suffix(question.text, saved)
@@ -497,7 +528,8 @@ def _lookup_addresses(question: Question, query: CryptoQuery) -> _Lookup:
             return _Lookup(choose_from=saved)
         saved = named
     lowered = {a.lower() for a in typed}
-    return _Lookup((*(w for w in saved if w.lower() not in lowered), *typed))
+    merged = (*(w for w in saved if w.lower() not in lowered), *typed)
+    return _Lookup(merged, source="saved" if saved else (given if typed else ""))
 
 
 def _spelled_out(question: Question, addresses: Sequence[str]) -> Question:

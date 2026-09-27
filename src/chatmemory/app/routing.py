@@ -643,6 +643,51 @@ def _chain_turn(text: str) -> tuple[str, ...] | None:
     return (found.address,) if found.address is not None else ()
 
 
+def asker_typed_address(previous: Sequence[str]) -> str | None:
+    """The latest address the asker typed in any of their remembered questions.
+
+    For a chain question that needs an address and names none: "Porque você
+    não respondeu o valor das pools na minha moeda?" right after a question
+    about 0x... was answered "Which wallet?". `previous` is the asker's own
+    earlier questions here (memory is kept per person and location), so an
+    address somebody else wrote, or one in retrieved content or an answer,
+    is never a candidate -- it is the asker's own words, as rooting requires.
+    """
+    for earlier in reversed(previous):
+        found = find_addresses(earlier)
+        if found:
+            return found[0]
+    return None
+
+
+_WALLET_REFERENCE = re.compile(
+    r"\A\s*(?:e\s+|and\s+)?(?:"
+    # "a carteira que eu acabei de passar", "essa carteira", "use o mesmo endereço"
+    r"(?:(?:use|usa|usar|com|para|pra|n[ao]|d[ao])\s+)?(?:[ao]\s+)?(?:mesm[ao]\s+)?"
+    r"(?:(?:ess|est|aquel|dess|dest|ness|nest|naquel)[ae]\s+)?(?:mesm[ao]\s+)?"
+    r"(?:carteira|wallet|endere[cç]o)(?:\s+mesm[ao])?"
+    r"(?:\s+que\s+(?:eu\s+)?(?:acabei\s+de\s+|j[aá]\s+)?(?:te\s+|lhe\s+)?"
+    r"(?:pass|mand|envi|inform|digit|col|cit)(?:ei|ar)|\s+anterior|\s+de\s+antes)?"
+    r"(?:\s+(?:antes|agora|acima|h[aá]\s+pouco))?"
+    r"|"
+    # "the wallet I just gave you", "same address"
+    r"(?:(?:use|for|with|on)\s+)?(?:the\s+|that\s+|this\s+)?(?:same\s+)?(?:wallet|address)"
+    r"(?:\s+(?:that\s+)?i\s+(?:just\s+)?(?:gave|sent|passed|typed|pasted|shared|mentioned)"
+    r"(?:\s+(?:to\s+)?you)?|\s+from\s+before)?(?:\s+(?:before|earlier|above))?"
+    r")[\s?!.,]*\Z",
+    re.IGNORECASE,
+)
+
+
+def wallet_reference(text: str) -> bool:
+    """Whether the whole message only points back at a wallet already given.
+
+    "A carteira que eu acabei de passar" answered "Which wallet?" and went to
+    the corpus search; it means: the last chain question, with that address.
+    """
+    return bool(_WALLET_REFERENCE.match(text))
+
+
 @dataclass(frozen=True, slots=True)
 class PortfolioQuestion:
     """What somebody holds in total, on chain.
@@ -1366,10 +1411,15 @@ _POLITE = (
     r"pode|voc[eê]\s+pode)"
 )
 _GREETING = r"(?:hey|hi|hello|ok|okay|so|oi|ol[aá])"
-_REMEMBER = r"(?:remember|note|save|keep\s+in\s+mind|lembre(?:-se)?|lembra|anota|guarda|salva)"
+_REMEMBER = (
+    r"(?:remember|note|save|keep\s+in\s+mind|lembr[ae](?:-se)?|anot[ae]|guard[ae]|salv[ae]|"
+    r"grave|registr[ae])"
+)
+# "Guarde na sua memória que ...": where to keep it, said before what.
+_IN_MEMORY = r"(?:\s+(?:n[ae]\s+(?:sua\s+)?mem[oó]ria|in\s+(?:your\s+)?memory))?"
 _LEAD = (
     rf"^(?:{_GREETING}\b[,!.]?\s*)*(?:{_POLITE}\b,?\s*)*"
-    rf"(?:{_REMEMBER}\b(?:\s+(?:that|que|de\s+que))?[:,]?\s*)?"
+    rf"(?:{_REMEMBER}\b{_IN_MEMORY}(?:\s+(?:that|que|de\s+que))?[:,]?\s*)?"
 )
 _TRAIL = r"(?:,?\s*(?:please|pls|por\s+favor|thanks|thank\s+you|obrigad[oa]))?[\s.!?]*$"
 _IS = r"(?:is|[ée])"
@@ -1413,8 +1463,9 @@ _A_CURRENCY = rf"(?P<value>{CURRENCY_NAMES})"
 _A_CURRENCY_OR_CODE = rf"(?P<value>{CURRENCY_NAMES_OR_CODES})"
 _PREFER_IN = (
     r"(?:(?:eu\s+)?(?:prefiro|quero)(?:\s+(?:ver|receber))?"
-    r"(?:\s+(?:os\s+)?(?:valores|pre[cç]os))?\s+em|"
-    r"i\s+(?:prefer|want)(?:\s+to\s+see)?(?:\s+(?:prices|values|amounts|figures))?\s+in|"
+    r"(?:\s+(?:os\s+)?(?:meus\s+)?(?:valores|pre[cç]os))?\s+em|"
+    r"i\s+(?:prefer|want)(?:\s+to\s+see)?(?:\s+(?:my\s+)?(?:prices|values|amounts|figures))?"
+    r"\s+in|"
     r"(?:show|give)\s+me\s+(?:prices|values|amounts|figures)\s+in)"
 )
 _I_USE = r"(?:(?:eu\s+)?uso|i\s+use)"
@@ -1613,13 +1664,15 @@ _SHOW_PATTERN = re.compile(
     rf"what(?:'s|\s+is)\s+my\s+(?:{_EMAIL_WORD}|preferred\s+name|preferred\s+language)|"
     r"what\s+(?:do\s+you\s+call\s+me|name\s+do\s+you\s+call\s+me|"
     r"language\s+do\s+you\s+(?:reply|answer)(?:\s+to\s+me)?\s+in)|"
-    r"(?:o\s*que|oq)\s+(?:voc[eê]|vc)\s+sabe\s+sobre\s+mim|"
     r"qual\s+(?:[ée]\s+)?(?:o\s+)?meu\s+(?:e-?mail|nome\s+preferido|idioma(?:\s+preferido)?)"
     r")" + _TRAIL,
     re.IGNORECASE,
 )
 
+# "Você sabe qual é ...?" / "do you know what ...?" asks the same thing.
+_DO_YOU_KNOW = r"(?:(?:voc[eê]|vc|tu)\s+sabes?\s+|do\s+you\s+know\s+)?"
 _WHAT_IS_MY = (
+    rf"{_DO_YOU_KNOW}"
     r"(?:what(?:'s|\s+is|\s+are)\s+my|qual\s+(?:[ée]\s+)?(?:o\s+|a\s+)?(?:meu|minha)|"
     r"quais\s+(?:s[aã]o\s+)?(?:os\s+|as\s+)?(?:meus|minhas))"
 )
@@ -1667,14 +1720,56 @@ _SHOW_ONE_QUESTION = (
     (FactKind.BIRTH_DATE, re.compile(
         _LEAD + r"(?:when\s+was\s+i\s+born|quando\s+(?:eu\s+)?nasci)" + _TRAIL, re.IGNORECASE
     )),
+    # "Você sabe qual é a moeda do meu país?" went to the corpus: the currency
+    # asked for without the word "minha".
+    (FactKind.PREFERRED_CURRENCY, re.compile(
+        _LEAD + _DO_YOU_KNOW
+        + r"(?:qual\s+(?:[ée]\s+)?(?:a\s+)?(?:minha\s+moeda\s+de\s+base|"
+        r"moeda\s+(?:do\s+meu\s+pa[ií]s|que\s+(?:eu\s+)?(?:uso|prefiro)))|"
+        r"what(?:'s|\s+is)\s+(?:my\s+base\s+currency|the\s+currency\s+of\s+my\s+country|"
+        r"my\s+country'?s\s+currency)|"
+        r"which\s+currency\s+do\s+i\s+(?:use|prefer))" + _TRAIL,
+        re.IGNORECASE,
+    )),
 )
+
+# "O que você sabe sobre mim?" with the subject as people type it: "vc", "tu",
+# or a typo -- "Oque vide sabe sobre mim ?" went to the corpus. One word only,
+# so "o que o João sabe sobre mim?" is not the asker asking for their facts.
+_ABOUT_ME = tuple(
+    re.compile(_LEAD + body + _TRAIL, re.IGNORECASE)
+    for body in (
+        r"(?:o\s*que|oq|o\s+q)\s+(?P<who>[^\W\d_]+)\s+sabes?\s+(?:sobre|de)\s+mim",
+        r"what\s+(?:do|did|does)\s+(?P<who>[^\W\d_]+)\s+(?:know|remember)\s+about\s+me",
+    )
+)
+_YOU = frozenset({"você", "voce", "vc", "vce", "tu", "you", "u", "ya"})
+_NOT_YOU = frozenset({
+    "ele", "ela", "eles", "elas", "eu", "nos", "nós", "gente", "todos", "alguem", "alguém",
+    "ninguem", "ninguém", "he", "she", "they", "we", "i", "it", "people", "everyone",
+})
+_TYPO_LETTERS = 5
+
+
+def _means_you(who: str) -> bool:
+    """Whether the subject of "o que X sabe sobre mim" is the assistant.
+
+    "você" and its spellings, or a short lowercase word that is none of the
+    other pronouns: a typo of "você" ("vide"). A capitalised word is a name.
+    """
+    folded = who.casefold()
+    if folded in _YOU:
+        return True
+    return len(who) <= _TYPO_LETTERS and who[0].islower() and folded not in _NOT_YOU
 
 
 def _show_intent(text: str) -> FactIntent | None:
     for kind, pattern in (*_SHOW_ONE, *_SHOW_ONE_QUESTION):
         if pattern.match(text):
             return FactIntent(FactAction.SHOW, kind)
-    if _SHOW_PATTERN.match(text):
+    if _SHOW_PATTERN.match(text) or any(
+        (m := p.match(text)) is not None and _means_you(m.group("who")) for p in _ABOUT_ME
+    ):
         return FactIntent(FactAction.SHOW)
     if _CAPABILITIES_PATTERN.match(text):
         return FactIntent(FactAction.CAPABILITIES)
