@@ -71,9 +71,13 @@ export class FeatureRequestsVM {
       const problem = draftProblem(draft);
       if (problem !== null) throw new Error(problem);
       const patch = patchFor(row, draft);
-      this.draft = null;
-      if (Object.keys(patch).length === 0) return NOTHING_CHANGED;
+      if (Object.keys(patch).length === 0) {
+        this.draft = null;
+        return NOTHING_CHANGED;
+      }
+      // Closed only once the server took it, so a refusal keeps what was typed.
       await this.#api.triageFeatureRequest(row.id, patch);
+      if (this.draft === draft) this.draft = null;
       void this.load();
       return `#${row.id} saved.`;
     });

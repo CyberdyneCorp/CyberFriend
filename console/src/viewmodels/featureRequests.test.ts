@@ -88,4 +88,22 @@ describe("FeatureRequestsVM", () => {
     expect(vm.action.error).toMatch(/itself/);
     expect(vm.draft).not.toBeNull();
   });
+
+  it("keeps the typed draft when the server refuses the change", async () => {
+    const { api } = fakeApi();
+    const refusing = {
+      ...api,
+      triageFeatureRequest: async () => {
+        throw new Error("duplicate_of names a suggestion that does not exist");
+      },
+    };
+    const vm = new FeatureRequestsVM(refusing);
+    vm.edit(ROW);
+    if (vm.draft === null) throw new Error("no draft");
+    vm.draft.status = "planned";
+    vm.draft.note = "next quarter";
+    await vm.save(ROW);
+    expect(vm.action.error).toMatch(/does not exist/);
+    expect(vm.draft).toMatchObject({ id: 12, status: "planned", note: "next quarter" });
+  });
 });

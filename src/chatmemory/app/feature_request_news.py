@@ -92,21 +92,36 @@ class StatusNewsRunner:
         self._batch = batch
 
     async def run_due(self) -> int:
-        """Send what is due; how many messages arrived."""
+        """Send what is due; how many messages arrived.
+
+        One item's failure never abandons the rest of the batch: every claim
+        is either sent or put back, so no status change is lost for good.
+        """
         sent = 0
         for news in await self._store.claim_status_news(self._batch):
+            if await self._announce(news):
+                sent += 1
+        return sent
+
+    async def _announce(self, news: StatusNews) -> bool:
+        try:
             result = await self._messenger.deliver(
                 news.person, news.request_id, status_message(news)
             )
-            if result is DeliveryResult.SENT:
-                sent += 1
-                continue
+        except Exception:  # an unexpected failure is a transient one
+            log.exception("suggestions.status_news_deliver_failed", request_id=news.request_id)
+            result = DeliveryResult.FAILED
+        if result is DeliveryResult.SENT:
+            return True
+        try:
             await self._store.release(news)
             if result is DeliveryResult.CLOSED:
                 await self._store.record_undeliverable(news.person, self._clock())
-            log.info(
-                "suggestions.status_news_not_sent",
-                request_id=news.request_id,
-                result=str(result),
-            )
-        return sent
+        except Exception:
+            log.exception("suggestions.status_news_release_failed", request_id=news.request_id)
+        log.info(
+            "suggestions.status_news_not_sent",
+            request_id=news.request_id,
+            result=str(result),
+        )
+        return False

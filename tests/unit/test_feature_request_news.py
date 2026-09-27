@@ -98,6 +98,46 @@ async def test_a_transient_failure_is_put_back_for_the_next_sweep() -> None:
     assert await runner(store, messenger).run_due() == 1
 
 
+@dataclass
+class RaisingMessenger(FakeMessenger):
+    """Raises on the first delivery, as a dropped socket or a timeout would."""
+
+    raised: int = 0
+
+    async def deliver(self, person: PersonRef, task_id: int, text: str) -> DeliveryResult:
+        if self.raised == 0:
+            self.raised += 1
+            raise OSError("connection reset")
+        return await super().deliver(person, task_id, text)
+
+
+async def test_a_raised_delivery_is_put_back_and_the_batch_goes_on() -> None:
+    # Regression: an exception from deliver() left the loop, and every claim
+    # after it stayed advanced, so those messages were never sent.
+    store, messenger = FakeStore([news(1), news(2)]), RaisingMessenger()
+
+    assert await runner(store, messenger).run_due() == 1
+    assert [i for _, i, _ in messenger.sent] == [2]
+    assert store.released == [news(1)]
+
+    assert await runner(store, messenger).run_due() == 1
+    assert sorted(i for _, i, _ in messenger.sent) == [1, 2]
+
+
+class FailingReleaseStore(FakeStore):
+    async def release(self, item: StatusNews) -> None:
+        self.released.append(item)
+        raise OSError("database went away")
+
+
+async def test_a_failed_put_back_does_not_abandon_the_rest() -> None:
+    store = FailingReleaseStore([news(1), news(2)])
+
+    assert await runner(store, FakeMessenger(DeliveryResult.FAILED)).run_due() == 0
+
+    assert [n.request_id for n in store.released] == [1, 2]
+
+
 def test_the_message_is_in_the_suggestions_language() -> None:
     assert status_message(news(language="pt")) == (
         "Sua sugestão **#12** agora está: **planejada**.\n> dark mode\n"

@@ -253,6 +253,99 @@ async def test_nothing_is_sent_after_erasure(clean: AsyncEngine) -> None:
     assert await sweep(clean, Messenger()).run_due() == 0
 
 
+async def test_no_message_after_yes_then_no(clean: AsyncEngine) -> None:
+    # Answering No after Yes leaves `notified_status` set; only the opt-in
+    # guard keeps the change from being announced.
+    mine = await suggest(clean, LEO, "dark mode", notify=True)
+    service = FeatureRequestService(PostgresFeatureRequestStore(clean), clock=lambda: NOW)
+    assert await service.set_notify(LEO, mine, False)
+    await set_status(clean, mine, RequestStatus.PLANNED)
+    messenger = Messenger()
+
+    assert await sweep(clean, messenger).run_due() == 0
+    assert messenger.sent == []
+
+
+async def test_an_opted_out_persons_leftover_rows_neither_send_nor_block(
+    clean: AsyncEngine,
+) -> None:
+    # The purge normally deletes the rows. If it ever missed them, the claim
+    # must skip them itself: the row guard would drop the UPDATE, but rows
+    # picked and then dropped would fill every batch and starve everyone else.
+    theirs = await suggest(clean, LEO, "dark mode", notify=True)
+    mine = await suggest(clean, ANA, "light mode", notify=True)
+    await set_status(clean, theirs, RequestStatus.PLANNED)
+    await set_status(clean, mine, RequestStatus.PLANNED)
+    async with clean.begin() as conn:
+        await conn.execute(text("ALTER TABLE person_opt_out DISABLE TRIGGER USER"))
+        await conn.execute(
+            text("INSERT INTO person_opt_out (person_id) VALUES (:i)"),
+            {"i": await person_id(clean, LEO)},
+        )
+        await conn.execute(text("ALTER TABLE person_opt_out ENABLE TRIGGER USER"))
+    messenger = Messenger()
+
+    runner = StatusNewsRunner(
+        PostgresStatusNewsStore(clean), messenger, clock=lambda: NOW, batch=1
+    )
+    assert await runner.run_due() == 1
+    assert [(p, i) for p, i, _ in messenger.sent] == [(ANA, mine)]
+
+
+async def test_the_message_goes_to_the_account_the_suggestion_came_from(
+    clean: AsyncEngine,
+) -> None:
+    mine = await suggest(clean, LEO, "dark mode", notify=True)
+    # The same person on another platform, with a lower account id.
+    async with clean.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO person_platform_id (platform, platform_user_id, person_id) "
+                "VALUES ('another', 1, :i)"
+            ),
+            {"i": await person_id(clean, LEO)},
+        )
+    await set_status(clean, mine, RequestStatus.PLANNED)
+    messenger = Messenger()
+
+    assert await sweep(clean, messenger).run_due() == 1
+    assert [p for p, _, _ in messenger.sent] == [LEO]
+
+
+async def test_a_late_put_back_does_not_undo_a_newer_claim(clean: AsyncEngine) -> None:
+    mine = await suggest(clean, LEO, "dark mode", notify=True)
+    await set_status(clean, mine, RequestStatus.PLANNED)
+    store = PostgresStatusNewsStore(clean)
+    [stale] = await store.claim_status_news(10)
+    # While the first message is in flight the status moves on and another
+    # sweep claims and sends the newer change.
+    await set_status(clean, mine, RequestStatus.DONE)
+    [newer] = await store.claim_status_news(10)
+    assert newer.status is RequestStatus.DONE
+
+    await store.release(stale)
+
+    assert await store.claim_status_news(10) == []
+
+
+async def test_a_raised_delivery_loses_no_claim(clean: AsyncEngine) -> None:
+    # Regression: an exception from deliver() abandoned the batch with every
+    # claim advanced, so those authors were never told.
+    first = await suggest(clean, LEO, "dark mode", notify=True)
+    second = await suggest(clean, ANA, "light mode", notify=True)
+    await set_status(clean, first, RequestStatus.PLANNED)
+    await set_status(clean, second, RequestStatus.PLANNED)
+
+    class Raising(Messenger):
+        async def deliver(self, person: PersonRef, task_id: int, text: str) -> DeliveryResult:
+            raise OSError("connection reset")
+
+    assert await sweep(clean, Raising()).run_due() == 0
+    working = Messenger()
+    assert await sweep(clean, working).run_due() == 2
+    assert sorted(i for _, i, _ in working.sent) == sorted([first, second])
+
+
 async def test_the_message_is_in_the_suggestions_language(clean: AsyncEngine) -> None:
     mine = await suggest(clean, LEO, "tenho uma ideia: modo escuro para o painel", notify=True)
     await set_status(clean, mine, RequestStatus.PLANNED)
