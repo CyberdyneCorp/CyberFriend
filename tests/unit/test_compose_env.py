@@ -113,6 +113,21 @@ DEPLOYMENT_SETTINGS = {
 }
 
 
+@pytest.mark.parametrize(
+    ("setting", "default"),
+    [
+        ("ACCOUNT_PROVISIONING_ENABLED", "false"),
+        ("PROVISIONING_EMAIL_KEY", ""),
+        ("ADMIN_PUBLIC_URL", ""),
+    ],
+)
+def test_account_provisioning_settings_reach_the_bot(setting: str, default: str) -> None:
+    """`/account` runs in the bot: the switch, the email HMAC key and the URL
+    the sign-in link points at must all reach it, or turning it on in the
+    platform silently leaves it off."""
+    assert f"{setting}=${{{setting}:-{default}}}" in service_block("bot")
+
+
 def service_block(name: str) -> str:
     match = re.search(rf"^  {name}:$(.*?)(?=^  \w+:$|\Z)", COMPOSE, re.M | re.S)
     assert match, f"service {name} missing from docker-compose.yml"

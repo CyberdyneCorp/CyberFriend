@@ -75,6 +75,7 @@ from chatmemory.adapters.discord.source import (
 )
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
 from chatmemory.adapters.store.config_postgres import PostgresConfigurationStore
+from chatmemory.app.accounts import AccountRecordsRetention
 from chatmemory.app.asks.state import AskStateService
 from chatmemory.app.asks.worker import (
     BacklogExtractionWorker,
@@ -89,6 +90,7 @@ from chatmemory.app.reasoning.tracing import TraceRetention, TraceWithdrawal
 from chatmemory.app.scope import LiveScope, ScopeChange, ScopeProvider
 from chatmemory.app.windowing import WindowBuilder
 from chatmemory.composition import (
+    build_account_retention,
     build_ask_pipeline,
     build_corpus_store,
     build_decision_store,
@@ -143,6 +145,9 @@ MEMORY_RETENTION_INTERVAL_SECONDS = 3600.0
 # How often interrupted `/privacy` erasures are looked for. Each step is
 # idempotent, so a pass that fails costs only the wait for the next one.
 ERASURE_SWEEP_INTERVAL_SECONDS = 300.0
+# How often account-provisioning requests past their 30 days and link codes
+# past their day are deleted. Hourly, like memory: two indexed deletes.
+ACCOUNT_CLEANUP_INTERVAL_SECONDS = 3600.0
 
 
 def channels_in(channel_ids: frozenset[int]) -> list[ChannelRef]:
@@ -622,6 +627,31 @@ async def memory_retention_loop(
         await asyncio.sleep(interval)
 
 
+async def account_cleanup_loop(
+    retention: AccountRecordsRetention,
+    state: HealthState,
+    interval: float = ACCOUNT_CLEANUP_INTERVAL_SECONDS,
+) -> None:
+    """Delete account-provisioning records once they no longer count.
+
+    A request counts toward the per-person limits for 30 days and a link code
+    for one; after that neither has a purpose. Here for the reason memory
+    retention is: this is the one process that runs sweeps.
+    """
+    while True:
+        try:
+            cleaned = await retention.sweep(datetime.now(UTC))
+            state.details["account_cleanup"] = {
+                "requests": cleaned.requests,
+                "codes": cleaned.codes,
+                "last_run_at": time.time(),
+            }
+        except Exception:
+            # The rows stay until the next pass; the limits still hold.
+            log.exception("accounts.cleanup_failed")
+        await asyncio.sleep(interval)
+
+
 async def erasure_sweep_loop(
     erasure: ErasureService,
     state: HealthState,
@@ -826,6 +856,10 @@ async def main() -> None:
         tasks.create_task(
             memory_retention_loop(build_memory_retention(settings, engine), state)
         )
+
+        # Unconditional: rows written while provisioning was on must age out
+        # after it is switched off too.
+        tasks.create_task(account_cleanup_loop(build_account_retention(engine), state))
 
         start_trace_sweeps(tasks, settings, engine, state)
         # Unconditional: a person who asked for everything to be deleted

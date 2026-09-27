@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+MIN_EMAIL_KEY_CHARS = 32
+"""PROVISIONING_EMAIL_KEY is an HMAC key: shorter is guessable."""
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -391,6 +394,25 @@ class Settings(BaseSettings):
     on (a channel's first backfill, edits, messages missed while down): history
     already imported is never re-read, so it records nothing of it."""
 
+    # --- CyberdyneAuth accounts --------------------------------------------
+    account_provisioning_enabled: bool = False
+    """`/account`: a person asks for a CyberdyneAuth account in a DM.
+
+    Off by default, and the command is not offered while it is off. On, it
+    needs PROVISIONING_EMAIL_KEY and ADMIN_PUBLIC_URL, and a provisioner: until
+    the CyberdyneAuth adapter ships, only the end-to-end harness has one, so a
+    deployment that turns this on keeps the command hidden and says so in the
+    log.
+    """
+
+    provisioning_email_key: SecretStr | None = None
+    """The key of `HMAC-SHA256(key, lowercased email)`, the only form an email
+    is stored in. At least 32 characters; never logged. Changing it orphans
+    every stored consent and link code."""
+
+    admin_public_url: str | None = None
+    """The admin console's public URL; link codes are DMed as `{this}/link?code=...`."""
+
     # --- Time ----------------------------------------------------------
     answer_timezone: str = "America/Sao_Paulo"
     """The zone whose calendar a question's "ontem" or "last week" means.
@@ -598,6 +620,31 @@ class Settings(BaseSettings):
         it would read as "I couldn't understand the audio"."""
         if self.voice_questions_enabled and self.media_api_key is None:
             raise ValueError("voice_questions_enabled needs media_api_key")
+        return self
+
+    @field_validator("provisioning_email_key")
+    @classmethod
+    def _long_enough_email_key(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is not None and len(v.get_secret_value()) < MIN_EMAIL_KEY_CHARS:
+            raise ValueError(f"must be at least {MIN_EMAIL_KEY_CHARS} characters")
+        return v
+
+    @field_validator("admin_public_url")
+    @classmethod
+    def _https_public_url(cls, v: str | None) -> str | None:
+        if v is not None and not v.lower().startswith(("https://", "http://")):
+            raise ValueError("admin_public_url must be an http(s) URL")
+        return v.rstrip("/") if v is not None else None
+
+    @model_validator(mode="after")
+    def _provisioning_needs_a_key_and_url(self) -> Settings:
+        """Refused at boot rather than on somebody's first Confirm."""
+        if self.account_provisioning_enabled and (
+            self.provisioning_email_key is None or self.admin_public_url is None
+        ):
+            raise ValueError(
+                "account_provisioning_enabled needs provisioning_email_key and admin_public_url"
+            )
         return self
 
     @field_validator("media_enabled_at")

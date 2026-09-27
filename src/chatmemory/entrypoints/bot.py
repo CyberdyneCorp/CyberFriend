@@ -155,6 +155,7 @@ from chatmemory.composition import (
     AnswerStack,
     Edges,
     ask_policy,
+    build_accounts,
     build_alert_requests,
     build_alert_runner,
     build_answer_stack,
@@ -734,6 +735,11 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # describes only what every deployment has.
         capabilities=stack.capabilities,
     )
+    # `/account`, offered only when ACCOUNT_PROVISIONING_ENABLED and a
+    # provisioner is at the edge. Nothing reaches CyberdyneAuth otherwise.
+    accounts = build_accounts(settings, stack.engine, edges.account_provisioner, edges.clock)
+    if accounts is not None:
+        graph.client.attach_accounts(accounts)
     return Process(
         graph=graph,
         stack=stack,

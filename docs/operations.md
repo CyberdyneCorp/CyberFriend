@@ -1190,6 +1190,51 @@ surrounding conversation is stored.
   `purge_person_derived` (added by 0030), so self-service erasure reaches
   suggestions as well.
 
+## CyberdyneAuth accounts
+
+`/account create` asks CyberdyneAuth for an account for the person; `/account
+link` (or [Link my account]) DMs them a single-use sign-in link. Both exist
+only when `ACCOUNT_PROVISIONING_ENABLED=true` **and** a provisioner is wired:
+until the CyberdyneAuth adapter ships, a deployment that turns the switch on
+logs `composition.accounts_without_provisioner` and keeps the command hidden.
+Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
+(`ports/accounts.py`).
+
+- **Consent in a DM, to exact values.** Asked in a channel, the reply is
+  private and the rest continues in a DM. The DM shows the name (full name,
+  else preferred name, else Discord display name), the email (the email fact,
+  or one typed into a form, which is not saved as a fact) and the language,
+  says CyberdyneAuth will email an invitation and the account works only once
+  it is accepted, and that the CyberdyneAuth account is **not** deleted by
+  `/privacy` -> Delete everything (CyberdyneAuth has no deletion API yet; a
+  server admin asks their team). Nothing is sent before [Confirm], and only
+  `email`, `name` and `locale` (`en` or `pt-BR`) are: `ProvisioningRequest`
+  has no other field.
+- **One reply for every outcome.** CyberdyneAuth answers 202 whether it
+  created the account, it already existed, or it throttled the address, so the
+  reply is always "If this address doesn't have a CyberdyneAuth account yet,
+  it will receive an invitation...".
+- **Limits per person**: 1 request in 24 hours and 3 in 30 days, decided under
+  a lock on the person row before CyberdyneAuth is called. Over the limit
+  nothing is sent and the reply says when to try again. A 429 or any failure
+  from CyberdyneAuth says "try again later" and is not counted.
+- **Emails are stored only as `HMAC-SHA256(PROVISIONING_EMAIL_KEY, lowercased
+  email)`** (`account_consent`, `account_provisioning_request`,
+  `account_link_code`; migration 0035). A plain hash could be reversed by
+  trying likely addresses. The key is at least 32 characters, never logged;
+  changing it orphans every stored consent and link code. The admin process
+  will need the same key to match a signed-in email when the web link flow
+  arrives.
+- **Link codes**: 32 random bytes in `ADMIN_PUBLIC_URL/link?code=...`, stored
+  only as sha256, single use, valid 15 minutes; a new code ends the earlier
+  ones, and at most 5 are issued per person per day. Redeeming them (the
+  `/link` route) is not built yet.
+- **Retention**: ingest deletes requests older than 30 days and link codes
+  older than a day, hourly. Consent rows stay until opt-out or erasure.
+  `purge_person_derived` deletes every account row (consent, requests, codes,
+  links), so opt-out and Delete everything reach them, and deleting the person
+  cascades.
+
 ## Position alerts
 
 People ask for an alert in words, in English or Portuguese, and confirm it
