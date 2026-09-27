@@ -200,3 +200,7 @@ p { margin: 0.25rem 0; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
 .facts dt { font-weight: 600; }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* --- usage ------------------------------------------------------------ */
+
+.usage-note { margin: 0.25rem 0 0.75rem; max-width: 80ch; }

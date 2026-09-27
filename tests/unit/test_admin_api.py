@@ -14,7 +14,7 @@ code path a request takes in production and not a hand-rolled imitation of it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
@@ -38,9 +38,20 @@ from chatmemory.app.authorization import ToolEffect
 from chatmemory.app.configuration import ConfigurationEditor, RuntimeConfiguration
 from chatmemory.app.optout import OptOutService, PersonPurge
 from chatmemory.app.tokens import InMemoryTokenStore, TokenRecord
+from chatmemory.app.usage import UsageService
 from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints.admin import environment_baseline
 from chatmemory.ports.configuration import StoredSetting
+from chatmemory.ports.feature_requests import (
+    RequestStatus,
+    SourceKind,
+    TriageChange,
+    TriageEntry,
+    TriagePage,
+    TriageRefusal,
+    TriageResult,
+)
+from tests.unit.usage_fakes import FakeUsageDirectory, FakeUsageSource
 
 ANA = Operator("ana")
 BEN = Operator("ben")
@@ -200,6 +211,63 @@ class ReviewAndRevokeOnly:
         return await self.store.active_tokens()
 
 
+class FakeFeatureRequests:
+    """The console's triage port over a dict of rows."""
+
+    def __init__(self, rows: Sequence[TriageEntry] = ()) -> None:
+        self.rows = {row.id: row for row in rows}
+        self.changes: list[tuple[int, TriageChange, str]] = []
+
+    async def triage_page(
+        self, status: RequestStatus | None, *, offset: int, limit: int
+    ) -> TriagePage:
+        matching = [
+            row
+            for row in sorted(self.rows.values(), key=lambda r: r.id, reverse=True)
+            if status is None or row.status is status
+        ]
+        return TriagePage(entries=matching[offset : offset + limit], total=len(matching))
+
+    async def triage(
+        self, request_id: int, change: TriageChange, *, actor: str, now: datetime
+    ) -> TriageResult:
+        before = self.rows.get(request_id)
+        if before is None:
+            return TriageResult(refusal=TriageRefusal.NOT_FOUND)
+        if change.set_duplicate and change.duplicate_of not in (None, *self.rows):
+            return TriageResult(before=before, refusal=TriageRefusal.UNKNOWN_DUPLICATE)
+        after = replace(
+            before,
+            status=change.status or before.status,
+            admin_note=change.admin_note if change.set_note else before.admin_note,
+            duplicate_of=change.duplicate_of if change.set_duplicate else before.duplicate_of,
+            updated_at=now,
+            updated_by=actor,
+        )
+        self.rows[request_id] = after
+        self.changes.append((request_id, change, actor))
+        return TriageResult(before=before, after=after)
+
+
+def suggestion(
+    request_id: int, status: RequestStatus = RequestStatus.NEW, text: str = "dark mode"
+) -> TriageEntry:
+    return TriageEntry(
+        id=request_id,
+        text=text,
+        language="en",
+        status=status,
+        admin_note=None,
+        duplicate_of=None,
+        source_kind=SourceKind.COMMAND,
+        person_name="Sam",
+        same_text_elsewhere=0,
+        created_at=AT,
+        updated_at=AT,
+        updated_by=None,
+    )
+
+
 # --- the harness -------------------------------------------------------
 
 
@@ -217,6 +285,7 @@ class Console:
     optouts: FakeOptOutRegistry
     channels: FakeChannelDirectory
     credential: str
+    feature_requests: FakeFeatureRequests
 
     def auth(self, token: str | None = None) -> dict[str, str]:
         return {"Authorization": f"Bearer {token or self.credential}"}
@@ -234,6 +303,8 @@ async def build_console(
     status: StatusSnapshot | None = None,
     oidc_configured: bool = False,
     sign_in: SignIn | None = None,
+    suggestions: Sequence[TriageEntry] = (),
+    usage: UsageService | None = None,
 ) -> Console:
     tokens = InMemoryOperatorTokens()
     issued = await tokens.issue(ANA, "laptop")
@@ -245,6 +316,7 @@ async def build_console(
     registry = FakeOptOutRegistry()
     mcp_tokens = InMemoryTokenStore()
     directory = FakeChannelDirectory(channels)
+    feature_requests = FakeFeatureRequests(suggestions)
 
     services = AdminServices(
         configuration=configuration,
@@ -256,6 +328,8 @@ async def build_console(
         optouts=OptOutService(registry, FakeDocumentPurge(), FakePersonTraces()),
         mcp_tokens=ReviewAndRevokeOnly(mcp_tokens),
         probe=probe,
+        feature_requests=feature_requests,
+        usage=usage or UsageService(FakeUsageSource(), FakeUsageDirectory(), retention_days=90),
     )
     app = build_app(services, tokens, oidc_configured=oidc_configured, sign_in=sign_in)
     return Console(
@@ -271,6 +345,7 @@ async def build_console(
         optouts=registry,
         channels=directory,
         credential=issued.token,
+        feature_requests=feature_requests,
     )
 
 

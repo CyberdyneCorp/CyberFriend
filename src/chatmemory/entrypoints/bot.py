@@ -86,6 +86,11 @@ and sends through the same `DiscordTaskMessenger`, and `main` runs
 without `ALERTS_ENABLED` (and an Infura key) `BotGraph.alerts` is None and
 nothing starts.
 
+Suggestion status messages take the same messenger: `build_bot` builds a
+`StatusNewsRunner` over the answer stack's engine beside `/suggest`, and
+`main` runs `suggestion_news_loop` every ten minutes. The admin console
+changes a status; this is the process that tells the authors who asked.
+
 Voice questions take the same edges: `assemble` ->
 `build_voice_questions(settings, engine, edges.http_transport, edges.clock)`
 -> `build_bot(voice=...)` -> `CyberFriendClient.attach_voice`. The CDN
@@ -143,6 +148,8 @@ from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.configuration import ConfigurationEditor
 from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
+from chatmemory.app.feature_request_news import SWEEP_INTERVAL_SECONDS as SUGGESTION_SWEEP_SECONDS
+from chatmemory.app.feature_request_news import StatusNewsRunner
 from chatmemory.app.indexing import ChannelPurge, IndexingService
 from chatmemory.app.notifications import NotificationDelivery
 from chatmemory.app.reasoning.contract import RunTracer
@@ -165,6 +172,7 @@ from chatmemory.composition import (
     build_catch_up,
     build_channel_listing,
     build_conversations,
+    build_feature_request_news,
     build_feature_requests,
     build_link_announcements,
     build_live_scope,
@@ -246,6 +254,9 @@ class BotGraph:
     #: The position-alert sweep. None unless `ALERTS_ENABLED` with an Infura
     #: key; alerts are created by asking and confirming, under the same switch.
     alerts: AlertRunner | None = None
+    #: The suggestion status sweep: one direct message per status change to
+    #: authors who asked for it. None when no engine was handed in.
+    suggestion_news: StatusNewsRunner | None = None
     #: The queue drain. None when no engine was handed in, or when an
     #: operator has switched notifications off -- in which case nothing in
     #: this process sends anything, which is the safe half.
@@ -379,10 +390,17 @@ def build_bot(
         runner = build_task_runner(
             settings, notifications, asks, DiscordTaskMessenger(client.fetch_user)
         )
+    suggestion_news = None
     if notifications is not None:
         # `/suggest` and `/suggestions`. Without it both say suggestions cannot
         # be taken here.
         client.attach_feature_requests(build_feature_requests(notifications, clock))
+        # And the other half: the console changes a status and cannot message
+        # anybody, so this process tells the authors who asked to be told.
+        # Without it the Yes under an acknowledgement promises nothing.
+        suggestion_news = build_feature_request_news(
+            notifications, DiscordTaskMessenger(client.fetch_user, prefix=""), clock
+        )
         # `/privacy`. Archive coverage is the `/channels` listing, so a channel
         # the person cannot read is neither named nor counted; without a
         # listing no channel is. Without the engine the command says it cannot
@@ -410,6 +428,7 @@ def build_bot(
         notifications=delivery,
         tasks=runner,
         alerts=alerts,
+        suggestion_news=suggestion_news,
     )
 
 
@@ -641,6 +660,29 @@ async def link_notice_loop(
         await asyncio.sleep(interval)
 
 
+async def suggestion_news_loop(
+    runner: StatusNewsRunner,
+    state: HealthState,
+    interval: float = SUGGESTION_SWEEP_SECONDS,
+    ready: asyncio.Event | None = None,
+) -> None:
+    """Tell authors who asked that their suggestion's status changed.
+
+    Waits for the gateway, since a direct message is all it produces. Absorbs
+    everything like the other sweeps: a claim whose message was not sent is
+    put back, so a failed pass is retried by the next one.
+    """
+    if ready is not None:
+        await ready.wait()
+    while True:
+        try:
+            sent = await runner.run_due()
+            state.details["suggestion_news"] = {"delivered": sent, "last_run_at": time.time()}
+        except Exception:
+            log.exception("suggestions.status_sweep_failed")
+        await asyncio.sleep(interval)
+
+
 async def run_beside_scope(
     work: Coroutine[Any, Any, None],
     scope: LiveScope,
@@ -865,6 +907,10 @@ async def main() -> None:
     # made. Only with `/account`, and here because this process reaches people.
     if process.link_announcer is not None:
         drains.append(link_notice_loop(process.link_announcer, state, ready=gateway_ready))
+    # Suggestion status messages, for the same reason: the console changes a
+    # status, and only this process can tell the author.
+    if graph.suggestion_news is not None:
+        drains.append(suggestion_news_loop(graph.suggestion_news, state, ready=gateway_ready))
     await run_beside_scope(
         client.start(settings.discord_token.get_secret_value()), scope, state, drains
     )

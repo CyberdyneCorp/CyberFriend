@@ -10,7 +10,9 @@
  * accident: the credential is checked on every request (a bearer token, or
  * the session cookie when no bearer is sent), a cookie write without the
  * console header is refused, an operator's write is refused, and a mutating
- * tool is refused unless the confirmation names it.
+ * tool is refused unless the confirmation names it. A person's question text
+ * is refused to anybody but an admin signed in through CyberdyneAuth, as
+ * `admin_oidc` is on the server.
  */
 
 import { createServer, type Server } from "node:http";
@@ -169,6 +171,24 @@ function fixtures(): Json {
         revoked_at: null,
       },
     ],
+    featureRequests: [
+      {
+        id: 12,
+        text: "Tell me when someone mentions me",
+        language: "en",
+        status: "new",
+        admin_note: null,
+        duplicate_of: null,
+        source_kind: "command",
+        person: "Sam",
+        same_text_elsewhere: 2,
+        created_at: "2026-09-15T10:00:00+00:00",
+        updated_at: "2026-09-15T10:00:00+00:00",
+        updated_by: null,
+      },
+    ],
+    usage: usageFixtures(),
+    questions: questionFixtures(),
     audit: [
       {
         operator: "ana",
@@ -181,6 +201,100 @@ function fixtures(): Json {
       },
     ],
   };
+}
+
+const USAGE_TOTALS = {
+  questions: 3,
+  input_tokens: 1200,
+  output_tokens: 120,
+  cost: 0.012,
+  tool_calls: 2,
+  voice_seconds: 150,
+};
+
+function usageRow(key: string, name: string | null, extra: Json = {}): Json {
+  return {
+    key,
+    name,
+    questions: 1,
+    input_tokens: 400,
+    output_tokens: 40,
+    cost: 0.004,
+    tool_calls: 1,
+    tools: ["web_search"],
+    voice_seconds: null,
+    ...extra,
+  };
+}
+
+/** GET /api/usage/summary's rows per `group`, as `handlers/usage.py` shapes them. */
+function usageFixtures(): Json {
+  return {
+    person: [
+      usageRow("1001", "Ana", { questions: 2, voice_seconds: 150 }),
+      usageRow("1004", null),
+    ],
+    feature: [usageRow("corpus.fixed", null), usageRow("voice", null, { questions: null, voice_seconds: 150 })],
+    model: [usageRow("gpt-5.4-mini", null, { questions: null, tool_calls: null, tools: [] })],
+    tool: [usageRow("web_search", null, { questions: null, input_tokens: null, output_tokens: null, cost: null })],
+  };
+}
+
+/** GET /api/usage/people/{id}/questions pages, by platform id. */
+function questionFixtures(): Record<string, Json[]> {
+  const question = (text: string, at: string): Json => ({
+    timestamp: at,
+    feature: "corpus.fixed",
+    tools: ["web_search"],
+    question: text,
+    input_tokens: 400,
+    output_tokens: 40,
+    cost: 0.004,
+  });
+  return {
+    "1001": [
+      question("what did I miss yesterday?", "2026-09-20T10:00:00+00:00"),
+      question("who owns the deploy?", "2026-09-19T10:00:00+00:00"),
+    ],
+  };
+}
+
+/** The usage reads, with the server's rules: 503 when Langfuse is down, `admin_oidc` on text. */
+function usageRead(
+  state: Json,
+  who: StubPrincipal,
+  path: string,
+  query: URLSearchParams,
+  options: StubOptions,
+): Reply | null {
+  const down = options.usageDown;
+  const window = { from: query.get("from") ?? "", to: query.get("to") ?? "" };
+  if (path === "/api/usage/summary") {
+    if (down) return [503, { error: "usage unavailable" }];
+    const group = query.get("group") ?? "person";
+    const rows = (state.usage as Record<string, Json[]>)[group] ?? [];
+    const retention_days = options.retentionUnknown ? null : 90;
+    return [200, { ...window, group, label: "traced question runs", retention_days, rows, totals: USAGE_TOTALS }];
+  }
+  const match = /^\/api\/usage\/people\/([^/]+)\/questions$/.exec(path);
+  if (match === null) return null;
+  if (!(who.roles.includes("admin") && who.via === "oidc")) return [403, { error: "requires admin" }];
+  if (down) return [503, { error: "usage unavailable" }];
+  const id = decodeURIComponent(match[1] ?? "");
+  const all = (state.questions as Record<string, Json[]>)[id] ?? [];
+  // One question a page, so paging is exercised with two.
+  const page = Number(query.get("page") ?? "1");
+  return [
+    200,
+    {
+      ...window,
+      person: { platform_user_id: id, person_id: 7, name: id === "1001" ? "Ana" : null },
+      page,
+      total_pages: all.length,
+      hidden_before_notice: 1,
+      questions: all.slice(page - 1, page),
+    },
+  ];
 }
 
 /**
@@ -217,6 +331,13 @@ function allowTool(state: Json, body: Json): [number, unknown] {
 }
 
 type Reply = [status: number, payload: unknown];
+
+/** GET /api/feature-requests, with its status filter, as the API pages it. */
+function featurePage(state: Json, url: string): Json {
+  const status = new URL(url, "http://stub").searchParams.get("status");
+  const items = (state.featureRequests as Json[]).filter((row) => status === null || row.status === status);
+  return { items, total: items.length, page: 1, page_size: 50 };
+}
 
 /** One write route: the method, the path prefix, and what it does to the state. */
 type WriteRoute = [method: string, prefix: string, handle: (state: Json, last: string, body: Json, path: string) => Reply];
@@ -266,6 +387,12 @@ const WRITES: WriteRoute[] = [
     const person = `${String(body.platform)}:${String(body.platform_user_id)}`;
     rows(state, "optouts").push({ person, since: "2026-09-16T10:00:00+00:00" });
     return [200, { changed: `opt_out:${person}`, detail: "the exclusion is enforced in the database", removed: {} }];
+  }],
+  ["PATCH", "/api/feature-requests/", (state, last, body) => {
+    const request = rows(state, "featureRequests").find((row) => String(row.id) === last);
+    if (request === undefined) return [404, { error: "no such suggestion" }];
+    Object.assign(request, body, { updated_by: "ana" });
+    return [200, { changed: `feature_request.${last}`, request }];
   }],
   ["DELETE", "/api/optouts/", (state, _last, _body, path) => {
     const [, , , platform, id] = path.split("/");
@@ -318,9 +445,22 @@ function writeRefusal(who: StubPrincipal, headers: Headers): Reply | null {
 }
 
 /** One request as the stub saw it: what credential it carried. */
+/**
+ * Switches a test flips: whether `/auth/config` says sign-in is offered,
+ * whether Langfuse is down, and whether the API could read
+ * `TRACE_RETENTION_DAYS`.
+ */
+export interface StubOptions {
+  signIn: boolean;
+  usageDown: boolean;
+  retentionUnknown: boolean;
+}
+
 export interface Seen {
   method: string;
   path: string;
+  /** The query string, without the `?`. */
+  query: string;
   authorization: string | null;
   cookie: string | null;
 }
@@ -337,8 +477,7 @@ export interface StubApi {
   seen: Seen[];
   /** Live sessions by cookie value; `SESSIONS` to start with. */
   sessions: Map<string, StubPrincipal>;
-  /** Whether `/auth/config` says sign-in is offered. */
-  options: { signIn: boolean };
+  options: StubOptions;
   close: () => Promise<void>;
 }
 
@@ -348,10 +487,10 @@ export async function startStubApi(): Promise<StubApi> {
   const writes: string[] = [];
   const seen: Seen[] = [];
   const sessions = new Map(Object.entries(SESSIONS));
-  const options = { signIn: false };
+  const options: StubOptions = { signIn: false, usageDown: false, retentionUnknown: false };
 
   const server: Server = createServer((request, response) => {
-    const path = (request.url ?? "").split("?")[0] ?? "";
+    const [path = "", query = ""] = (request.url ?? "").split("?");
     const reply = (status: number, payload: unknown): void => {
       const body = JSON.stringify(payload);
       response.writeHead(status, {
@@ -366,6 +505,7 @@ export async function startStubApi(): Promise<StubApi> {
     seen.push({
       method,
       path,
+      query,
       authorization: request.headers.authorization ?? null,
       cookie: request.headers.cookie ?? null,
     });
@@ -405,6 +545,11 @@ export async function startStubApi(): Promise<StubApi> {
         chunks.length === 0 ? {} : (JSON.parse(Buffer.concat(chunks).toString()) as Json);
 
       if (request.method === "GET") {
+        const usage = usageRead(state, who, path, new URLSearchParams(query), options);
+        if (usage !== null) {
+          reply(...usage);
+          return;
+        }
         const reads: Record<string, unknown> = {
           "/api/session": who,
           "/api/status": state.status,
@@ -415,6 +560,7 @@ export async function startStubApi(): Promise<StubApi> {
           "/api/optouts": state.optouts,
           "/api/tokens": state.tokens,
           "/api/audit": state.audit,
+          "/api/feature-requests": featurePage(state, request.url ?? ""),
         };
         const found = reads[path];
         reply(found === undefined ? 404 : 200, found ?? { error: "no such route" });

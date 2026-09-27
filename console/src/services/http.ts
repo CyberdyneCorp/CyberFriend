@@ -57,7 +57,7 @@ export class ApiError extends Error {
 /** What a refused credential says. One sentence for all four causes. */
 export const REFUSED_MESSAGE = "That credential was refused.";
 
-export type Method = "GET" | "POST" | "PUT" | "DELETE";
+export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** A cookie-mode request: the browser's session cookie, and no credential header. */
 export function requestInit(method: Method, body?: unknown): RequestInit {
