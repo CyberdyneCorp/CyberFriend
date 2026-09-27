@@ -85,7 +85,8 @@ which of their messages linked which URL) goes with their messages.
 the opt-out fires a single trigger on `person_opt_out`, which calls
 `purge_person_derived(person_id)` (migration 0028). It deletes their
 conversation memory, personal facts, queued notifications, position alerts,
-scheduled tasks and MCP tokens. Self-service erasure calls the same function,
+scheduled tasks, MCP tokens and connected-app keys (`person_secret`, 0037).
+Self-service erasure calls the same function,
 so the two cannot drift apart: a new table holding person data adds its
 `DELETE` to the function in its own migration. The scheduled-task sweep also
 skips opted-out people, so a task written afterwards never runs, and MCP
@@ -806,7 +807,51 @@ asker's DMs. An ephemeral reply in a channel counts as a channel. A result
 that starts with `[personal]` or has `visibility: personal` is dropped before
 the run sees it, unless the answer is a DM, whichever tool returned it. Both
 are audited as refused. The service principal only sees `intel_*` tools, so
-`my_*` needs a person's own connected-app key, which is not built yet.
+`my_*` is answered with the asker's own connected-app key (below).
+
+### A person's own connected-app key
+
+A person creates a connected-app key in CyberWealth (Settings -> Connected
+apps, preset `cyberfriend`) and sends it to the bot **in a DM**: as a message
+(*minha chave do cyberwealth é cwk_live_...*, any text containing one whole
+`cwk_live|test|dev_...` key) or with `/connect`, which Discord lists in DMs
+only. Set `PERSONAL_SECRETS_KEY` on the `bot` service
+(`openssl rand -base64 32`); unset, the key is refused with "nothing was saved"
+and the rest of CyberWealth works as before.
+
+- **At rest.** One row per person in `person_secret` (migration 0037):
+  AES-GCM ciphertext under `PERSONAL_SECRETS_KEY`, with
+  `person_secret:<person id>:cyberwealth` as associated data (a row copied onto
+  another person does not decrypt), and the last four characters in the clear.
+  The key is never logged, never shown back (replies and `/privacy` give the
+  last four characters), and never reaches a model, a trace or memory: a
+  message carrying `cwk_` is answered before the answer path. Rotating
+  `PERSONAL_SECRETS_KEY` makes every stored key unreadable; the calls then fail
+  closed and people connect again.
+- **On the wire.** Only a `my_*` call, only in the key owner's own DM, carries
+  it: each such call opens its own streamable-HTTP connection with the key as
+  the bearer, makes the call and closes it. The shared connection keeps the
+  service principal's token, and `intel_*` calls keep using it. A target that
+  is not `https` (localhost excepted) turns keys off for that boot
+  (`composition.federation.personal_keys_refused`). Somebody without a key gets
+  no personal result (audited as refused, nothing sent); a key CyberWealth
+  answers `401` to is reported as refused and does not mark the server lost.
+- **Allowlist.** List the read tools with `:ro`
+  (`cyberwealth:my_unpaid_bills:ro,cyberwealth:my_budget_status:ro`). The
+  service principal is not shown `my_*`, so a personal tool on the
+  `cyberwealth` server is registered from its name without the server's
+  listing (description from the name, no argument schema). Write tools stay
+  behind `:enable-mutation` and `FEDERATION_CREDENTIAL_HOLDERS`.
+- **Deleted by** `/forget` (everywhere, or in the DM), **Delete everything…**,
+  an opt-out and deleting the person: `purge_person_derived` removes the row,
+  and a key sent by an opted-out person is dropped before it is stored.
+- **In a channel.** A message containing `cwk_` is never archived (ingest drops
+  it, like a stated email; an edit that adds one retracts the stored message),
+  never answered, and its author gets a DM saying to delete it, revoke the key
+  and send a new one in a DM. The bot sends the same DM when a channel message
+  is edited into carrying a key. `/ask`, `/suggest` and `/schedule create` given
+  a key never ask or store the text: in a DM they take the key as `/connect`
+  does, in the server they refuse it, privately either way.
 
 ### Not remembered, not public
 
@@ -844,7 +889,8 @@ console's channel view rather than this command.
 facts, remembered conversation (split into direct messages and server channels,
 never per channel), scheduled questions, alerts, the notification setting and
 queued count, voice/audio minutes this month, attachments on their archived
-messages, suggestions, live access tokens, whether they are archived, their
+messages, suggestions, live access tokens, connected-app keys (service, last
+four characters and date only), whether they are archived, their
 archived message count per channel, how many of their questions are traced,
 and their linked platforms. Every store is read by person id alone
 (`privacy_sql`, registered in the SQL audit).

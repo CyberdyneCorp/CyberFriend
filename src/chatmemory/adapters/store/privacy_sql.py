@@ -100,6 +100,14 @@ WHERE p.person_id = :person_id AND t.revoked_at IS NULL
 ORDER BY t.issued_at
 """)
 
+#: The last four characters and the date only: the key itself is ciphertext
+#: and is never read here.
+KEYS = text("""
+SELECT kind, last4, created_at FROM person_secret
+WHERE person_id = :person_id
+ORDER BY kind
+""")
+
 ARCHIVED_BY_CHANNEL = text("""
 SELECT channel_id, count(*) AS messages
 FROM message

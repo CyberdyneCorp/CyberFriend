@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
+from enum import Enum
+from typing import Literal, Protocol
 
 import structlog
 
@@ -33,6 +35,7 @@ from chatmemory.app.authorization import (
     ToolPermit,
 )
 from chatmemory.app.egress import (
+    AuthorizedQuery,
     EgressGuard,
     EgressRefused,
     EgressRequest,
@@ -42,6 +45,7 @@ from chatmemory.app.egress import (
     authorized,
     keep_asker_words,
 )
+from chatmemory.domain.identity import PersonRef
 
 log = structlog.get_logger()
 
@@ -81,8 +85,26 @@ class InvocationOutcome:
         return self.result.notice() if self.result is not None else None
 
 
+class _Key(Enum):
+    """A personal call that must carry the asker's key, and they have none."""
+
+    MISSING = "missing"
+
+
+class PersonalBearers(Protocol):
+    """Each asker's own key for the servers that take one (`app.personal_keys`)."""
+
+    def covers(self, server: str) -> bool:
+        """Whether `server`'s personal tools are called with the asker's own key."""
+        ...
+
+    async def bearer(self, person: PersonRef, server: str) -> str | None: ...
+
+
 _FAILURE_OUTCOMES = {
     Failure.PERSONAL_WITHHELD: AuditOutcome.REFUSED,
+    Failure.NO_PERSONAL_KEY: AuditOutcome.REFUSED,
+    Failure.KEY_REJECTED: AuditOutcome.FAILED,
     Failure.TIMEOUT: AuditOutcome.TIMED_OUT,
     Failure.UNAVAILABLE: AuditOutcome.FAILED,
     Failure.TOOL_ERROR: AuditOutcome.FAILED,
@@ -99,12 +121,16 @@ class GuardedInvoker:
         audit: AuditTrail,
         confirmations: ConfirmationLedger,
         egress: EgressGuard | None = None,
+        personal_keys: PersonalBearers | None = None,
     ) -> None:
         self._federation = federation
         self._authorizer = authorizer
         self._audit = audit
         self._confirmations = confirmations
         self._egress = egress or EgressGuard()
+        # None: no server takes an asker's own key, and personal tools are
+        # called as every other tool is.
+        self._keys = personal_keys
 
     async def invoke(
         self,
@@ -126,51 +152,11 @@ class GuardedInvoker:
             # allowed against. Raising beats an assert, which -O would remove
             # from exactly the code path that must never run unchecked.
             raise RuntimeError(f"authorized {request.qualified_name} with no permit")
-        # Clearance is minted here, from the question on the request, and
-        # made current only for the length of this dispatch. This is the one
-        # place that knows both the asking person's words and the provider
-        # about to be called; a provider reached any other way finds no
-        # clearance and refuses, which is what keeps the boundary unskippable
-        # rather than merely documented.
-        arguments: Mapping[str, object] = request.arguments
+        bearer = await self._personal_bearer(request, permit)
+        if bearer is _Key.MISSING:
+            return self._without_key(request, decision, permit, now)
         try:
-            try:
-                clearance = self._egress.authorize(
-                    EgressRequest(
-                        asker=request.requester,
-                        query=_query_for(request, permit),
-                        provider=permit.server,
-                        private=request.private,
-                    )
-                )
-            except EgressRefused as refused:
-                # A read-only reformulation carrying words the asker did not
-                # write gets one more chance, with those words removed. Only
-                # for NOT_ROOTED: content-derived text is refused outright,
-                # because trimming it would still send what content chose.
-                if (
-                    refused.reason is not RefusalReason.NOT_ROOTED_IN_QUESTION
-                    or permit.effect.mutates
-                ):
-                    raise
-                rooted = _rooted_arguments(request)
-                if rooted is None:
-                    raise
-                arguments = rooted
-                trimmed = replace(request, arguments=rooted)
-                clearance = self._egress.authorize(
-                    EgressRequest(
-                        asker=request.requester,
-                        query=_query_for(trimmed, permit),
-                        provider=permit.server,
-                        private=request.private,
-                    )
-                )
-                log.info(
-                    "federation.query_trimmed_to_asker_words",
-                    tool=request.qualified_name,
-                    requester=str(request.requester),
-                )
+            clearance, arguments = self._clear(request, permit)
         except EgressRefused as refused:
             log.warning(
                 "federation.egress_refused",
@@ -185,7 +171,7 @@ class GuardedInvoker:
             return InvocationOutcome(decision=decision, entry=entry)
 
         with authorized(clearance):
-            result = await self._federation.call(permit, arguments)
+            result = await self._federation.call(permit, arguments, bearer=bearer)
         if result.personal and not request.direct:
             # Marked personal by the server, whatever the tool is called. The
             # text is dropped here, before anything upstream can read it.
@@ -215,6 +201,68 @@ class GuardedInvoker:
         )
         return InvocationOutcome(decision=decision, entry=entry, result=result)
 
+    async def _personal_bearer(
+        self, request: InvocationRequest, permit: ToolPermit
+    ) -> str | None | Literal[_Key.MISSING]:
+        """The asker's own key, when this call must carry one.
+
+        Looked up from the requester on the request -- never from anything the
+        model wrote -- and only for a personal tool, which the authorizer has
+        already held to their DM. None: the call carries no personal key.
+        """
+        if self._keys is None or not permit.personal or not self._keys.covers(permit.server):
+            return None
+        key = await self._keys.bearer(request.requester, permit.server)
+        return _Key.MISSING if key is None else key
+
+    def _clear(
+        self, request: InvocationRequest, permit: ToolPermit
+    ) -> tuple[AuthorizedQuery, Mapping[str, object]]:
+        """The egress clearance for this call, and the arguments it clears.
+
+        Clearance is minted here, from the question on the request, and made
+        current only for the length of the dispatch. This is the one place
+        that knows both the asking person's words and the provider about to be
+        called; a provider reached any other way finds no clearance and
+        refuses, which is what keeps the boundary unskippable rather than
+        merely documented. Raises `EgressRefused`.
+        """
+        try:
+            return self._egress.authorize(_egress_request(request, permit)), request.arguments
+        except EgressRefused as refused:
+            # A read-only reformulation carrying words the asker did not
+            # write gets one more chance, with those words removed. Only
+            # for NOT_ROOTED: content-derived text is refused outright,
+            # because trimming it would still send what content chose.
+            if refused.reason is not RefusalReason.NOT_ROOTED_IN_QUESTION or permit.effect.mutates:
+                raise
+            rooted = _rooted_arguments(request)
+            if rooted is None:
+                raise
+        clearance = self._egress.authorize(
+            _egress_request(replace(request, arguments=rooted), permit)
+        )
+        log.info(
+            "federation.query_trimmed_to_asker_words",
+            tool=request.qualified_name,
+            requester=str(request.requester),
+        )
+        return clearance, rooted
+
+    def _without_key(
+        self,
+        request: InvocationRequest,
+        decision: AuthorizationDecision,
+        permit: ToolPermit,
+        now: datetime | None,
+    ) -> InvocationOutcome:
+        """A personal tool asked by somebody who has connected no key: nothing sent."""
+        log.info("federation.personal_key_missing", tool=request.qualified_name)
+        self._confirmations.consume(request)
+        result = self._federation.not_called(permit, Failure.NO_PERSONAL_KEY)
+        entry = self._audit.append(request, decision, AuditOutcome.REFUSED, permit=permit, now=now)
+        return InvocationOutcome(decision=decision, entry=entry, result=result)
+
     def _propose(
         self,
         request: InvocationRequest,
@@ -232,6 +280,15 @@ class GuardedInvoker:
         if decision.refusal not in _NEEDS_CONFIRMATION or decision.permit is None:
             return None
         return self._confirmations.propose(request, decision.permit, now=now)
+
+
+def _egress_request(request: InvocationRequest, permit: ToolPermit) -> EgressRequest:
+    return EgressRequest(
+        asker=request.requester,
+        query=_query_for(request, permit),
+        provider=permit.server,
+        private=request.private,
+    )
 
 
 def _rooted_arguments(request: InvocationRequest) -> Mapping[str, object] | None:

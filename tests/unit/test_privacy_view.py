@@ -36,6 +36,7 @@ from chatmemory.ports.privacy import (
     ArchivedChannel,
     HeldAlert,
     HeldFact,
+    HeldKey,
     HeldSuggestion,
     HeldTask,
     HeldToken,
@@ -72,6 +73,7 @@ INVENTORY = Inventory(
     media=MediaCounts(by_kind=(("image", 2), ("voice", 1)), with_text=1),
     suggestions=(HeldSuggestion(5, "weekly digest of decisions", "planned"),),
     tokens=(HeldToken("laptop", datetime(2026, 8, 1, tzinfo=UTC)),),
+    keys=(HeldKey("cyberwealth", "Zq9x", datetime(2026, 9, 20, tzinfo=UTC)),),
     archived=(ArchivedChannel(ChannelRef("discord", 100), 4),),
     traces=6,
 )
@@ -115,8 +117,10 @@ def test_the_channel_view_counts_but_never_quotes() -> None:
         "weekly digest",
         "laptop",
         "1234",
+        "Zq9x",
     ):
         assert private not in shown
+    assert "Connected app keys\n1." in shown
     assert "3 questions and answers in direct messages, 2 in server channels" in shown
     assert "<#100>: 4 messages" in shown
     assert "3 on your archived messages" in shown
@@ -142,6 +146,7 @@ def test_the_dm_view_shows_the_values() -> None:
     assert "**3** - LP range - base `…1234`" in shown
     assert "**#5** - planned - weekly digest of decisions" in shown
     assert "laptop - created 2026-08-01" in shown
+    assert "cyberwealth: key ending `Zq9x`, connected 2026-09-20" in shown
     assert "3 on your archived messages" in shown
     assert "2 images, 1 voice notes; 1 of them transcribed or described." in shown
     assert "Direct messages about things asked of you: off." in shown

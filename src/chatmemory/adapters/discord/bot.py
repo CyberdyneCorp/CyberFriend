@@ -65,6 +65,11 @@ from chatmemory.adapters.discord.formatting import (
     sanitize_answer,
     split_message,
 )
+from chatmemory.adapters.discord.personal_keys import (
+    channel_warning,
+    connect_reply,
+    key_text,
+)
 from chatmemory.adapters.discord.privacy import (
     EraseOffer,
     SendDetailsView,
@@ -117,6 +122,7 @@ from chatmemory.app.indexing import (
 )
 from chatmemory.app.language import Language, detect
 from chatmemory.app.notifications import NotificationPreferences
+from chatmemory.app.personal_keys import PersonalKeys, mentions_key
 from chatmemory.app.privacy import PrivacyReport, PrivacyService
 from chatmemory.app.reasoning.evidence import SOURCE_DISCORD, SOURCE_WEB, SourcedCitation
 from chatmemory.app.schedules import ScheduleService
@@ -1031,6 +1037,7 @@ class CyberFriendClient(discord.Client):
         self._alerts: AlertRequests | None = None
         self._suggestions: FeatureRequestService | None = None
         self._privacy: PrivacyService | None = None
+        self._keys: PersonalKeys | None = None
         self._accounts: AccountService | None = None
         self._voice: VoiceQuestions | None = None
         self._described = Capabilities()
@@ -1105,6 +1112,14 @@ class CyberFriendClient(discord.Client):
         the command on every deployment.
         """
         self._privacy = privacy
+
+    def attach_personal_keys(self, keys: PersonalKeys) -> None:
+        """Give a CyberWealth key sent in a DM, or with `/connect`, somewhere to go.
+
+        Without it a key is still never answered, archived or traced: it is
+        refused with a reply saying nothing was saved.
+        """
+        self._keys = keys
 
     def attach_accounts(self, accounts: AccountService) -> None:
         """Offer `/account create|link`, and [Unlink] on link notices.
@@ -1186,6 +1201,9 @@ class CyberFriendClient(discord.Client):
             self._build_privacy_command(),
         ):
             self.tree.add_command(_in_guild_and_dm(command))
+        # A key is taken in a DM only, so the command is not even listed in
+        # the server, where typing one would put it in front of the channel.
+        self.tree.add_command(_in_dm_only(self._build_connect_command()))
         if self._accounts is not None:
             # Global like `/privacy`: the consent itself happens in a DM.
             self.tree.add_command(
@@ -1225,6 +1243,10 @@ class CyberFriendClient(discord.Client):
         async def create(
             interaction: discord.Interaction, question: str, every_hours: int
         ) -> None:
+            if mentions_key(question):
+                # Stored and re-asked every few hours otherwise.
+                await self._take_key_interaction(interaction, question)
+                return
             await interaction.response.defer(ephemeral=True, thinking=True)
             language = await self._caller_language(interaction, question)
             if self._schedules is None:
@@ -1335,6 +1357,10 @@ class CyberFriendClient(discord.Client):
         @app_commands.command(name="suggest", description="Suggest something I should do")
         @app_commands.describe(text="What you'd like me to be able to do")
         async def suggest(interaction: discord.Interaction, text: str) -> None:
+            if mentions_key(text):
+                # A suggestion is stored and shown to admins; a key is neither.
+                await self._take_key_interaction(interaction, text)
+                return
             await interaction.response.defer(ephemeral=True, thinking=True)
             language = await self._caller_language(interaction, text)
             if self._suggestions is None:
@@ -1628,9 +1654,104 @@ class CyberFriendClient(discord.Client):
                 if purge is None
                 else _forgotten_note(purge.turns, purge.summaries, request.location is None)
             )
+            # Everywhere, or in the DM the key was given in.
+            if request.location is None or interaction.guild_id is None:
+                note = await self._forget_keys(interaction.user, note)
             await interaction.followup.send(note, ephemeral=True)
 
         return forget
+
+    async def _forget_keys(self, user: discord.User | discord.Member, note: str) -> str:
+        """Delete the person's connected-app keys, and say so if there was one."""
+        if self._keys is None or not await self._keys.forget(_person(user)):
+            return note
+        language = await self._asks.reply_language(_person(user))
+        return f"{note} {key_text('forgotten', language)}"
+
+    def _build_connect_command(self) -> app_commands.Command[Any, ..., None]:
+        """`/connect`: hand over a CyberWealth connected-app key, in a DM only."""
+
+        @app_commands.command(
+            name="connect", description="Connect your CyberWealth key (DM only)"
+        )
+        @app_commands.describe(key="Your CyberWealth connected-app key (cwk_live_...)")
+        async def connect(interaction: discord.Interaction, key: str) -> None:
+            await self._take_key_interaction(interaction, key)
+
+        return connect
+
+    async def _take_key_interaction(self, interaction: discord.Interaction, text: str) -> None:
+        """A key typed into a command: stored from a DM, refused anywhere else.
+
+        Answered ephemerally before anything else, so the reply -- and the
+        command line holding the key -- is seen by the person alone.
+        """
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        language = await self._caller_language(interaction, text)
+        outcome = (
+            await self._keys.connect(
+                _person(interaction.user), text, direct=interaction.guild_id is None
+            )
+            if self._keys is not None
+            else None
+        )
+        await interaction.followup.send(connect_reply(outcome, language), ephemeral=True)
+
+    async def _take_key_message(self, message: discord.Message) -> None:
+        """A message carrying a key: never answered, never passed on.
+
+        In a DM the key is stored. In a channel it is not (the ingest process
+        does not archive it either), and the author is warned by DM, since a
+        warning in the channel would point everyone at the key.
+        """
+        if message.guild is not None:
+            await self._warn_key_in_channel(message)
+            return
+        language = await self._message_language(message.author, message.content)
+        outcome = (
+            await self._keys.connect(_person(message.author), message.content, direct=True)
+            if self._keys is not None
+            else None
+        )
+        await message.reply(connect_reply(outcome, language), mention_author=False)
+
+    async def _warn_key_in_channel(self, message: discord.Message) -> None:
+        """DM the author of a channel message carrying a key to revoke it."""
+        language = await self._message_language(message.author, message.content)
+        name = getattr(message.channel, "name", None)
+        try:
+            await message.author.send(
+                channel_warning(f"#{name}" if name else "a channel", language)
+            )
+        except discord.HTTPException:
+            log.info("personal_keys.warning_undelivered", user_id=message.author.id)
+
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        """A channel message edited into carrying a key: its author is warned.
+
+        The ingest process retracts it from the archive; the key still stands
+        in the channel, so it needs revoking as much as a pasted one. Raw, so
+        an edit to a message older than the cache is seen too; a message that
+        already carried a key (by the cached copy) was warned about when sent.
+        Edits are never answered, so a DM edit is left alone.
+        """
+        after = payload.message
+        if after.author.bot or after.guild is None or not mentions_key(after.content):
+            return
+        before = payload.cached_message
+        if before is not None and mentions_key(before.content):
+            return
+        await self._warn_key_in_channel(after)
+
+    async def _message_language(
+        self, user: discord.User | discord.Member, text: str
+    ) -> Language:
+        """The message's language, else the saved preference, else English."""
+        detected = detect(text)
+        if detected.known:
+            return detected
+        saved = await self._asks.reply_language(_person(user))
+        return saved if saved.known else Language.ENGLISH
 
     def _build_resolve_command(self) -> app_commands.Command[Any, ..., None]:
         """`/resolve`: the addressee's own word about their own ask.
@@ -1704,6 +1825,11 @@ class CyberFriendClient(discord.Client):
         @app_commands.command(name="ask", description="Ask about what's been said")
         @app_commands.describe(question="What do you want to know?")
         async def ask(interaction: discord.Interaction, question: str) -> None:
+            if mentions_key(question):
+                # Before the public "thinking" reply and before any model:
+                # a key is taken or refused, never asked about.
+                await self._take_key_interaction(interaction, question)
+                return
             # A reasoning run can outlast Discord's 3s interaction deadline,
             # so acknowledge immediately and deliver when ready.
             await interaction.response.defer(thinking=True)
@@ -1765,6 +1891,12 @@ class CyberFriendClient(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         # Never answer ourselves, and never ingest our own output as evidence.
         if message.author.bot:
+            return
+        # Before the mention check: a key pasted into a channel earns its
+        # author a warning whether or not it was addressed to the bot, and in
+        # a DM it is taken as a key, never as a question.
+        if mentions_key(message.content):
+            await self._take_key_message(message)
             return
 
         is_dm = message.guild is None
@@ -2046,6 +2178,15 @@ def _message_source(message: discord.Message) -> SuggestionSource:
         guild_id=message.guild.id,
         channel_id=message.channel.id,
     )
+
+
+def _in_dm_only(command: _AnyCommand) -> _AnyCommand:
+    """Usable only in a DM with the bot; installed with the bot only."""
+    command.allowed_contexts = app_commands.AppCommandContext(
+        guild=False, dm_channel=True, private_channel=False
+    )
+    command.allowed_installs = app_commands.AppInstallationType(guild=True, user=False)
+    return command
 
 
 def _in_guild_and_dm(command: _AnyCommand) -> _AnyCommand:

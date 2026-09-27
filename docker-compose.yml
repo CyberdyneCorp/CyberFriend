@@ -133,6 +133,10 @@ services:
       - FEDERATION_AUTH_CYBERWEALTH_CLIENT_SECRET=${FEDERATION_AUTH_CYBERWEALTH_CLIENT_SECRET}
       - FEDERATION_AUTH_CYBERWEALTH_AUDIENCE=${FEDERATION_AUTH_CYBERWEALTH_AUDIENCE}
       - FEDERATION_AUTH_CYBERWEALTH_SCOPE=${FEDERATION_AUTH_CYBERWEALTH_SCOPE}
+      # Seals people's own CyberWealth connected-app keys at rest (32 bytes,
+      # base64: openssl rand -base64 32). Unset, a key sent in a DM is refused
+      # and never stored. Changing it makes every stored key unreadable.
+      - PERSONAL_SECRETS_KEY=${PERSONAL_SECRETS_KEY}
       - WEB_TOOLS_ENABLED=${WEB_TOOLS_ENABLED}
       - SERPAPI_KEY=${SERPAPI_KEY}
       - WEB_MAX_CALLS_PER_RUN=${WEB_MAX_CALLS_PER_RUN}

@@ -47,6 +47,7 @@ SQL_MODULES = (
     "erasure_sql",
     "tracing_notice_sql",
     "accounts_sql",
+    "personal_keys_sql",
     "usage_sql",
 )
 
@@ -594,6 +595,23 @@ UNSCOPED: dict[str, str] = {
     "privacy_sql.SUGGESTIONS": (
         "the asker's own suggestions, keyed on the asker's own person id, "
         "resolved from the interaction's user; a suggestion is their own words"
+    ),
+    "privacy_sql.KEYS": (
+        "the service, last four characters and date of the asker's own connected-app "
+        "keys, keyed on the asker's own person id. Never the ciphertext"
+    ),
+    # --- personal_keys_sql: the asker's own connected-app keys -------------
+    "personal_keys_sql.UPSERT_KEY": (
+        "write; stores ciphertext against the person id the adapter resolved from "
+        "the DM author's own platform identity. Returns the date only"
+    ),
+    "personal_keys_sql.KEY_OF_REQUESTER": (
+        "returns one ciphertext, but only the requester's own: keyed on their "
+        "platform identity in the WHERE clause, for the bearer of their own call"
+    ),
+    "personal_keys_sql.FORGET_ALL_KEYS": (
+        "write; /forget and the like, keyed on the requester's own platform "
+        "identity. Returns no row"
     ),
     "privacy_sql.TOKENS": (
         "labels and dates of the asker's own live tokens, keyed on the asker's "

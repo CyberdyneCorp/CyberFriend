@@ -33,6 +33,8 @@ PERSONAL = {
     "suggest", "suggestions", "privacy",
 }
 GUILD_ONLY = {"index", "unindex"}
+#: Takes a secret, so Discord lists it in a DM with the bot and nowhere else.
+DM_ONLY = {"connect"}
 _EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED, *ALERTS)
 _LISTED = re.compile(r"`/([a-z]+)")
 
@@ -45,11 +47,12 @@ def _registration(bot: E2EBot) -> dict[str, Any]:
 def test_personal_commands_are_global_and_offered_in_a_dm(bot: E2EBot) -> None:
     by_name = {c["name"]: c for c in bot.discord.http.global_commands}
 
-    assert set(by_name) == PERSONAL
+    assert set(by_name) == PERSONAL | DM_ONLY
     for name, command in by_name.items():
-        assert command["contexts"] == [0, 1], f"/{name} contexts"
+        contexts = [1] if name in DM_ONLY else [0, 1]
+        assert command["contexts"] == contexts, f"/{name} contexts"
         assert command["integration_types"] == [0], f"/{name} integration types"
-    assert bot.discord.offered(dm=True) == PERSONAL
+    assert bot.discord.offered(dm=True) == PERSONAL | DM_ONLY
 
 
 def test_channel_commands_are_offered_in_the_guild_only(bot: E2EBot) -> None:
@@ -57,6 +60,7 @@ def test_channel_commands_are_offered_in_the_guild_only(bot: E2EBot) -> None:
 
     assert guild == GUILD_ONLY
     assert bot.discord.offered(dm=False) == PERSONAL | GUILD_ONLY
+    assert not DM_ONLY & bot.discord.offered(dm=False)
     assert not GUILD_ONLY & bot.discord.offered(dm=True)
 
 

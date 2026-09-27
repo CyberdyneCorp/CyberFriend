@@ -19,6 +19,7 @@ from chatmemory.ports.privacy import (
     ArchivedChannel,
     HeldAlert,
     HeldFact,
+    HeldKey,
     HeldSuggestion,
     HeldTask,
     HeldToken,
@@ -65,6 +66,7 @@ class PostgresPrivacyStore:
                 media=await reader.media(channel_ids),
                 suggestions=await reader.suggestions(),
                 tokens=await reader.tokens(),
+                keys=await reader.keys(),
                 archived=await reader.archived(person.platform, channel_ids),
                 traces=int(await reader.scalar(sql.TRACES)),
             )
@@ -164,6 +166,12 @@ class _Reader:
         return tuple(
             HeldToken(r["label"], r["issued_at"])
             for r in await self._rows(sql.TOKENS)
+        )
+
+    async def keys(self) -> tuple[HeldKey, ...]:
+        return tuple(
+            HeldKey(str(r["kind"]), str(r["last4"]), r["created_at"])
+            for r in await self._rows(sql.KEYS)
         )
 
     async def archived(

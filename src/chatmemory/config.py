@@ -333,6 +333,15 @@ class Settings(BaseSettings):
     application's traces in `langfuse_environment` are ever deleted.
     """
 
+    personal_secrets_key: SecretStr | None = None
+    """32 bytes, base64: the key people's own connected-app keys are sealed under.
+
+    Unset, a key sent in a DM is refused and never stored, and CyberWealth's
+    personal (`my_*`) tools are called as every other tool is. Read by the bot
+    alone. Changing it makes every stored key unreadable: people are asked to
+    connect again, and nothing is sent in the meantime.
+    """
+
     backup_retention_days: int | None = None
     """How long a database backup is kept, as configured where backups run.
 

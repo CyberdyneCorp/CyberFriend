@@ -110,6 +110,16 @@ class HeldToken:
 
 
 @dataclass(frozen=True, slots=True)
+class HeldKey:
+    """A connected-app key held for the person: whose service, its last four
+    characters and since when. Never the key."""
+
+    service: str
+    last4: str
+    connected_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ArchivedChannel:
     """A channel the person can read now, and how many of their messages it holds."""
 
@@ -136,6 +146,7 @@ class Inventory:
     media: MediaCounts = MediaCounts()
     suggestions: tuple[HeldSuggestion, ...] = ()
     tokens: tuple[HeldToken, ...] = ()
+    keys: tuple[HeldKey, ...] = ()
     archived: tuple[ArchivedChannel, ...] = ()
     traces: int = 0
     """Exported traces of questions the person asked that are not deleted yet."""
@@ -155,6 +166,7 @@ class Inventory:
             media=self.media.total,
             suggestions=len(self.suggestions),
             tokens=len(self.tokens),
+            keys=len(self.keys),
             archived=self.archived,
             traces=self.traces,
         )
@@ -176,6 +188,7 @@ class InventorySummary:
     media: int
     suggestions: int
     tokens: int
+    keys: int
     archived: tuple[ArchivedChannel, ...]
     traces: int
 
@@ -239,6 +252,7 @@ class ErasureCounts:
     alerts: int = 0
     suggestions: int = 0
     tokens: int = 0
+    keys: int = 0
     voice_seconds: int = 0
     traces: int = 0
 
@@ -253,6 +267,7 @@ class ErasureCounts:
             alerts=len(inventory.alerts),
             suggestions=len(inventory.suggestions),
             tokens=len(inventory.tokens),
+            keys=len(inventory.keys),
             voice_seconds=inventory.voice_seconds_this_month,
         )
 

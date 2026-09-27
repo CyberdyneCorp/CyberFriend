@@ -215,7 +215,7 @@ DONE = ErasureRequest(
     requested_at=NOW - timedelta(seconds=1),
     counts=ErasureCounts(
         messages=12, media=3, facts=4, memory=10, tasks=1, alerts=2, suggestions=5, tokens=1,
-        traces=6,
+        keys=1, traces=6,
     ),
 )
 
@@ -229,6 +229,7 @@ def test_the_reply_gives_counts_and_says_traces_are_scheduled() -> None:
     assert "Remembered questions, answers and summaries: 10" in reply
     assert "Scheduled questions: 1" in reply and "Alerts: 2" in reply
     assert "Suggestions: 5" in reply and "Access tokens: 1" in reply
+    assert "Connected app keys: 1" in reply
     assert "anonymous monthly total" in reply
     assert "scheduled for deletion from the trace store: at least 6." in reply
 

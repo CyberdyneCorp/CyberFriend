@@ -81,7 +81,7 @@ def _split_key(key: str) -> tuple[str, str] | None:
     return None
 
 
-def _is_secure(url: str) -> bool:
+def is_secure(url: str) -> bool:
     parts = urlsplit(url)
     return parts.scheme == "https" or (
         parts.scheme == "http" and (parts.hostname or "") in _LOCAL_HOSTS
@@ -111,9 +111,9 @@ def _credential(server: ServerConfig, values: Mapping[str, str]) -> ServiceCrede
     if missing:
         names = ", ".join(f"{ENV_PREFIX}{env_name(server.name)}_{f.upper()}" for f in missing)
         raise ConfigurationError(f"service credential for {server.name!r} is missing {names}")
-    if not _is_secure(values["issuer"]):
+    if not is_secure(values["issuer"]):
         raise ConfigurationError(f"service credential for {server.name!r}: issuer is not https")
-    if not _is_secure(server.target):
+    if not is_secure(server.target):
         raise ConfigurationError(
             f"server {server.name!r} has a service credential but its target is not https"
         )
@@ -206,7 +206,7 @@ class ServiceTokenSource:
         named, endpoint = doc.get("issuer"), doc.get("token_endpoint")
         if not isinstance(named, str) or named.rstrip("/") != issuer:
             raise ServiceTokenUnavailable(f"{self.server}: discovery names a different issuer")
-        if not isinstance(endpoint, str) or not _is_secure(endpoint):
+        if not isinstance(endpoint, str) or not is_secure(endpoint):
             raise ServiceTokenUnavailable(f"{self.server}: discovery has no usable token endpoint")
         methods = doc.get("token_endpoint_auth_methods_supported")
         self._auth_methods = (

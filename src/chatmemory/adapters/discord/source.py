@@ -29,6 +29,7 @@ from typing import Protocol, cast
 import discord
 import structlog
 
+from chatmemory.app.personal_keys import mentions_key
 from chatmemory.app.routing import states_own_contact
 from chatmemory.app.voice import declared_type, from_discord_cdn
 from chatmemory.domain.identity import ChannelRef, PersonRef
@@ -157,12 +158,14 @@ def _display_name(author: RawUser) -> str:
 
 def withholds_personal_fact(raw: RawMessage) -> bool:
     """A message giving the author's own email, phone, address or birth date,
-    which is never indexed.
+    or carrying a CyberWealth key, which is never indexed.
 
     Checked here, in the one conversion every path shares -- live messages,
     edits and history backfill -- so no path can store what another withholds.
+    A key is matched loosely (`cwk_` anywhere): a key cut short is still a
+    secret, and the bot process warns its author by DM.
     """
-    return states_own_contact(raw.content)
+    return states_own_contact(raw.content) or mentions_key(raw.content)
 
 
 def _media_kind(content_type: str, voice: bool) -> MediaKind | None:

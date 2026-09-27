@@ -59,6 +59,9 @@ DEPLOYMENT_SETTINGS = {
     "FEDERATION_AUTH_CYBERWEALTH_CLIENT_SECRET": ("bot",),
     "FEDERATION_AUTH_CYBERWEALTH_AUDIENCE": ("bot",),
     "FEDERATION_AUTH_CYBERWEALTH_SCOPE": ("bot",),
+    # Seals people's own CyberWealth keys. Undeclared, the bot sees none, and
+    # every key sent in a DM is refused while the platform shows it as set.
+    "PERSONAL_SECRETS_KEY": ("bot",),
     "WEB_TOOLS_ENABLED": ("bot", "admin"),
     "SERPAPI_KEY": ("bot",),
     # Market data is merged into the bot's federation; declared here or an

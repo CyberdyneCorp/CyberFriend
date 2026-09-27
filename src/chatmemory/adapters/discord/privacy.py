@@ -126,6 +126,7 @@ _TEXT: dict[str, dict[Language, str]] = {
     "media": {EN: "Attachments", PT: "Anexos"},
     "suggestions": {EN: "Suggestions", PT: "Sugestões"},
     "tokens": {EN: "Access tokens", PT: "Tokens de acesso"},
+    "keys": {EN: "Connected app keys", PT: "Chaves de apps conectados"},
     "archive": {EN: "Archived messages", PT: "Mensagens arquivadas"},
     "traces": {EN: "Questions and answers recorded", PT: "Perguntas e respostas registradas"},
     "accounts": {EN: "Linked accounts", PT: "Contas vinculadas"},
@@ -184,6 +185,11 @@ _TEXT: dict[str, dict[Language, str]] = {
     },
     "token_line": {EN: "{label} - created {created}", PT: "{label} - criado em {created}"},
     "token_unlabelled": {EN: "(no label)", PT: "(sem nome)"},
+    "key_line": {
+        EN: "{service}: key ending `{last4}`, connected {connected}. Removed by `/forget`.",
+        PT: "{service}: chave terminando em `{last4}`, conectada em {connected}. "
+        "Removida com `/forget`.",
+    },
     "archiving_on": {
         EN: "I archive your messages in the channels I cover.",
         PT: "Eu arquivo suas mensagens nos canais que cubro.",
@@ -278,15 +284,15 @@ _TEXT: dict[str, dict[Language, str]] = {
             "**Delete everything I hold about you?**\n"
             "This deletes your archived messages and their attachments, your personal "
             "details, remembered conversation, scheduled questions, alerts, notifications, "
-            "suggestions, access tokens and voice usage records, and schedules your recorded "
-            "questions for deletion. **It can't be undone.**"
+            "suggestions, access tokens, connected app keys and voice usage records, and "
+            "schedules your recorded questions for deletion. **It can't be undone.**"
         ),
         PT: (
             "**Apagar tudo o que eu guardo sobre você?**\n"
             "Isso apaga suas mensagens arquivadas e os anexos delas, seus dados pessoais, a "
             "conversa lembrada, perguntas agendadas, alertas, notificações, sugestões, tokens "
-            "de acesso e registros de uso de voz, e agenda a exclusão das suas perguntas "
-            "registradas. **Não dá para desfazer.**"
+            "de acesso, chaves de apps conectados e registros de uso de voz, e agenda a "
+            "exclusão das suas perguntas registradas. **Não dá para desfazer.**"
         ),
     },
     "erase_choices": {
@@ -353,6 +359,10 @@ _TEXT: dict[str, dict[Language, str]] = {
     "erase_alerts": {EN: "Alerts: {count}", PT: "Alertas: {count}"},
     "erase_suggestions": {EN: "Suggestions: {count}", PT: "Sugestões: {count}"},
     "erase_tokens": {EN: "Access tokens: {count}", PT: "Tokens de acesso: {count}"},
+    "erase_keys": {
+        EN: "Connected app keys: {count}",
+        PT: "Chaves de apps conectados: {count}",
+    },
     "erase_voice": {
         EN: "your voice usage records (the minutes stay only in an anonymous monthly total)",
         PT: "seus registros de uso de voz (os minutos ficam só num total mensal anônimo)",
@@ -538,6 +548,7 @@ def channel_sections(
         Section(text("media", language), (text("media_count", language, count=summary.media),)),
         counted("suggestions", summary.suggestions),
         counted("tokens", summary.tokens),
+        counted("keys", summary.keys),
         _archive(summary.archiving, summary.archived, language),
         _traces(summary.traces, retention, language),
         _accounts(summary.platforms, language),
@@ -617,6 +628,17 @@ def direct_sections(
     suggestions = [
         _suggestion_line(s.id, s.text, s.status, language) for s in inventory.suggestions
     ]
+    # The last four characters only: the key itself is never read back here.
+    keys = [
+        text(
+            "key_line",
+            language,
+            service=k.service,
+            last4=k.last4,
+            connected=k.connected_at.date().isoformat(),
+        )
+        for k in inventory.keys
+    ]
     return [
         Section(text("facts", language), _or_none(facts, language)),
         _memory_section(inventory, retention, language),
@@ -633,6 +655,7 @@ def direct_sections(
         Section(text("media", language), tuple(_media_lines(inventory.media, language))),
         Section(text("suggestions", language), _or_none(suggestions, language)),
         Section(text("tokens", language), _or_none(tokens, language)),
+        Section(text("keys", language), _or_none(keys, language)),
         _archive(inventory.archiving, inventory.archived, language),
         _traces(inventory.traces, retention, language),
         _accounts(inventory.platforms, language),
@@ -772,6 +795,7 @@ def erasure_reply(request: ErasureRequest, language: Language, archiving: bool =
         text("erase_alerts", language, count=counts.alerts),
         text("erase_suggestions", language, count=counts.suggestions),
         text("erase_tokens", language, count=counts.tokens),
+        text("erase_keys", language, count=counts.keys),
         text("erase_voice", language),
     ]
     after = _after_erasure(request, archiving)

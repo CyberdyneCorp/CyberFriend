@@ -114,9 +114,14 @@ from chatmemory.adapters.mcp_client.config import (
     ConfigurationError as FederationConfigurationError,
 )
 from chatmemory.adapters.mcp_client.invoker import InvocationOutcome
+from chatmemory.adapters.mcp_client.personal_auth import (
+    KeyedSessionFactory,
+    keyed_session_factory,
+)
 from chatmemory.adapters.mcp_client.service_auth import (
     ServiceTokenSource,
     authenticated_session_factory,
+    is_secure,
     service_credentials,
 )
 from chatmemory.adapters.store.accounts_postgres import PostgresAccountStore
@@ -133,6 +138,11 @@ from chatmemory.adapters.store.feature_requests_postgres import (
 from chatmemory.adapters.store.media_postgres import PostgresVoiceLedger
 from chatmemory.adapters.store.memory_postgres import PostgresMemoryStore
 from chatmemory.adapters.store.notify_postgres import PostgresNotificationQueue
+from chatmemory.adapters.store.personal_keys_postgres import (
+    PostgresPersonalKeyStore,
+    UnusableSecretsKey,
+    secrets_cipher,
+)
 from chatmemory.adapters.store.postgres import HybridSearch, PostgresStore
 from chatmemory.adapters.store.privacy_postgres import PostgresPrivacyStore
 from chatmemory.adapters.store.retention_sql import PostgresRetentionStore
@@ -199,6 +209,7 @@ from chatmemory.app.notifications import (
     ObligationNotifier,
 )
 from chatmemory.app.optout import OptOutService
+from chatmemory.app.personal_keys import CYBERWEALTH, PersonalKeys
 from chatmemory.app.privacy import PrivacyService, RetentionFacts
 from chatmemory.app.reasoning.capabilities import (
     LOOP_STAGES,
@@ -298,6 +309,9 @@ class AnswerStack:
     reasoning: ReasoningAnswerService
     obligations: ObligationService
     federation: FederatedTools | None = None
+    #: People's own connected-app keys. None without `PERSONAL_SECRETS_KEY`:
+    #: a key sent in a DM is then refused, and nothing is stored.
+    personal_keys: PersonalKeys | None = None
     #: What this deployment says it can do. Carried so the Discord surface
     #: describes the same configuration for a bare mention as `answers` does
     #: for "what can you do?".
@@ -944,6 +958,7 @@ async def build_federation(
     transport: httpx.AsyncBaseTransport | None = None,
     auth_environ: Mapping[str, str] | None = None,
     mcp_transport: httpx2.AsyncBaseTransport | None = None,
+    personal_keys: PersonalKeys | None = None,
 ) -> FederatedTools | None:
     """Connect to the configured servers, or run without any.
 
@@ -954,6 +969,9 @@ async def build_federation(
     `auth_environ` holds the `FEDERATION_AUTH_*` variables (read from the
     environment when None); `mcp_transport` is what a credentialled server's
     MCP requests go through, for tests.
+
+    `personal_keys` makes CyberWealth's personal tools callable with each
+    asker's own key (see `with_personal_keys`).
 
     Every failure degrades to None. That is a deliberate asymmetry with the
     model and embedding checks above, which refuse the deployment: those
@@ -980,6 +998,7 @@ async def build_federation(
         environ=auth_environ,
         mcp_transport=mcp_transport,
     )
+    config, keyed = with_personal_keys(config, personal_keys, mcp_transport=mcp_transport)
 
     # Local providers -- Wikipedia, and SerpApi when a key is configured.
     # They are not remote MCP servers, but they are governed by the same
@@ -1045,7 +1064,7 @@ async def build_federation(
         return None
 
     try:
-        federation = await connect(config, factory)
+        federation = await connect(config, factory, keyed=keyed)
     except FederationStartupError as exc:
         # The spec's own rule: a listed tool no server provides is an error,
         # not a quiet reduction in capability. It is reported as one -- and
@@ -1069,7 +1088,37 @@ async def build_federation(
             "composition.federation.offer_only",
             hint="no tool-calling model handle; runs will be offered tools but call none",
         )
-    return _federated_tools(config, federation, proposer, holders)
+    return _federated_tools(config, federation, proposer, holders, personal_keys)
+
+
+def with_personal_keys(
+    config: FederationConfig | None,
+    personal_keys: PersonalKeys | None,
+    *,
+    mcp_transport: httpx2.AsyncBaseTransport | None = None,
+) -> tuple[FederationConfig | None, KeyedSessionFactory | None]:
+    """Call CyberWealth's `my_*` tools with each asker's own key, when possible.
+
+    Needs the keys (`PERSONAL_SECRETS_KEY`) and a configured `cyberwealth`
+    server reached over HTTPS: a person's key on plain HTTP is a key anybody
+    on the path can replay. Otherwise nothing changes, and personal tools are
+    called as every other tool is.
+    """
+    if personal_keys is None or config is None:
+        return config, None
+    server = config.server(CYBERWEALTH)
+    if server is None:
+        return config, None
+    if not is_secure(server.target):
+        log.error(
+            "composition.federation.personal_keys_refused",
+            server=server.name,
+            reason="target is not https",
+        )
+        return config, None
+    log.info("composition.federation.personal_keys", servers=[server.name])
+    keyed = replace(config, personal_key_servers=frozenset({server.name}), _by_name={})
+    return keyed, keyed_session_factory(http_transport=mcp_transport)
 
 
 def _federated_tools(
@@ -1077,6 +1126,7 @@ def _federated_tools(
     federation: Federation,
     proposer: ModelToolProposer | None = None,
     holders: Mapping[str, frozenset[PersonRef]] | None = None,
+    personal_keys: PersonalKeys | None = None,
 ) -> FederatedTools:
     """Assemble the guarded door around a connected federation.
 
@@ -1090,7 +1140,15 @@ def _federated_tools(
     audit = InMemoryAuditTrail()
     broker = CredentialBroker(dict(holders or {}))
     authorizer = Authorizer(federation.permits, confirmations, broker)
-    invoker = GuardedInvoker(federation, authorizer, audit, confirmations)
+    invoker = GuardedInvoker(
+        federation,
+        authorizer,
+        audit,
+        confirmations,
+        # Only where a server takes each asker's own key (`with_personal_keys`);
+        # elsewhere personal tools are called as every other tool is.
+        personal_keys=personal_keys if config.personal_key_servers else None,
+    )
     return FederatedTools(
         federation=federation,
         # The same invoker the surface hands calls to, so there is one guarded
@@ -1957,8 +2015,12 @@ async def build_answer_stack(
     # is reached over the network, and a slow handshake must not sit in front
     # of the failures that stop the process.
     proposer = build_tool_proposer(settings, chat)
+    personal_keys = build_personal_keys(settings, engine)
     federation = await build_federation(
-        settings, proposer=proposer, transport=edges.http_transport
+        settings,
+        proposer=proposer,
+        transport=edges.http_transport,
+        personal_keys=personal_keys,
     )
     log.info(
         "composition.answer_stack",
@@ -2022,7 +2084,24 @@ async def build_answer_stack(
         reasoning=reasoning,
         obligations=obligations,
         federation=federation,
+        personal_keys=personal_keys,
     )
+
+
+def build_personal_keys(settings: Settings, engine: AsyncEngine) -> PersonalKeys | None:
+    """People's own connected-app keys, sealed under `PERSONAL_SECRETS_KEY`.
+
+    None when the key is unset, or unusable -- said at error level, because
+    the operator meant to turn the feature on. Without it no key is stored.
+    """
+    if settings.personal_secrets_key is None:
+        return None
+    try:
+        cipher = secrets_cipher(settings.personal_secrets_key.get_secret_value())
+    except UnusableSecretsKey as exc:
+        log.error("composition.personal_keys.misconfigured", error=str(exc))
+        return None
+    return PersonalKeys(PostgresPersonalKeyStore(engine, cipher))
 
 
 def memory_policy(settings: Settings) -> MemoryPolicy:

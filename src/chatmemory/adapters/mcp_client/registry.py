@@ -130,7 +130,7 @@ def register(config: FederationConfig, discovery: Sequence[ServerDiscovery]) -> 
             unavailable.append(entry.qualified_name)
             continue
 
-        advertised = next((t for t in found.tools if t.name == entry.tool), None)
+        advertised = _advertised(config, found, entry)
         if advertised is None:
             missing.append(entry.qualified_name)
             continue
@@ -156,6 +156,38 @@ def register(config: FederationConfig, discovery: Sequence[ServerDiscovery]) -> 
         tools=tuple(registered),
         unreachable_servers=unreachable,
         unavailable_tools=tuple(unavailable),
+    )
+
+
+def _advertised(
+    config: FederationConfig, found: ServerDiscovery, entry: AllowedTool
+) -> DiscoveredTool | None:
+    """The server's own listing of `entry`, or what stands in for one.
+
+    A personal tool called with each asker's own key may not be shown to the
+    deployment's identity: CyberWealth lists only the tools the credential
+    asking may call, and a service principal sees `intel_*`.
+    """
+    listed = next((t for t in found.tools if t.name == entry.tool), None)
+    if listed is None and entry.personal and entry.server in config.personal_key_servers:
+        return _unlisted_personal_tool(entry)
+    return listed
+
+
+def _unlisted_personal_tool(entry: AllowedTool) -> DiscoveredTool:
+    """What stands in for a listing the deployment's identity cannot get.
+
+    The description is built from the allowlisted name, so routing still has
+    words to match ("my_unpaid_bills" -> "my unpaid bills"); the schema is
+    empty, so the model proposes no argument it would have to guess. The
+    effect is undetermined, so only the operator's `:ro` makes it read-only.
+    """
+    log.info("federation.personal_tool_unlisted", tool=entry.qualified_name)
+    words = entry.tool.replace("_", " ")
+    return DiscoveredTool(
+        name=entry.tool,
+        description=f"{words}: the asker's own {entry.server} data, with their own key",
+        effect=ToolEffect.UNDETERMINED,
     )
 
 
