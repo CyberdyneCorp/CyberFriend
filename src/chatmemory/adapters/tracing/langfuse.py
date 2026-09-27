@@ -18,6 +18,11 @@ messages a trace drew on, so deleting one withdraws the traces built from it.
 A trace is named by its feature and tagged with this application's tag, so
 that every read and delete against a shared Langfuse project can be scoped to
 this application and environment.
+
+Each model call rides in the same batch as a `generation-create` (stage,
+model, input and output tokens), from which Langfuse prices the run, and each
+federated tool call as a `span-create` (name, outcome, latency). Tool
+arguments are never sent: they can hold a wallet address or a query.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from typing import Any
 import httpx
 import structlog
 
+from chatmemory.app.reasoning.budgets import ModelUsage, ToolUsage
 from chatmemory.app.reasoning.contract import AnswerPath, RunTrace
 from chatmemory.app.reasoning.features import FEATURES
 from chatmemory.app.reasoning.loop import FEDERATION_CALL
@@ -123,6 +129,7 @@ class LangfuseTracer:
                 "model_calls": run.record.spend.model_calls,
                 "tool_calls": run.record.spend.tool_calls,
                 "prompt_tokens": run.record.spend.prompt_tokens,
+                "completion_tokens": run.record.spend.completion_tokens,
                 "elapsed_seconds": round(run.record.spend.elapsed_seconds, 3),
                 "queries": list(run.record.queries),
                 "sub_questions": list(run.record.sub_questions),
@@ -140,16 +147,18 @@ class LangfuseTracer:
                 "citations": [_citation(c) for c in run.answer.citations],
             },
         }
-        return {
-            "batch": [
-                {
-                    "id": str(uuid.uuid4()),
-                    "type": "trace-create",
-                    "timestamp": now,
-                    "body": body,
-                }
-            ]
-        }
+        events = [_event("trace-create", now, body)]
+        events.extend(
+            _event("generation-create", now, _generation(trace_id, usage))
+            for usage in run.record.spend.models
+        )
+        events.extend(
+            _event("span-create", now, _span(trace_id, usage))
+            for usage in run.record.spend.tools
+        )
+        # One batch, one POST: the answer path pays no extra round-trip for
+        # the generations and spans.
+        return {"batch": events}
 
     # --- transport -----------------------------------------------------
 
@@ -338,6 +347,43 @@ async def warn_unless_supported(
             supported=SUPPORTED_MAJOR,
         )
     return major
+
+
+def _event(kind: str, now: str, body: dict[str, Any]) -> dict[str, Any]:
+    return {"id": str(uuid.uuid4()), "type": kind, "timestamp": now, "body": body}
+
+
+def _generation(trace_id: str, usage: ModelUsage) -> dict[str, Any]:
+    """One model call. Langfuse prices it from `model` and `usageDetails`."""
+    body: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "traceId": trace_id,
+        "name": usage.stage or "model",
+        "startTime": usage.started_at.isoformat(),
+        "endTime": usage.ended_at.isoformat(),
+        "usageDetails": {
+            "input": usage.input_tokens,
+            "output": usage.output_tokens,
+        },
+    }
+    if usage.model:
+        # Omitted rather than sent empty: an unnamed model matches no price.
+        body["model"] = usage.model
+    return body
+
+
+def _span(trace_id: str, usage: ToolUsage) -> dict[str, Any]:
+    """One federated tool call: name, outcome and latency, never its arguments."""
+    return {
+        "id": str(uuid.uuid4()),
+        "traceId": trace_id,
+        "name": usage.name,
+        "startTime": usage.started_at.isoformat(),
+        "endTime": usage.ended_at.isoformat(),
+        "level": "ERROR" if usage.failed else "DEFAULT",
+        "statusMessage": usage.outcome,
+        "metadata": {"outcome": usage.outcome},
+    }
 
 
 def _name(run: RunTrace) -> str:

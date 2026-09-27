@@ -86,6 +86,9 @@ operator has to tell apart: tools were offered and none was wanted, one was
 wanted and refused, one was wanted and answered.
 """
 
+PLAN_STAGE = "plan"
+"""Decision and model-usage name for decomposing a question."""
+
 NOTHING_EXTERNAL = (
     "I couldn't get an answer from the outside sources I can reach just now."
 )
@@ -425,10 +428,17 @@ class ReasoningLoop:
             # act on is money spent on nothing at all.
             return (_driver_decision(FEDERATION_CALL, f"budget_{reached}"),)
 
+        started = spend.now()
         proposal = await self._propose(surface, question, offered)
         if proposal is None:
             return (_driver_decision(FEDERATION_CALL, "proposal_failed"),)
-        spend.charge_model_call(proposal.prompt_tokens)
+        spend.charge_model_call(
+            proposal.prompt_tokens,
+            stage=FEDERATION_CALL,
+            model=proposal.model,
+            completion_tokens=proposal.completion_tokens,
+            started_at=started,
+        )
         call = proposal.call
         if call is None:
             # The model read the question and wanted nothing external. That is
@@ -457,7 +467,15 @@ class ReasoningLoop:
         # Charged before the call, so a tool that hangs until its timeout costs
         # the run what a tool that answered would have.
         spend.charge_tool_call()
-        return (requested, await self._invoke(surface, question, call, evidence))
+        started = spend.now()
+        invoked = await self._invoke(surface, question, call, evidence)
+        spend.record_tool(
+            call.name,
+            invoked.outcome,
+            failed=invoked.outcome != "invoked",
+            started_at=started,
+        )
+        return (requested, invoked)
 
     async def _propose(
         self,
@@ -553,13 +571,21 @@ class ReasoningLoop:
         # writes is only ever a query -- retrieval under this run's viewer
         # decides what comes back, so a steered lookup reaches nothing the
         # person could not already read.
+        started = spend.now()
         plan = await self._planner.plan(
             question.text, self._max_sub_questions, prompt_context(question)
         )
-        spend.charge_model_call(plan.prompt_tokens, plan.model_calls)
+        spend.charge_model_call(
+            plan.prompt_tokens,
+            plan.model_calls,
+            stage=PLAN_STAGE,
+            model=plan.model,
+            completion_tokens=plan.completion_tokens,
+            started_at=started,
+        )
         sub_questions = tuple(plan.sub_questions[: self._max_sub_questions]) or (question.text,)
         decision = Decision(
-            "plan",
+            PLAN_STAGE,
             f"{len(sub_questions)}_sub_questions",
             DecisionMaker.MODEL if plan.model_calls else DecisionMaker.HEURISTIC,
             model_calls=plan.model_calls,

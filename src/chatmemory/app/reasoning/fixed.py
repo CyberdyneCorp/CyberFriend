@@ -58,6 +58,9 @@ Provenance is read back by this name, so the cheap-signal cases -- an empty
 result, the relevance gate -- are directly comparable with the model case.
 """
 
+SYNTHESIS_STAGE = "synthesis"
+"""Stage name under which every synthesis model call is recorded."""
+
 
 @dataclass(frozen=True, slots=True)
 class GatherResult:
@@ -220,8 +223,16 @@ class CorrectiveDriver:
             )
             return Assessment(Verdict.IRRELEVANT, score=gate.best_score or 0.0)
 
+        started = spend.now()
         assessment = await self._critic.assess(question_text, query, items)
-        spend.charge_model_call(assessment.prompt_tokens, assessment.model_calls)
+        spend.charge_model_call(
+            assessment.prompt_tokens,
+            assessment.model_calls,
+            stage=SUFFICIENCY,
+            model=assessment.model,
+            completion_tokens=assessment.completion_tokens,
+            started_at=started,
+        )
         state.decisions.append(
             Decision(
                 SUFFICIENCY,
@@ -307,10 +318,18 @@ async def write_answer(
     # The asker's profile and permitted memory ride along as fenced context.
     # They cannot become citations: citations are resolved below against the
     # window ids this run retrieved, and memory carries none.
+    started = spend.now()
     grounded = await synthesizer.synthesize(
         question.text, evidence.items, prompt_context(question)
     )
-    spend.charge_model_call(grounded.prompt_tokens, grounded.model_calls)
+    spend.charge_model_call(
+        grounded.prompt_tokens,
+        grounded.model_calls,
+        stage=SYNTHESIS_STAGE,
+        model=grounded.model,
+        completion_tokens=grounded.completion_tokens,
+        started_at=started,
+    )
     citations = evidence.citations(grounded.cited_window_ids)
     if not citations:
         decisions.append(_driver_decision("grounding", "no_resolvable_citations"))
