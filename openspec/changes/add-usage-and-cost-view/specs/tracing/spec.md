@@ -33,6 +33,12 @@ decisions, subject to the opt-out rule.
 - WHEN someone asks what the assistant can do and tracing is enabled
 - THEN the run SHALL be exported with feature `capabilities`
 
+#### Scenario: Catch-up and said-by questions
+- WHEN someone asks what they missed in a channel, or what a named person said,
+  and tracing is enabled
+- THEN the run SHALL be exported with feature `corpus.catchup` or
+  `corpus.said_by` respectively
+
 ### Requirement: Traces are kept for a stated period, and only ours are deleted
 
 The system SHALL delete this application's exported traces older than the

@@ -290,6 +290,9 @@ services:
       - ADMIN_PUBLIC_URL=${ADMIN_PUBLIC_URL:-}
       # Optional; unset means `openid email profile`.
       - ADMIN_OIDC_SCOPES=${ADMIN_OIDC_SCOPES:-}
+      # The host only, no keys: read at startup to warn when Langfuse is not
+      # on v3 (docs/operations.md, "Langfuse version").
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
       # Its own domain. Separate from the MCP one so the console can be closed
       # to the internet without taking retrieval with it.
       - SERVICE_FQDN_ADMIN_8083

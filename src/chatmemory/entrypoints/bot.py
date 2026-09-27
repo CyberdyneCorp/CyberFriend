@@ -42,7 +42,11 @@ process that skips it answers "what did I miss in #x" by searching the corpus
 for those words -- the behaviour before the feature, never a wider one.
 "What did Ana say about X" follows it: `assemble` -> `build_said_by` ->
 `build_bot(said_by=...)` -> `build_ask_service` -> `AskService(said_by=...)`,
-read from this file down by `tests/unit/test_said_by_wiring.py`.
+read from this file down by `tests/unit/test_said_by_wiring.py`. Both answer
+before the answer chain and its tracer seam, so the stack's tracer follows them:
+`assemble` -> `build_bot(tracer=stack.tracer)` -> `build_ask_service` ->
+`AskService(tracer=...)`, and `tests/e2e/test_trace_features.py` proves both
+are exported.
 
 Indexing scope is live here as it is in ingest. `assemble` builds a `LiveScope`
 over the answer stack's engine, refreshes it before identifying, hands it to
@@ -140,6 +144,7 @@ from chatmemory.app.conversation import Conversations
 from chatmemory.app.facts import PersonalFactsService
 from chatmemory.app.indexing import ChannelPurge, IndexingService
 from chatmemory.app.notifications import NotificationDelivery
+from chatmemory.app.reasoning.contract import RunTracer
 from chatmemory.app.said_by import SaidByService
 from chatmemory.app.schedules import ScheduledTaskRunner
 from chatmemory.app.scope import LiveScope, ScopeProvider
@@ -252,6 +257,7 @@ def build_bot(
     facts: PersonalFactsService | None = None,
     catchup: CatchUpService | None = None,
     said_by: SaidByService | None = None,
+    tracer: RunTracer | None = None,
     notifications: AsyncEngine | None = None,
     alert_transport: httpx.AsyncBaseTransport | None = None,
     clock: Clock = utc_now,
@@ -310,6 +316,9 @@ def build_bot(
         # "What did Ana say about X". Without it that question is answered by
         # the ordinary search, which is what this process did before.
         said_by=said_by,
+        # The tracer the answer stack exports through. Catch-up and said-by
+        # answer before that stack, so without it neither is ever traced.
+        tracer=tracer,
         alerts=alert_requests,
     )
     if corrections is not None:
@@ -686,6 +695,9 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         # "What did Ana say about X last week", over the same backend and chat
         # handle, and on the same clock that decides what "last week" is.
         said_by=build_said_by(settings, stack.search, stack.chat, edges.clock),
+        # The tracer `stack.answers` exports through, so catch-up and said-by
+        # answers are traced like every other answer.
+        tracer=stack.tracer,
         # The other end of the queue the ingest process fills. Omitted, the
         # notification tables are written by one process and read by none:
         # `/notifications` says it is unavailable, and nobody is ever told

@@ -297,3 +297,54 @@ def test_build_ask_service_accepts_the_summariser_directly() -> None:
         catchup=CatchUpService(Retrieval(), Synthesizer(), clock=lambda: NOW),
     )
     assert asks is not None
+
+
+# --- traced like every other answer ----------------------------------------
+
+
+def test_the_bot_process_hands_the_stacks_tracer_to_the_ask_service() -> None:
+    """Catch-up answers before the answer chain and its tracer seam, so the
+    stack's tracer must reach AskService or catch-up is never traced."""
+    bot = SRC / "entrypoints" / "bot.py"
+    assert _calls_with_keyword(bot, "build_bot", "tracer"), (
+        "assemble() must give build_bot the answer stack's tracer"
+    )
+    assert _calls_with_keyword(bot, "build_ask_service", "tracer"), (
+        "build_bot must pass it on to the ask service"
+    )
+    assert _calls_with_keyword(SRC / "composition.py", "AskService", "tracer"), (
+        "build_ask_service must give it to AskService"
+    )
+    assert _calls_with_keyword(SRC / "composition.py", "AnswerStack", "tracer"), (
+        "the answer stack must carry the tracer its answer chain exports through"
+    )
+
+
+async def test_a_catch_up_through_the_built_bot_is_traced_as_corpus_catchup() -> None:
+    from chatmemory.app.reasoning import features
+    from tests.unit.test_run_tracing import CapturingTracer
+
+    tracer = CapturingTracer()
+    answers = Answers()
+    graph = build_bot(
+        Settings(**BASE),  # type: ignore[arg-type]
+        answers,  # type: ignore[arg-type]
+        catchup=CatchUpService(
+            Retrieval(window(GENERAL, 42, "we shipped the pricing page")),  # type: ignore[arg-type]
+            Synthesizer(),
+            clock=lambda: NOW,
+        ),
+        tracer=tracer,
+    )
+    fake = guild()
+    graph.client.get_guild = lambda _id: fake  # type: ignore[assignment,method-assign,return-value]
+
+    await graph.asks.ask(
+        AskRequest(person(LEAD), "what did I miss in <#100>?", ch(GENERAL), GENERAL)
+    )
+
+    [traced] = tracer.traces
+    assert traced.record.feature == features.CORPUS_CATCHUP
+    assert traced.record.evidence_window_ids == (42,)
+    assert [e.window_id for e in traced.evidence] == [42]
+    assert answers.seen == []

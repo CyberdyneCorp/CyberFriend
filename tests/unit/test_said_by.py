@@ -441,3 +441,63 @@ async def test_no_topic_asks_for_everything_they_said_in_the_span() -> None:
     await ask(service(People(ANA), retrieval), "o que a Ana disse hoje?")
     [query] = retrieval.queries
     assert query.text == "" and query.since == datetime(2026, 9, 24, 3, 0, tzinfo=UTC)
+
+
+# --- the run behind the answer, for tracing --------------------------------
+
+
+async def test_a_resolved_answer_is_a_corpus_said_by_run_with_its_evidence() -> None:
+    from chatmemory.app.reasoning import features
+    from chatmemory.app.reasoning.contract import RunStatus
+
+    outcome = await ask(
+        service(People(ANA), Retrieval(evidence("Ana: pricing goes up"))),
+        "what did Ana say about pricing?",
+    )
+
+    assert outcome.run is not None
+    record = outcome.run.record
+    assert record.feature == features.CORPUS_SAID_BY
+    assert record.status is RunStatus.ANSWERED
+    assert record.decisions[0] == outcome.decision
+    assert record.evidence_window_ids == (42,)
+    assert record.spend.model_calls == 1
+    assert [e.window_id for e in outcome.run.evidence] == [42]
+
+
+@pytest.mark.parametrize(
+    ("people", "retrieval", "status", "decided"),
+    [
+        ("broken", Retrieval(), "failed", "unavailable"),
+        ("ana", Retrieval(fail=True), "failed", "resolved"),
+        ("ana", Retrieval(), "answered", "resolved"),
+        ("two", Retrieval(), "answered", "ambiguous"),
+    ],
+)
+async def test_every_said_by_answer_is_named_and_carries_its_decision(
+    people: str, retrieval: Retrieval, status: str, decided: str
+) -> None:
+    from chatmemory.app.reasoning import features
+
+    class Broken(People):
+        async def people_named(
+            self, viewer: Viewer, name: str, limit: int = 6
+        ) -> Sequence[PersonCandidate]:
+            raise OSError("database down")
+
+    directory = {
+        "broken": Broken(),
+        "ana": People(ANA),
+        "two": People(ANA, PersonCandidate(PersonRef("discord", 22), "Ana Lima")),
+    }[people]
+    outcome = await ask(service(directory, retrieval), "what did Ana say about pricing?")
+
+    assert outcome.run is not None
+    assert outcome.run.record.feature == features.CORPUS_SAID_BY
+    assert str(outcome.run.record.status) == status
+    assert [d.outcome for d in outcome.run.record.decisions] == [decided]
+
+
+async def test_a_fall_through_has_no_run_so_the_ordinary_path_traces_it() -> None:
+    outcome = await ask(service(People(), Retrieval()), "what did Ana say about pricing?")
+    assert outcome.run is None and outcome.answer is None

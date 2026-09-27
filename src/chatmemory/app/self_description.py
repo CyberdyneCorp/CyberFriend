@@ -36,6 +36,13 @@ from chatmemory.app.egress import (
     MARKET_INDEX_PROVIDER,
 )
 from chatmemory.app.language import Language, detect
+from chatmemory.app.reasoning import features
+from chatmemory.app.reasoning.contract import (
+    RunOutcome,
+    TerminalCause,
+    answered,
+    run_of,
+)
 from chatmemory.app.routing import self_description_question
 from chatmemory.domain.audience import DeliveryMode
 from chatmemory.ports.answers import Answer, AnswerService, Question
@@ -540,23 +547,35 @@ class SelfDescriptionAnswerService:
         self.capabilities = capabilities or Capabilities()
 
     async def answer(self, question: Question) -> Answer:
-        if self_description_question(question.text):
-            # Rendered per question rather than once at startup, because the
-            # language is the question's.
-            language = detect(question.text)
-            # No citations, deliberately: nothing here came from a message,
-            # and inventing a source for a description of configuration would
-            # make it look retrieved.
-            return Answer(
-                self.capabilities.describe(
-                    language if language.known else Language.ENGLISH,
-                    direct_message=question.audience.mode is DeliveryMode.DIRECT_MESSAGE,
-                ),
-                # An empty set, not None: it read no channel. None means
-                # "never established", and memory refuses to store that.
-                consulted_channels=frozenset(),
-            )
-        return await self._fallback.answer(question)
+        return (await self.answer_run(question)).answer
+
+    async def answer_run(self, question: Question) -> RunOutcome:
+        if not self_description_question(question.text):
+            return await run_of(self._fallback, question)
+        # From configuration: nothing is searched, as for any other refusal
+        # to consult the corpus.
+        return answered(
+            self._describe(question),
+            features.CAPABILITIES,
+            TerminalCause.CONFIGURATION_BLOCKED,
+        )
+
+    def _describe(self, question: Question) -> Answer:
+        # Rendered per question rather than once at startup, because the
+        # language is the question's.
+        language = detect(question.text)
+        # No citations, deliberately: nothing here came from a message,
+        # and inventing a source for a description of configuration would
+        # make it look retrieved.
+        return Answer(
+            self.capabilities.describe(
+                language if language.known else Language.ENGLISH,
+                direct_message=question.audience.mode is DeliveryMode.DIRECT_MESSAGE,
+            ),
+            # An empty set, not None: it read no channel. None means
+            # "never established", and memory refuses to store that.
+            consulted_channels=frozenset(),
+        )
 
 
 _EVERY_COMMAND = (*ALWAYS_AVAILABLE, NOTIFICATIONS, *SCHEDULED, *ALERTS)

@@ -611,7 +611,12 @@ def test_the_bot_receives_the_obligation_aware_service() -> None:
                 if isinstance(n, ast.Call)
             }
             assert "ObligationAnswerService" in constructed
-            assert getattr(answers.func, "id", None) == "SelfDescriptionAnswerService", (
+            # The tracer wraps everything, and answers nothing itself; inside
+            # it, self-description comes first.
+            assert getattr(answers.func, "id", None) == "TracedAnswerService"
+            front = answers.args[0]
+            assert isinstance(front, ast.Call)
+            assert getattr(front.func, "id", None) == "SelfDescriptionAnswerService", (
                 "self-description must be outermost, or a capability question "
                 "reaches retrieval first"
             )

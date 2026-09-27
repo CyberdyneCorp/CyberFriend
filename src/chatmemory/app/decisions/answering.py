@@ -36,6 +36,8 @@ from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.decisions.model import DecisionPolicy, DecisionRequest, ReportedDecision
 from chatmemory.app.decisions.ports import DecisionSearch
 from chatmemory.app.decisions.render import render_decisions
+from chatmemory.app.reasoning import features
+from chatmemory.app.reasoning.contract import RunOutcome, answered, run_of
 from chatmemory.app.reasoning.scope import retrieval_viewer
 from chatmemory.app.routing import DecisionQuestion, decision_question
 from chatmemory.domain.identity import ChannelRef, Viewer
@@ -76,9 +78,12 @@ class DecisionAnswerService:
         self._url = message_url
 
     async def answer(self, question: Question) -> Answer:
+        return (await self.answer_run(question)).answer
+
+    async def answer_run(self, question: Question) -> RunOutcome:
         asked = decision_question(question.text, self._clock(), self._tz)
         if asked is None:
-            return await self._fallback.answer(question)
+            return await run_of(self._fallback, question)
         viewer = retrieval_viewer(question)
         found = await self._lookup(viewer, asked)
         log.info(
@@ -92,14 +97,15 @@ class DecisionAnswerService:
             model_calls=asked.model_calls,
         )
         if not found:
-            return await self._fallback.answer(question)
-        return render_decisions(
+            return await run_of(self._fallback, question)
+        rendered = render_decisions(
             found,
             asked,
             tz=self._tz,
             policy=self._policy,
             message_url=self._url,
         )
+        return answered(rendered, features.DECISIONS)
 
     async def _lookup(
         self, viewer: Viewer, asked: DecisionQuestion
