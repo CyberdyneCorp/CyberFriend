@@ -104,10 +104,16 @@ class AccountProvisioner(Protocol):
     async def request_account(self, request: ProvisioningRequest) -> None: ...
 ```
 
-- Returns nothing on 202. Raises `ProvisioningRateLimited` on 429 and
+- Returns nothing on 202. Raises `ProvisioningRateLimited` on 429,
+  `ProvisioningInvalidName` on 422 (our name rule drifted from the provider's:
+  reported as "try again later", uncounted, and logged as a warning) and
   `ProvisioningUnavailable` on anything else.
 - The adapter obtains a `client_credentials` token (scope `users:provision`)
-  and uses `edges.http_transport`.
+  from the token endpoint in `ACCOUNT_PROVISIONING_ISSUER`'s discovery,
+  caches it until shortly before expiry, retries once with a new token on a
+  401, and uses `edges.http_transport`. It exists only when
+  `ACCOUNT_PROVISIONING_CLIENT_ID` and `_SECRET` are both set (bot only; a
+  partial client refuses to start).
 - `ACCOUNT_PROVISIONING_ENABLED` defaults to false, and the command is hidden
   while it is off.
 

@@ -119,12 +119,15 @@ DEPLOYMENT_SETTINGS = {
         ("ACCOUNT_PROVISIONING_ENABLED", "false"),
         ("PROVISIONING_EMAIL_KEY", ""),
         ("ADMIN_PUBLIC_URL", ""),
+        ("ACCOUNT_PROVISIONING_ISSUER", ""),
+        ("ACCOUNT_PROVISIONING_CLIENT_ID", ""),
+        ("ACCOUNT_PROVISIONING_CLIENT_SECRET", ""),
     ],
 )
 def test_account_provisioning_settings_reach_the_bot(setting: str, default: str) -> None:
-    """`/account` runs in the bot: the switch, the email HMAC key and the URL
-    the sign-in link points at must all reach it, or turning it on in the
-    platform silently leaves it off."""
+    """`/account` runs in the bot: the switch, the email HMAC key, the URL
+    the sign-in link points at and the provisioning client must all reach it,
+    or turning it on in the platform silently leaves it off."""
     assert f"{setting}=${{{setting}:-{default}}}" in service_block("bot")
 
 
@@ -365,6 +368,12 @@ def test_the_console_environment_is_the_database_its_own_settings_and_nothing_el
     assert unexpected_console_variables(service) == [], (
         f"the console is given {unexpected_console_variables(service)}"
     )
+
+
+def test_the_provisioning_client_is_the_bots_alone() -> None:
+    """Only the bot requests accounts: the console never gets the client that
+    can create them, whatever the platform injects besides."""
+    assert "ACCOUNT_PROVISIONING_CLIENT" not in service_block("admin")
 
 
 def test_the_console_reads_no_env_file() -> None:

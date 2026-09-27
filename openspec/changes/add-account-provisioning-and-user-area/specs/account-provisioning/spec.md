@@ -54,6 +54,11 @@ be the same in every outcome.
 - THEN the assistant SHALL tell the person to try again later
 - AND SHALL NOT count it against the person's own limit
 
+#### Scenario: Provider refuses the name
+- WHEN the provider rejects the request as an invalid name
+- THEN the assistant SHALL tell the person to try again later, SHALL NOT count
+  it, and SHALL warn the operator that the name rules differ
+
 ### Requirement: Provisioning is limited per person
 
 The system SHALL allow each person at most one provisioning request in any 24
@@ -121,3 +126,9 @@ only call the identity provider through the provisioning port.
 #### Scenario: Not enabled
 - WHEN provisioning is not enabled
 - THEN the account command SHALL NOT be offered
+
+#### Scenario: No provisioning client configured
+- WHEN provisioning is enabled but the provisioning client's id and secret are
+  not both configured
+- THEN no provisioner SHALL exist, the account command SHALL NOT be offered,
+  and nothing SHALL be sent to the provider

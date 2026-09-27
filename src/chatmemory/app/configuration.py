@@ -313,6 +313,11 @@ SECRETS: Mapping[str, SecretSpec] = {
         # registered at all, which is a configuration decision, not a secret
         # that may be kept somewhere more convenient.
         SecretSpec("serpapi_key", "the web search API key", required=False),
+        SecretSpec(
+            "account_provisioning_client_secret",
+            "the CyberdyneAuth provisioning client's secret",
+            required=False,
+        ),
     )
 }
 

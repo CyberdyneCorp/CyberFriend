@@ -54,6 +54,7 @@ from chatmemory.ports.accounts import (
     LinkOutcome,
     NewLink,
     ProvisioningFailed,
+    ProvisioningInvalidName,
     ProvisioningLimits,
     ProvisioningRequest,
     retry_at,
@@ -145,6 +146,17 @@ class ConsentDraft:
             return None
 
 
+def _log_refusal(exc: Exception) -> None:
+    """A 422 on a name `account_name` passed means the rules drifted apart:
+    a warning an operator must act on, where a 429 or an outage passes."""
+    if isinstance(exc, ProvisioningInvalidName):
+        log.warning("accounts.provisioning_name_rejected")
+    elif isinstance(exc, ProvisioningFailed):
+        log.info("accounts.provisioning_refused", reason=type(exc).__name__)
+    else:
+        log.exception("accounts.provisioning_failed")
+
+
 class ProvisioningOutcome(StrEnum):
     REQUESTED = "requested"
     """Accepted by the provider, whatever it did with it."""
@@ -231,10 +243,7 @@ class AccountService:
         except Exception as exc:
             # Uncounted whatever went wrong: the person did not get a request.
             await self._store.release(reservation.request_id)
-            if not isinstance(exc, ProvisioningFailed):
-                log.exception("accounts.provisioning_failed")
-            else:
-                log.info("accounts.provisioning_refused", reason=type(exc).__name__)
+            _log_refusal(exc)
             return ProvisioningResult(ProvisioningOutcome.TRY_LATER)
         log.info("accounts.provisioning_requested")
         return ProvisioningResult(ProvisioningOutcome.REQUESTED)

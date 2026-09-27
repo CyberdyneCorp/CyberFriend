@@ -28,7 +28,7 @@
 
 ## 4. CyberdyneAuth adapter
 
-- [ ] 4.1 `adapters/accounts/cyberdyneauth.py`: `client_credentials` token (scope `users:provision`), `POST /api/v1/users/provision`, 202 -> ok, 429 -> rate limited; tested against a MockTransport of the approved contract
+- [x] 4.1 `adapters/accounts/cyberdyneauth.py`: `client_credentials` token (scope `users:provision`), `POST /api/v1/users/provision`, 202 -> ok, 429 -> rate limited, 422 -> invalid name; wired only when `ACCOUNT_PROVISIONING_CLIENT_ID`/`_SECRET` (and `ACCOUNT_PROVISIONING_ISSUER`) are set; through `Edges.http_transport`; tested against a MockTransport of the approved contract
 - [ ] 4.2 BLOCKED: CyberdyneAuth deploys the endpoint and issues the provisioning client -> enable `ACCOUNT_PROVISIONING_ENABLED`
 - [ ] 4.3 OPEN DEPENDENCY: CyberdyneAuth expires unaccepted provisioned accounts after N days
 - [ ] 4.4 OPEN DEPENDENCY: account deletion API -> call from erasure; until then the reply says how to request deletion

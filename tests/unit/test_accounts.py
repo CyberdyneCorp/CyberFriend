@@ -37,6 +37,7 @@ from chatmemory.ports.accounts import (
     AccountCleanup,
     LinkCodeIssue,
     LinkCodeVerdict,
+    ProvisioningInvalidName,
     ProvisioningLimits,
     ProvisioningRateLimited,
     ProvisioningRequest,
@@ -330,7 +331,10 @@ async def test_a_fourth_request_in_thirty_days_is_refused_and_nothing_is_sent() 
     assert (await accounts.confirm(LEO, draft)).outcome is ProvisioningOutcome.REQUESTED
 
 
-@pytest.mark.parametrize("refusal", [ProvisioningRateLimited(), ProvisioningUnavailable()])
+@pytest.mark.parametrize(
+    "refusal",
+    [ProvisioningRateLimited(), ProvisioningInvalidName(), ProvisioningUnavailable()],
+)
 async def test_a_refused_request_says_try_later_and_is_not_counted(refusal: Exception) -> None:
     provisioner, store = RecordingProvisioner(), MemoryStore()
     accounts = service(provisioner=provisioner, store=store)
