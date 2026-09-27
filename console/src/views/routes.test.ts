@@ -24,6 +24,7 @@ const READS: Record<string, string[]> = {
   "/retention": ["/api/settings", "/api/optouts"],
   "/settings": ["/api/settings"],
   "/tokens": ["/api/tokens"],
+  "/feature-requests": ["/api/feature-requests"],
   "/audit": ["/api/audit"],
 };
 

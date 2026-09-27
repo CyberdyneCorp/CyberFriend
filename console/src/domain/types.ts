@@ -3,7 +3,9 @@
  *
  * Two things are deliberately absent and their absence is the contract:
  * nothing here carries message, document or ask text, and nothing here
- * carries a secret -- not even a masked one. If a field for either ever
+ * carries a secret -- not even a masked one. A feature request's text is not
+ * an exception: it is the person's own suggestion, given to the team on
+ * purpose, and never something they said in a channel. If a field for either ever
  * appears in this file, the console has started rendering something the API
  * promised never to send.
  *
@@ -177,4 +179,47 @@ export interface SignInConfig {
 /** POST /auth/logout: where to send the browser to end the provider's session too. */
 export interface SignedOut {
   end_session_url: string | null;
+}
+
+/** Where the team is with a suggestion. The API's `RequestStatus`. */
+export type FeatureRequestStatus = "new" | "triaged" | "planned" | "done" | "declined" | "duplicate";
+
+/**
+ * GET /api/feature-requests: one suggestion as the team sees it.
+ *
+ * `person` is their display name, never an account id; the console is not
+ * where anybody is contacted from. `same_text_elsewhere` counts the other
+ * people who suggested the same words.
+ */
+export interface FeatureRequest {
+  id: number;
+  text: string;
+  language: string | null;
+  status: FeatureRequestStatus;
+  admin_note: string | null;
+  duplicate_of: number | null;
+  source_kind: string;
+  person: string;
+  same_text_elsewhere: number;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export interface FeatureRequestPage {
+  items: FeatureRequest[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/** PATCH /api/feature-requests/{id}: only the fields that change. */
+export interface FeatureRequestPatch {
+  status?: FeatureRequestStatus;
+  admin_note?: string | null;
+  duplicate_of?: number | null;
+}
+
+export interface FeatureRequestTriaged extends Changed {
+  request: FeatureRequest;
 }

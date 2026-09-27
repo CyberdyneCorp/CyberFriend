@@ -12,6 +12,10 @@ import type {
   Changed,
   Channel,
   ChannelAdded,
+  FeatureRequestPage,
+  FeatureRequestPatch,
+  FeatureRequestStatus,
+  FeatureRequestTriaged,
   FederationServer,
   OptOut,
   ServerAdded,
@@ -69,6 +73,15 @@ export const adminApi = {
   revokeToken: (id: string) => send<Changed>("DELETE", apiPath("tokens", id)),
 
   audit: () => send<AuditEntry[]>("GET", apiPath("audit")),
+
+  featureRequests: (status: FeatureRequestStatus | null, page: number) => {
+    const query = new URLSearchParams({ page: String(page) });
+    if (status !== null) query.set("status", status);
+    return send<FeatureRequestPage>("GET", `${apiPath("feature-requests")}?${query.toString()}`);
+  },
+  /** Admin only; the API records every change with who made it. */
+  triageFeatureRequest: (id: number, patch: FeatureRequestPatch) =>
+    send<FeatureRequestTriaged>("PATCH", apiPath("feature-requests", String(id)), patch),
 };
 
 /** What a view-model is handed: the real client, or a fake with the same shape. */

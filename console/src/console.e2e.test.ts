@@ -362,6 +362,28 @@ describe("the tokens screen", () => {
   });
 });
 
+describe("the feature requests screen", () => {
+  beforeEach(() => open("Feature requests", "Tell me when someone mentions me"));
+
+  it("shows who suggested it and how many others did", () => {
+    expect(within(rowOf("Sam")).getByText("also suggested by 2 other(s)")).toBeTruthy();
+  });
+
+  it("sends only what the admin changed", async () => {
+    await fireEvent.click(button("Triage"));
+    await fireEvent.change(screen.getByLabelText("Status"), { target: { value: "planned" } });
+    await fireEvent.input(screen.getByLabelText("Note"), { target: { value: "Q4" } });
+    await fireEvent.click(button("Save"));
+    await screen.findByText("#12 saved.");
+    expect(api.writes).toEqual(['PATCH /api/feature-requests/12 {"status":"planned","admin_note":"Q4"}']);
+  });
+
+  it("filters by status, and says when a status has nothing", async () => {
+    await fireEvent.click(button("done"));
+    await screen.findByText("No done suggestions.");
+  });
+});
+
 describe("the audit screen", () => {
   // The reason is shown only here; the setting's name is on the status screen too.
   beforeEach(() => open("Audit", "credentials are read from the environment and cannot be stored"));
@@ -451,6 +473,10 @@ describe("signing in with CyberdyneAuth", () => {
     await fireEvent.click(screen.getByRole("link", { name: "Tokens" }));
     await screen.findByText("sam's laptop");
     expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
+
+    await fireEvent.click(screen.getByRole("link", { name: "Feature requests" }));
+    await screen.findByText("Tell me when someone mentions me");
+    expect(screen.queryByRole("button", { name: "Triage" })).toBeNull();
     expect(api.writes).toEqual([]);
   });
 
