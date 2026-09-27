@@ -193,6 +193,14 @@ p { margin: 0.25rem 0; }
 .signin .panel > a.button { text-align: center; text-decoration: none; }
 .nav__who { display: block; color: var(--text); overflow-wrap: anywhere; }
 
+/* The user area (#/me): one column, the console's panels and buttons. */
+.me { max-width: 48rem; margin: 0 auto; padding: 2rem 1rem; }
+.me__head { margin-bottom: 1rem; }
+.me__tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.facts dt { font-weight: 600; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+
 /* --- usage ------------------------------------------------------------ */
 
 .usage-note { margin: 0.25rem 0 0.75rem; max-width: 80ch; }

@@ -445,8 +445,8 @@ request's triage.
 Which role a route needs is decided in one place, `ROUTE_ACCESS` in
 `src/chatmemory/admin/server.py`, with one explicit row per mounted
 `(method, path)`: `public` (probes and the static bundle), `user` (the user
-area, later), `operator`, `admin`, or `admin_oidc` (personal content: admin
-and signed in as a person, never a token). There is no default by method; HEAD
+area's `/me/*`, see below), `operator`, `admin`, or `admin_oidc` (personal
+content: admin and signed in as a person, never a token). There is no default by method; HEAD
 is looked up under its route's GET row. The middleware resolves each request
 against the router's own route list, so:
 
@@ -465,8 +465,8 @@ claims it, so `GET /api` or `GET /apix` without a credential is the same 401
 as any API route.
 
 `tests/unit/test_admin_roles.py` walks every mounted route and fails on a
-route without a row, a row without a route, a write below admin, or anything
-under `/api` marked public. Adding a route means adding its row in the same
+route without a row, a row without a route, a console write below admin, a
+`user` row outside `/me`, or anything under `/api` marked public or `user`. Adding a route means adding its row in the same
 diff.
 
 ### What a `cfa_` token is
@@ -479,6 +479,78 @@ only from the CyberdyneAuth role. A token never reads personal content
 break-glass rollback: tokens are admin again on the next start, and sessions
 stop being accepted. The other four sign-in variables may stay set; without an
 issuer they are ignored, with a warning naming them.
+
+## The user area (`#/me`)
+
+A person's own data on the web: their `/privacy` dashboard, "delete
+everything" and their suggestions. It is in the same process and bundle as the
+console and shares only the OIDC client and callback with it. The code is in
+`src/chatmemory/admin/user/` and `console/src/{services/userApi.ts,
+viewmodels/me/, views/me/}`; `architecture.test.ts` fails on any import
+between the user area and the console's API, session or screens.
+
+It is on when CyberdyneAuth sign-in is configured **and**
+`ACCOUNT_PROVISIONING_ENABLED=true`, which also needs `PROVISIONING_EMAIL_KEY`
+(the bot's key, at least 32 characters; the admin service refuses to start
+without it). Off, `/link` and `/auth/user/*` answer 404 and `/me/*` 401.
+
+| Route | Access | What it does |
+|---|---|---|
+| `GET /link?code=...` | public | The link the bot DMs. Starts nothing: a page names the Discord account the code was issued to ("Leo (Discord user 123)") and says to continue only if you asked for the link yourself. An unknown, used or expired code gets the "did not work" page. |
+| `POST /link` | public, same origin | That page's form (`code`). Refused unless `Origin` is sent and is the console's own (and `Sec-Fetch-Site`, when sent, is `same-origin`): a form cannot send the CSRF header. Stores the code's sha256 in a browser-bound login record (`__Host-cf_login`) and signs in with `prompt=login` (303). |
+| `GET /auth/user/login` | public | A plain user sign-in. |
+| `GET /auth/user/fresh` | public | A sign-in with `max_age=300`, which "delete everything" needs. |
+| `GET /me/session` | user | `{"email", "linked", "discord", "fresh"}`; `discord` names the linked Discord account, so a link to somebody else's is visible. |
+| `GET /me/privacy` | user | The `/privacy` inventory at DM detail, what is kept and for how long (`BACKUP_RETENTION_DAYS` unset says no backups are kept), and that the CyberdyneAuth account is not deleted. |
+| `GET`, `POST /me/feature-requests` | user, CSRF on POST | The person's suggestions, and a new one under the same rules as `/suggest` (no contact details, deduplicated, 5 a day); stored with source `web`. |
+| `POST /me/erase` | user, CSRF | `{"mode": "erase" \| "erase_and_opt_out", "confirm": "DELETE"}`. Needs a fresh sign-in; ends the link and every session of the account, clears the cookie and revokes the refresh token. |
+| `POST /me/unlink` | user, CSRF | Removes the link, as [Unlink] in the DM does; ends every session of the account, clears the cookie and revokes the refresh token. |
+| `POST /me/logout` | user, CSRF | Ends the user session. |
+
+- **Linking is by proof.** `/auth/callback` finishes a user sign-in when the
+  login record's purpose says so. After the console's checks (state, browser
+  binding, id-token nonce, `userinfo.sub == id_token.sub ==
+  access_token.sub`), a link is made only if userinfo says `email_verified`
+  and `HMAC(PROVISIONING_EMAIL_KEY, email)` equals the consented email's, for
+  an unused, unexpired, unsuperseded code, in one transaction
+  (`person_account_link`, 0035). An unverified email, another email, a used or
+  expired code, a callback in another browser or a subject mismatch link
+  nothing. A CyberdyneAuth account already linked to another person is
+  refused; relinking a person to a new account ends the old account's user
+  sessions.
+- **Whose link it is, before and after.** The consented email is whatever the
+  Discord person typed, so a link alone does not prove that whoever follows
+  it asked for it: somebody could run `/account` with your email and send you
+  their link. `/link` therefore names the Discord account before anything
+  starts, only its same-origin form starts the sign-in, the user area names
+  the linked Discord account, and **Unlink** there undoes a link from the
+  CyberdyneAuth side (the DM's [Unlink] reaches only the Discord side).
+- **The bot says so.** It DMs "Linked to a***@example.com, not you?
+  [Unlink]" within 30 seconds (`person_account_link.notified_at`, 0036).
+  [Unlink] is persistent and ends every user session of that account.
+- **Sessions** live in `user_session` (0036), shaped like `admin_session`
+  without roles and with `fresh_auth_at`, behind `__Host-cf_user`
+  (`HttpOnly; Secure; SameSite=Strict`). Any valid `cyberfriend` access
+  token may open one; roles are not consulted. The `/me` middleware accepts
+  only that cookie (a bearer header is 401), and the console's middleware
+  never accepts it, so each session is 401 on the other's routes.
+- **Whose data** comes only from the session's `sub` through
+  `person_account_link`. No `/me` route reads a person or platform id from
+  the request. An unlinked account and an unknown one both get 404 "No
+  CyberFriend profile is linked to this account. Link one from Discord with
+  /account."
+- **Fresh sign-in.** OIDC requires `auth_time` in the id token when `max_age`
+  is requested. The callback requires it, verified and within 5 minutes, and
+  stores it as `fresh_auth_at`; erase is refused (403 with
+  `"reauth": "/auth/user/fresh"`) unless it is within 5 minutes. An id token
+  without `auth_time` after `max_age` gives no session.
+- **Channel counts.** Which archived channels a person may read is Discord's
+  ACL, which this process cannot ask, so the web dashboard names and counts
+  no channel (it fails closed); `/privacy` in Discord shows them. "Delete
+  everything" deletes messages in every channel either way.
+- **Erasure** runs the same `ErasureService` steps as the bot, and the ingest
+  sweep resumes it if the admin process stops half way. `purge_person_derived`
+  deletes the account's user sessions (through the link) and the link.
 
 ## Usage: what traced questions cost, and who asked what
 

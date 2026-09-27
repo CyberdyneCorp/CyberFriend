@@ -384,6 +384,24 @@ UNSCOPED: dict[str, str] = {
     "admin_sql.REVOKE_ADMIN_SESSION": (
         "write; ends one session and returns it for sign-out. No content"
     ),
+    "admin_sql.INSERT_USER_SESSION": (
+        "write; a user-area session: its id hash, the account's subject and "
+        "email, encrypted tokens and when it last signed in afresh. No corpus table"
+    ),
+    "admin_sql.LIVE_USER_SESSION": (
+        "authentication; exchanges a user-session id hash for the session it "
+        "names. Establishes an identity, so it cannot be scoped to one; returns "
+        "a subject, an email and ciphertext, never corpus content"
+    ),
+    "admin_sql.REFRESH_USER_SESSION": "write; replaces one user session's tokens after a refresh",
+    "admin_sql.TOUCH_USER_SESSION": "write; marks one user session seen",
+    "admin_sql.REVOKE_USER_SESSION": (
+        "write; ends one user session and returns it for sign-out. No content"
+    ),
+    "admin_sql.REVOKE_USER_SESSIONS_OF": (
+        "write; ends every user session of one account after its erasure, "
+        "keyed on that account's own subject. Returns no row"
+    ),
     # --- config_sql ------------------------------------------------------
     "config_sql.LOAD_SETTINGS": (
         "operator configuration; the settings an operator has stored and who "
@@ -671,6 +689,51 @@ UNSCOPED: dict[str, str] = {
     "accounts_sql.DELETE_OLD_REQUESTS": (
         "ingest maintenance; deletes requests past the 30 days they count "
         "for, by age. Returns no row"
+    ),
+    "accounts_sql.LOCK_LIVE_CODE": (
+        "keyed on the sha256 of a single-use code only its holder has, after "
+        "a verified sign-in; locks it and returns the person id and email HMAC "
+        "it was issued for. No content"
+    ),
+    "accounts_sql.USE_CODE": "write; marks that code used, by its sha256. Returns no row",
+    "accounts_sql.SUBJECT_OWNER": (
+        "which person id a signed-in account's own subject is linked to, so "
+        "one account cannot be linked to two people. No content"
+    ),
+    "accounts_sql.LINKED_SUBJECT": (
+        "the subject the code's own person is linked to now, keyed on that "
+        "person id, so a relink ends the old account's sessions. No content"
+    ),
+    "accounts_sql.UPSERT_LINK": (
+        "write; links the code's own person to the signed-in subject, with the "
+        "masked email the bot names. Returns no row"
+    ),
+    "accounts_sql.END_USER_SESSIONS": (
+        "write; ends every user session of one unlinked subject. Returns no row"
+    ),
+    "accounts_sql.LINKED_PERSON": (
+        "identity lookup; the platform id a signed-in account's own subject is "
+        "linked to. The only way a /me request finds its person. No content"
+    ),
+    "accounts_sql.LINKED_PROFILE": (
+        "identity lookup; the platform id and name of the person a signed-in "
+        "account's own subject is linked to, shown to that account on /me. "
+        "No content"
+    ),
+    "accounts_sql.CODE_HOLDER": (
+        "keyed on the sha256 of a single-use code only its holder has; the "
+        "platform id and name it was issued to, shown before sign-in so the "
+        "browser knows which Discord account it would link. Uses nothing"
+    ),
+    "accounts_sql.DELETE_LINK": (
+        "write; [Unlink] by the presser's own person id. Returns the subject only"
+    ),
+    "accounts_sql.UNANNOUNCED_LINKS": (
+        "bot maintenance; links nobody was told about yet: platform id, subject "
+        "and masked email, to DM each person about their own link. No content"
+    ),
+    "accounts_sql.MARK_ANNOUNCED": (
+        "write; records that one link was announced, by its subject. Returns no row"
     ),
     "accounts_sql.DELETE_OLD_CODES": (
         "ingest maintenance; deletes link codes past their day, by age. "

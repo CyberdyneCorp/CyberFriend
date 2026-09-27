@@ -83,3 +83,99 @@ DELETE FROM account_provisioning_request WHERE requested_at < CAST(:before AS ti
 DELETE_OLD_CODES = text("""
 DELETE FROM account_link_code WHERE created_at < CAST(:before AS timestamptz)
 """)
+
+# --- linking (0035, 0036) -----------------------------------------------------
+#
+# Redeeming a code and making the link is one transaction: the code row is
+# locked, compared, and marked used only when the link is written.
+
+LOCK_LIVE_CODE = text("""
+SELECT person_id, email_hmac FROM account_link_code
+WHERE code_sha256 = :code_sha256
+  AND used_at IS NULL
+  AND expires_at > CAST(:now AS timestamptz)
+FOR UPDATE
+""")
+
+USE_CODE = text("""
+UPDATE account_link_code SET used_at = CAST(:now AS timestamptz)
+WHERE code_sha256 = :code_sha256
+""")
+
+SUBJECT_OWNER = text("""
+SELECT person_id FROM person_account_link WHERE sub = :sub
+""")
+
+LINKED_SUBJECT = text("""
+SELECT sub FROM person_account_link WHERE person_id = :person_id FOR UPDATE
+""")
+
+#: A relink replaces the person's row, and is announced again.
+UPSERT_LINK = text("""
+INSERT INTO person_account_link (person_id, issuer, sub, email_hint, linked_at)
+VALUES (:person_id, :issuer, :sub, :email_hint, CAST(:now AS timestamptz))
+ON CONFLICT (person_id) DO UPDATE
+SET issuer = EXCLUDED.issuer,
+    sub = EXCLUDED.sub,
+    email_hint = EXCLUDED.email_hint,
+    linked_at = EXCLUDED.linked_at,
+    notified_at = NULL
+""")
+
+END_USER_SESSIONS = text("""
+DELETE FROM user_session WHERE sub = :sub
+""")
+
+#: The person's Discord identity, which every other store is keyed on.
+LINKED_PERSON = text("""
+SELECT p.platform, p.platform_user_id
+FROM person_account_link l
+JOIN person_platform_id p ON p.person_id = l.person_id
+WHERE l.sub = :sub
+ORDER BY p.platform = 'discord' DESC, p.platform_user_id
+LIMIT 1
+""")
+
+#: The same identity, with the name `/me` shows for it.
+LINKED_PROFILE = text("""
+SELECT p.platform, p.platform_user_id, n.display_name
+FROM person_account_link l
+JOIN person n ON n.id = l.person_id
+JOIN person_platform_id p ON p.person_id = l.person_id
+WHERE l.sub = :sub
+ORDER BY p.platform = 'discord' DESC, p.platform_user_id
+LIMIT 1
+""")
+
+#: Whose live code it is, for the page `/link` shows before signing in. The
+#: same conditions as `LOCK_LIVE_CODE`, without the lock and without using it.
+CODE_HOLDER = text("""
+SELECT p.platform, p.platform_user_id, n.display_name
+FROM account_link_code c
+JOIN person n ON n.id = c.person_id
+JOIN person_platform_id p ON p.person_id = c.person_id
+WHERE c.code_sha256 = :code_sha256
+  AND c.used_at IS NULL
+  AND c.expires_at > CAST(:now AS timestamptz)
+ORDER BY p.platform = 'discord' DESC, p.platform_user_id
+LIMIT 1
+""")
+
+DELETE_LINK = text("""
+DELETE FROM person_account_link WHERE person_id = :person_id RETURNING sub
+""")
+
+UNANNOUNCED_LINKS = text("""
+SELECT DISTINCT ON (l.linked_at, l.person_id)
+       l.person_id, l.sub, l.email_hint, p.platform, p.platform_user_id
+FROM person_account_link l
+JOIN person_platform_id p ON p.person_id = l.person_id
+WHERE l.notified_at IS NULL
+ORDER BY l.linked_at, l.person_id, p.platform = 'discord' DESC, p.platform_user_id
+LIMIT :limit
+""")
+
+MARK_ANNOUNCED = text("""
+UPDATE person_account_link SET notified_at = CAST(:now AS timestamptz)
+WHERE sub = :sub AND notified_at IS NULL
+""")

@@ -153,3 +153,51 @@ WHERE id_hash = :id_hash AND revoked_at IS NULL
 RETURNING id_hash, sub, email, roles, access_token_enc, refresh_token_enc, id_token_enc,
           access_expires_at, created_at, last_seen_at, expires_at, revoked_at
 """)
+
+# --- user_session (0036): the web user area's sessions ------------------------
+#
+# The same rules as admin_session: the id as sha256, the tokens AES-GCM. No
+# statement here returns content, and none takes a viewer: a user session
+# names a CyberdyneAuth subject, never a person or a channel.
+
+INSERT_USER_SESSION = text("""
+INSERT INTO user_session
+    (id_hash, sub, email, access_token_enc, refresh_token_enc, id_token_enc,
+     access_expires_at, created_at, last_seen_at, expires_at, fresh_auth_at)
+VALUES
+    (:id_hash, :sub, :email, :access_token_enc, :refresh_token_enc, :id_token_enc,
+     :access_expires_at, :created_at, :last_seen_at, :expires_at, :fresh_auth_at)
+""")
+
+LIVE_USER_SESSION = text("""
+SELECT id_hash, sub, email, access_token_enc, refresh_token_enc, id_token_enc,
+       access_expires_at, created_at, last_seen_at, expires_at, fresh_auth_at, revoked_at
+FROM user_session
+WHERE id_hash = :id_hash AND revoked_at IS NULL AND expires_at > :now
+  AND last_seen_at > :idle_since
+""")
+
+REFRESH_USER_SESSION = text("""
+UPDATE user_session
+SET access_token_enc = :access_token_enc, refresh_token_enc = :refresh_token_enc,
+    id_token_enc = :id_token_enc, access_expires_at = :access_expires_at,
+    expires_at = :expires_at, last_seen_at = :now
+WHERE id_hash = :id_hash AND revoked_at IS NULL
+""")
+
+TOUCH_USER_SESSION = text("""
+UPDATE user_session SET last_seen_at = :now
+WHERE id_hash = :id_hash AND revoked_at IS NULL
+""")
+
+REVOKE_USER_SESSION = text("""
+UPDATE user_session SET revoked_at = :now
+WHERE id_hash = :id_hash AND revoked_at IS NULL
+RETURNING id_hash, sub, email, access_token_enc, refresh_token_enc, id_token_enc,
+          access_expires_at, created_at, last_seen_at, expires_at, fresh_auth_at, revoked_at
+""")
+
+REVOKE_USER_SESSIONS_OF = text("""
+UPDATE user_session SET revoked_at = :now
+WHERE sub = :sub AND revoked_at IS NULL
+""")

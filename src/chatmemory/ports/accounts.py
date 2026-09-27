@@ -10,9 +10,10 @@ Two ports:
     nothing: there is nothing to learn from it, and so nothing to leak.
 
 *   `AccountStore` keeps what the assistant records about it: consent, the
-    requests counted against the per-person limits, and the single-use link
-    codes. Emails only ever arrive here as `email_hmac`; there is no parameter
-    an address could be stored through.
+    requests counted against the per-person limits, the single-use link
+    codes, and the link from a CyberdyneAuth subject to a person. Emails only
+    ever arrive here as `email_hmac`, or masked as `email_hint`; there is no
+    parameter an address could be stored through.
 """
 
 from __future__ import annotations
@@ -121,6 +122,53 @@ class RedeemedCode:
     email_hmac: bytes
 
 
+class LinkOutcome(StrEnum):
+    """What redeeming a link code after sign-in came to."""
+
+    LINKED = "linked"
+    BAD_CODE = "bad_code"
+    """Unknown, used, expired or superseded."""
+    OTHER_EMAIL = "other_email"
+    """The verified email is not the one the person consented with."""
+    SUBJECT_TAKEN = "subject_taken"
+    """This CyberdyneAuth account is already linked to another person."""
+
+
+@dataclass(frozen=True, slots=True)
+class NewLink:
+    """A link to make, once the sign-in that proves it has been verified."""
+
+    code_sha256: bytes
+    email_hmac: bytes
+    """Of the signed-in, verified email: compared with the code's."""
+    issuer: str
+    sub: str
+    email_hint: str
+    """The masked address the bot names when it announces the link."""
+
+
+@dataclass(frozen=True, slots=True)
+class LinkNotice:
+    """A link made that the person has not been told about yet."""
+
+    person: PersonRef
+    sub: str
+    email_hint: str
+
+
+@dataclass(frozen=True, slots=True)
+class DiscordProfile:
+    """Which Discord account a code or a link belongs to, as the web names it.
+
+    `/link` names it before anyone signs in, so whoever follows a link sees
+    which Discord account they are about to link to; `/me` names it after, so
+    an account linked to the wrong person can tell and unlink.
+    """
+
+    person: PersonRef
+    display_name: str
+
+
 @dataclass(frozen=True, slots=True)
 class AccountCleanup:
     requests: int = 0
@@ -175,4 +223,38 @@ class AccountStore(Protocol):
 
     async def cleanup(self, now: datetime, limits: ProvisioningLimits) -> AccountCleanup:
         """Delete requests that no longer count and codes past their day."""
+        ...
+
+    async def link(self, new: NewLink, now: datetime) -> LinkOutcome:
+        """Redeem the code and link its person to `new.sub`, in one transaction.
+
+        Only an unused, unexpired code whose consented email HMAC equals
+        `new.email_hmac` links, and only a subject not linked to somebody
+        else. A person already linked to another subject is relinked, and that
+        subject's user sessions end. The code is used only when the link is made.
+        """
+        ...
+
+    async def code_holder(self, code_sha256: bytes, now: datetime) -> DiscordProfile | None:
+        """Whose live code this is, without using it. None if it would not link."""
+        ...
+
+    async def linked_person(self, sub: str) -> PersonRef | None:
+        """Whom this CyberdyneAuth subject is linked to, or None."""
+        ...
+
+    async def linked_profile(self, sub: str) -> DiscordProfile | None:
+        """`linked_person`, with the name the web shows for it."""
+        ...
+
+    async def unlink(self, person: PersonRef) -> bool:
+        """Remove the person's link and end its user sessions. False if none."""
+        ...
+
+    async def unannounced_links(self, limit: int) -> Sequence[LinkNotice]:
+        """Links the person has not been told about yet, oldest first."""
+        ...
+
+    async def mark_announced(self, notice: LinkNotice, now: datetime) -> None:
+        """Record that the person was told, if the link is still that one."""
         ...

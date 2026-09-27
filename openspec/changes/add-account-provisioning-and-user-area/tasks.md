@@ -11,19 +11,20 @@
 
 ## 2. Linking and the user session
 
-- [ ] 2.1 `/link` flow on the BFF: browser-bound login record with the code hash, `prompt=login`, `email_verified` + HMAC email match + `userinfo.sub` equals token `sub`
-- [ ] 2.2 Post-link DM with Unlink (bot sweep reads new links)
-- [ ] 2.3 `user_session` (with `fresh_auth_at`) + `__Host-cf_user`; `/me/*` rows in the route table; `/me` middleware; CSRF; add to `purge_person_derived`
-- [ ] 2.4 Tests: unverified email refused; different email refused; sub mismatch refused; callback in another browser refused; used/expired/superseded code refused; each cookie 401 on the other's routes
+- [x] 2.1 `/link` flow on the BFF: browser-bound login record with the code hash, `prompt=login`, `email_verified` + HMAC email match + `userinfo.sub` equals token `sub`
+- [x] 2.2 Post-link DM with Unlink (bot sweep reads new links)
+- [x] 2.3 `user_session` (with `fresh_auth_at`) + `__Host-cf_user`; `/me/*` rows in the route table; `/me` middleware; CSRF; add to `purge_person_derived`
+- [x] 2.4 Tests: unverified email refused; different email refused; sub mismatch refused; callback in another browser refused; used/expired/superseded code refused; each cookie 401 on the other's routes
+- [x] 2.5 Link CSRF: `GET /link` names the Discord account and starts nothing; `POST /link` only from this origin; `/me/session` names the linked Discord account; `POST /me/unlink` + Unlink in the Svelte user area; tests for each, and for the refreshed-token sub checks, a future `auth_time`, `SameSite=Strict`, the purpose guard and a relink being announced again
 
 ## 3. User area
 
-- [ ] 3.1 `GET /me/privacy`, `GET/POST /me/feature-requests`
-- [ ] 3.2 Fresh sign-in with `max_age=300`; `auth_time` from the verified id token; `fresh_auth_at`
-- [ ] 3.3 `POST /me/erase {mode, confirm}`: fresh auth within 5 min, typed word, CSRF; both modes; session ended, cookie cleared
-- [ ] 3.4 Svelte `me/` routes, `userApi.ts`, VMs; architecture test forbids admin/user cross-imports
-- [ ] 3.5 Tests: stale `fresh_auth_at` refused; id token without `auth_time` after `max_age` refused
-- [ ] 3.6 e2e: FakeDiscord consent -> FakeOIDC link -> /me/privacy -> erase
+- [x] 3.1 `GET /me/privacy`, `GET/POST /me/feature-requests`
+- [x] 3.2 Fresh sign-in with `max_age=300`; `auth_time` from the verified id token; `fresh_auth_at`
+- [x] 3.3 `POST /me/erase {mode, confirm}`: fresh auth within 5 min, typed word, CSRF; both modes; session ended, cookie cleared
+- [x] 3.4 Svelte `me/` routes, `userApi.ts`, VMs; architecture test forbids admin/user cross-imports
+- [x] 3.5 Tests: stale `fresh_auth_at` refused; id token without `auth_time` after `max_age` refused
+- [x] 3.6 e2e: FakeDiscord consent -> FakeOIDC link -> /me/privacy -> erase
 
 ## 4. CyberdyneAuth adapter
 

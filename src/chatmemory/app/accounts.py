@@ -21,6 +21,11 @@
 *   **Link codes are proof, not identity.** `link_code` issues a fresh
     single-use code valid for 15 minutes, ends the earlier ones, and at most 5
     a day. Only its sha256 is stored; the code itself is in the DM'd URL.
+*   **A link is made by proof.** `AccountLinking` (the admin process, after a
+    verified CyberdyneAuth sign-in in the browser that followed the link)
+    links only when the signed-in email, verified, has the consented HMAC.
+    `LinkAnnouncements` (the bot) then DMs "Linked to a***@domain, not you?
+    [Unlink]", and `AccountService.unlink` undoes it.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ import hashlib
 import hmac
 import re
 import secrets
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -43,13 +48,18 @@ from chatmemory.ports.accounts import (
     AccountCleanup,
     AccountProvisioner,
     AccountStore,
+    DiscordProfile,
     LinkCodeVerdict,
+    LinkNotice,
+    LinkOutcome,
+    NewLink,
     ProvisioningFailed,
     ProvisioningLimits,
     ProvisioningRequest,
     retry_at,
 )
 from chatmemory.ports.facts import FactKind, FactStore, InvalidFact, normalise_fact
+from chatmemory.ports.privacy import ERASED_NAME
 
 log = structlog.get_logger()
 
@@ -60,6 +70,7 @@ LINK_CODE_TTL = timedelta(minutes=15)
 LINK_CODES_PER_DAY = 5
 LINK_CODE_BYTES = 32
 LINK_PATH = "/link"
+USER_AREA_PATH = "/#/me"
 
 LOCALES = {Language.PORTUGUESE: "pt-BR"}
 """The locale sent with the request; English for everything else."""
@@ -97,6 +108,12 @@ def account_name(candidate: str) -> str | None:
     except InvalidFact:
         return None
     return None if _DOMAIN_LIKE.search(name) else name
+
+
+def mask_email(email: str) -> str:
+    """`a***@example.com`: enough for the owner to recognise, not to read off."""
+    local, _, domain = email.strip().rpartition("@")
+    return f"{local[:1]}***@{domain}" if local else "***"
 
 
 def locale_for(language: Language) -> str:
@@ -170,9 +187,15 @@ class AccountService:
         self._facts = facts
         self._key = email_key
         self._link_url = link_base_url.rstrip("/") + LINK_PATH
+        self._user_area_url = link_base_url.rstrip("/") + USER_AREA_PATH
         self._limits = limits
         self._clock = clock
         self._new_code = new_code
+
+    @property
+    def user_area_url(self) -> str:
+        """Where a linked person sees their data on the web."""
+        return self._user_area_url
 
     async def next_allowed(self, person: PersonRef) -> datetime | None:
         """When they may ask again, or None if they may now. Advisory: the
@@ -228,6 +251,98 @@ class AccountService:
         if issued.verdict is not LinkCodeVerdict.ISSUED:
             return LinkCode(issued.verdict, retry_at=issued.retry_at)
         return LinkCode(LinkCodeVerdict.ISSUED, url=f"{self._link_url}?code={code}")
+
+    async def unlink(self, person: PersonRef) -> bool:
+        """[Unlink]: the person's web account stops reaching their data at once."""
+        unlinked = await self._store.unlink(person)
+        log.info("accounts.unlinked", done=unlinked)
+        return unlinked
+
+
+class AccountLinking:
+    """Links a signed-in CyberdyneAuth subject to the person whose code it was.
+
+    For the admin process. The caller has verified the sign-in (state, the
+    browser binding, the id token and its nonce, `userinfo.sub` equal to the
+    token subjects) and that the email is verified; this checks the rest
+    against the code, in one transaction in the store.
+    """
+
+    def __init__(
+        self, store: AccountStore, *, email_key: bytes, clock: Clock = utc_now
+    ) -> None:
+        self._store = store
+        self._key = email_key
+        self._clock = clock
+
+    async def link(self, code_sha256: bytes, *, email: str, issuer: str, sub: str) -> LinkOutcome:
+        outcome = await self._store.link(
+            NewLink(
+                code_sha256=code_sha256,
+                email_hmac=email_hmac(self._key, email),
+                issuer=issuer,
+                sub=sub,
+                email_hint=mask_email(email),
+            ),
+            self._clock(),
+        )
+        log.info("accounts.link", outcome=outcome.value)
+        return outcome
+
+    async def holder(self, code_sha256: bytes) -> DiscordProfile | None:
+        """Whose live code this is, for `/link` to name before signing in."""
+        return await self._store.code_holder(code_sha256, self._clock())
+
+    async def person_for(self, sub: str) -> PersonRef | None:
+        """The person a signed-in subject is linked to; None if it is not."""
+        return await self._store.linked_person(sub)
+
+    async def profile_for(self, sub: str) -> DiscordProfile | None:
+        """`person_for`, with the name `/me` shows, so a wrong link is visible."""
+        return await self._store.linked_profile(sub)
+
+    async def unlink(self, person: PersonRef) -> bool:
+        """Unlink from the web: the same as [Unlink] in the DM."""
+        unlinked = await self._store.unlink(person)
+        log.info("accounts.unlinked", done=unlinked, via="web")
+        return unlinked
+
+
+def discord_label(profile: DiscordProfile) -> str:
+    """"Leo (Discord user 7)", or "Discord user 7" while the name is a placeholder.
+
+    A person row's name starts as the platform id and is replaced by a real
+    one when one is known; the id is always shown, since a name can be copied.
+    """
+    user = f"Discord user {profile.person.platform_user_id}"
+    name = profile.display_name.strip()
+    if not name or name == str(profile.person.platform_user_id) or name == ERASED_NAME:
+        return user
+    return f"{name} ({user})"
+
+
+LINK_NOTICE_BATCH = 20
+
+Announce = Callable[[LinkNotice], Awaitable[bool]]
+"""Tell the person about a link. True when there is nothing more to do (sent,
+or the DM is closed for good); False to try again on the next pass."""
+
+
+class LinkAnnouncements:
+    """The bot's half of a link: "Linked to a***@domain, not you? [Unlink]"."""
+
+    def __init__(self, store: AccountStore, clock: Clock = utc_now) -> None:
+        self._store = store
+        self._clock = clock
+
+    async def announce(self, tell: Announce) -> int:
+        """Tell everyone linked since the last pass. Returns how many were done."""
+        done = 0
+        for notice in await self._store.unannounced_links(LINK_NOTICE_BATCH):
+            if await tell(notice):
+                await self._store.mark_announced(notice, self._clock())
+                done += 1
+        return done
 
 
 class AccountRecordsRetention:

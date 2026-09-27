@@ -151,7 +151,13 @@ class OIDCProvider:
     # --- the flow ----------------------------------------------------
 
     async def authorization_url(
-        self, *, state: str, nonce: str, challenge: str, max_age: int | None = None
+        self,
+        *,
+        state: str,
+        nonce: str,
+        challenge: str,
+        max_age: int | None = None,
+        prompt: str | None = None,
     ) -> str:
         params = {
             "response_type": "code",
@@ -165,6 +171,8 @@ class OIDCProvider:
         }
         if max_age is not None:
             params["max_age"] = str(max_age)
+        if prompt is not None:
+            params["prompt"] = prompt
         return _with_query((await self.discovery()).authorization_endpoint, params)
 
     async def exchange_code(self, code: str, verifier: str) -> TokenResponse:

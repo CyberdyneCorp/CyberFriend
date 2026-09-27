@@ -65,6 +65,7 @@ from chatmemory.admin.oidc.store import (
 )
 from chatmemory.admin.oidc.verify import (
     AccessClaims,
+    IdClaims,
     InvalidToken,
     verify_access_token,
     verify_id_token,
@@ -97,6 +98,19 @@ class Begun:
 class SignedIn:
     session_id: str
     principal: Principal
+
+
+@dataclass(frozen=True, slots=True)
+class Verified:
+    """A callback that passed every check common to all sign-ins."""
+
+    tokens: TokenResponse
+    id_token: str
+    access: AccessClaims
+    identity: IdClaims
+    #: Userinfo, read only after the three subjects matched.
+    info: Mapping[str, Any]
+    now: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +166,17 @@ class SignIn:
 
     # --- sign-in -----------------------------------------------------
 
-    async def begin(self, *, max_age: int | None = None) -> Begun:
+    async def begin(
+        self,
+        *,
+        max_age: int | None = None,
+        purpose: str = ADMIN_PURPOSE,
+        link_code_hash: str | None = None,
+        prompt: str | None = None,
+    ) -> Begun:
+        """Start a sign-in. `purpose` says which callback finishes it: the
+        console's, or the user area's (`admin.user`), which also uses
+        `link_code_hash`, `max_age` and `prompt`."""
         state, nonce, verifier, binding = (random_value() for _ in range(4))
         now = self._clock()
         state_hash = digest(state)
@@ -163,36 +187,72 @@ class SignIn:
                 verifier_enc=self._cipher.seal(verifier, context=f"verifier:{state_hash}"),
                 binding_hash=digest(binding),
                 expires_at=now + LOGIN_LIFETIME,
-                purpose=ADMIN_PURPOSE,
+                purpose=purpose,
+                link_code_hash=link_code_hash,
                 max_age=max_age,
             ),
             now,
         )
         url = await self._provider.authorization_url(
-            state=state, nonce=nonce, challenge=pkce_challenge(verifier), max_age=max_age
+            state=state,
+            nonce=nonce,
+            challenge=pkce_challenge(verifier),
+            max_age=max_age,
+            prompt=prompt,
         )
         return Begun(authorization_url=url, binding=binding)
+
+    async def consume(self, state: str | None) -> LoginRecord | None:
+        """The unexpired, unused login for `state`, used up by this call."""
+        return await self._logins.consume(digest(state), self._clock()) if state else None
 
     async def complete(
         self, *, state: str | None, code: str | None, binding: str | None
     ) -> SignInResult:
-        now = self._clock()
-        login = await self._logins.consume(digest(state), now) if state else None
+        return await self.complete_login(
+            await self.consume(state), code=code, binding=binding
+        )
+
+    async def complete_login(
+        self, login: LoginRecord | None, *, code: str | None, binding: str | None
+    ) -> SignInResult:
+        """Finish a console sign-in whose login record `consume` returned."""
         if login is None or login.purpose != ADMIN_PURPOSE:
             return _failed("state")
+        verified = await self.verify_callback(login, code=code, binding=binding)
+        if isinstance(verified, SignInFailed):
+            return verified
+        roles = console_roles(verified.access.roles)
+        if not roles:
+            log.info(
+                "admin.oidc.no_console_access",
+                sub=verified.access.sub,
+                claim=roles is not None,
+            )
+            return NoAccess()
+        return await self._create_session(verified, roles)
+
+    async def verify_callback(
+        self, login: LoginRecord, *, code: str | None, binding: str | None
+    ) -> Verified | SignInFailed:
+        """Steps 2-5 above, for any purpose: the browser binding, the code
+        exchange, both tokens (nonce included) and the three subjects."""
         if not binding or not same_digest(binding, login.binding_hash):
             return _failed("binding")
         if not code:
             return _failed("code")
+        now = self._clock()
         try:
-            return await self._finish(login, code, now)
+            return await self._verify(login, code, now)
         except _FAILURES as exc:
             return _failed(f"{type(exc).__name__}: {exc}")
 
-    async def _finish(self, login: LoginRecord, code: str, now: datetime) -> SignInResult:
+    async def _verify(
+        self, login: LoginRecord, code: str, now: datetime
+    ) -> Verified | SignInFailed:
         verifier = self._cipher.open(login.verifier_enc, context=f"verifier:{login.state_hash}")
         tokens = await self._provider.exchange_code(code, verifier)
-        access = await self._verify_access(tokens.access_token, now)
+        access = await self.verify_access(tokens.access_token, now)
         if tokens.id_token is None:
             return _failed("no id token")
         identity = await verify_id_token(
@@ -206,24 +266,13 @@ class SignIn:
         info = await self._provider.userinfo(tokens.access_token)
         if not info.get("sub") == identity.sub == access.sub:
             return _failed("subjects disagree")
-        roles = console_roles(access.roles)
-        if not roles:
-            log.info("admin.oidc.no_console_access", sub=access.sub, claim=roles is not None)
-            return NoAccess()
-        return await self._create_session(tokens, tokens.id_token, access, roles, info, now)
+        return Verified(tokens, tokens.id_token, access, identity, info, now)
 
-    async def _create_session(
-        self,
-        tokens: TokenResponse,
-        id_token: str,
-        access: AccessClaims,
-        roles: frozenset[Role],
-        info: Mapping[str, Any],
-        now: datetime,
-    ) -> SignedIn:
+    async def _create_session(self, verified: Verified, roles: frozenset[Role]) -> SignedIn:
         session_id = random_value()
         id_hash = digest(session_id)
-        email = _email(info)
+        tokens, access, now = verified.tokens, verified.access, verified.now
+        email = email_of(verified.info)
         await self._sessions.create(
             SessionRecord(
                 id_hash=id_hash,
@@ -232,11 +281,11 @@ class SignIn:
                 roles=_role_names(roles),
                 access_token_enc=self._seal(tokens.access_token, "access", id_hash),
                 refresh_token_enc=self._seal_optional(tokens.refresh_token, "refresh", id_hash),
-                id_token_enc=self._seal(id_token, "id", id_hash),
+                id_token_enc=self._seal(verified.id_token, "id", id_hash),
                 access_expires_at=access.expires_at,
                 created_at=now,
                 last_seen_at=now,
-                expires_at=now + _refresh_lifetime(tokens),
+                expires_at=now + refresh_lifetime(tokens),
             )
         )
         log.info("admin.oidc.signed_in", sub=access.sub, roles=_role_names(roles))
@@ -270,7 +319,7 @@ class SignIn:
     async def _use(self, session: SessionRecord, now: datetime) -> Principal | Denied:
         try:
             token = self._open(session.access_token_enc, "access", session.id_hash)
-            access = await self._verify_access(token, now)
+            access = await self.verify_access(token, now)
         except _FAILURES as exc:
             log.info("admin.oidc.session_token_refused", reason=str(exc))
             return UNAUTHENTICATED
@@ -316,7 +365,7 @@ class SignIn:
             raise InvalidToken("no refresh token")
         refresh_token = self._open(session.refresh_token_enc, "refresh", session.id_hash)
         tokens = await self._provider.refresh(refresh_token)
-        access = await self._verify_access(tokens.access_token, now)
+        access = await self.verify_access(tokens.access_token, now)
         id_token = await self._refreshed_id_token(tokens, session, now)
         id_hash = session.id_hash
         return (
@@ -332,7 +381,7 @@ class SignIn:
                 if id_token
                 else session.id_token_enc,
                 access_expires_at=access.expires_at,
-                expires_at=now + _refresh_lifetime(tokens)
+                expires_at=now + refresh_lifetime(tokens)
                 if tokens.refresh_token
                 else session.expires_at,
             ),
@@ -379,7 +428,7 @@ class SignIn:
 
     # --- helpers -----------------------------------------------------
 
-    async def _verify_access(self, token: str, now: datetime) -> AccessClaims:
+    async def verify_access(self, token: str, now: datetime) -> AccessClaims:
         return await verify_access_token(
             token,
             keys=self._provider,
@@ -407,7 +456,7 @@ def _principal(sub: str, email: str | None, roles: frozenset[Role]) -> Principal
     return Principal(subject=sub, display=email or sub, roles=roles, via="oidc")
 
 
-def _email(info: Mapping[str, Any]) -> str | None:
+def email_of(info: Mapping[str, Any]) -> str | None:
     """Read only after the subjects matched. At most 320 characters, one line."""
     email = info.get("email")
     if not isinstance(email, str) or not email or len(email) > 320:
@@ -419,7 +468,7 @@ def _role_names(roles: frozenset[Role]) -> tuple[str, ...]:
     return tuple(sorted(role.value for role in roles))
 
 
-def _refresh_lifetime(tokens: TokenResponse) -> timedelta:
+def refresh_lifetime(tokens: TokenResponse) -> timedelta:
     if tokens.refresh_expires_in and tokens.refresh_expires_in > 0:
         return timedelta(seconds=tokens.refresh_expires_in)
     return REFRESH_LIFETIME

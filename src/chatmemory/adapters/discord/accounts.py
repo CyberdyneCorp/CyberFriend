@@ -11,6 +11,11 @@ After Confirm the reply is the same for every outcome the provider can have,
 because the provider answers the same way for all of them. [Link my account]
 and `/account link` DM a single-use sign-in link.
 
+When the link is made on the web, `LinkAnnouncer` (the bot's sweep) DMs
+"Linked to a***@example.com, not you? [Unlink]". [Unlink] is a persistent
+button: it works after a restart, and it unlinks whoever presses it, since
+only they can see their own DM.
+
 Only the person the prompt was for can press anything on it
 (`RequesterOnlyView`).
 """
@@ -29,12 +34,13 @@ from chatmemory.adapters.discord.views import RequesterOnlyView
 from chatmemory.app.accounts import (
     AccountService,
     ConsentDraft,
+    LinkAnnouncements,
     ProvisioningOutcome,
     ProvisioningResult,
 )
 from chatmemory.app.language import Language
 from chatmemory.domain.identity import PersonRef
-from chatmemory.ports.accounts import LinkCodeVerdict
+from chatmemory.ports.accounts import LinkCodeVerdict, LinkNotice
 
 log = structlog.get_logger()
 
@@ -165,6 +171,25 @@ _TEXT: dict[str, dict[Language, str]] = {
         EN: "There's no account request to link yet. Use `/account create` first.",
         PT: "Ainda não há pedido de conta para vincular. Use `/account create` antes.",
     },
+    "linked": {
+        EN: (
+            "Your Discord account is now linked to the CyberdyneAuth account "
+            "{email}. You can see your data at {url}\nNot you? Press **Unlink**."
+        ),
+        PT: (
+            "Sua conta do Discord agora está vinculada à conta CyberdyneAuth "
+            "{email}. Veja seus dados em {url}\nNão foi você? Aperte **Desvincular**."
+        ),
+    },
+    "unlink_button": {EN: "Unlink", PT: "Desvincular"},
+    "unlinked": {
+        EN: "Unlinked. That CyberdyneAuth account no longer reaches your data.",
+        PT: "Desvinculado. Aquela conta CyberdyneAuth não acessa mais seus dados.",
+    },
+    "nothing_linked": {
+        EN: "No CyberdyneAuth account is linked to you.",
+        PT: "Nenhuma conta CyberdyneAuth está vinculada a você.",
+    },
     "link_limited": {
         EN: "You've asked for too many sign-in links today. You can ask again {when}.",
         PT: "Você pediu links de acesso demais hoje. Pode pedir de novo {when}.",
@@ -283,6 +308,89 @@ class LinkView(RequesterOnlyView):
     ) -> None:
         await interaction.response.defer(ephemeral=not _in_dm(interaction), thinking=True)
         await send_link(interaction, self._accounts, self._language)
+
+
+UNLINK_ID = "cyberfriend:account:unlink"
+"""The persistent [Unlink] button's id, the same on every link notice."""
+
+PersonLanguage = Callable[[PersonRef], Awaitable[Language]]
+
+
+class UnlinkView(discord.ui.View):
+    """[Unlink] under a link notice. Persistent: no timeout, a fixed id, and
+    registered at startup, so a notice sent before a restart still works.
+
+    It acts on whoever presses it. The notice is in their DM, which nobody
+    else can see, and unlinking only ever takes access away.
+    """
+
+    def __init__(
+        self, accounts: AccountService, language_of: PersonLanguage, language: Language = EN
+    ) -> None:
+        super().__init__(timeout=None)
+        self._accounts = accounts
+        self._language_of = language_of
+        self.unlink_button.label = text("unlink_button", language)
+
+    @discord.ui.button(
+        label="Unlink", style=discord.ButtonStyle.danger, custom_id=UNLINK_ID
+    )
+    async def unlink_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
+    ) -> None:
+        await interaction.response.defer()
+        person = _person(interaction.user)
+        language = await self._language_of(person)
+        unlinked = await self._accounts.unlink(person)
+        try:
+            await interaction.edit_original_response(view=None)
+        except discord.HTTPException:
+            log.info("accounts.unlink.button_not_removed")
+        reply = text("unlinked" if unlinked else "nothing_linked", language)
+        await interaction.followup.send(reply)
+
+
+class LinkAnnouncer:
+    """DMs each person whose account was linked on the web, with [Unlink]."""
+
+    def __init__(
+        self,
+        announcements: LinkAnnouncements,
+        accounts: AccountService,
+        fetch_user: Callable[[int], Awaitable[Any]],
+        language_of: PersonLanguage,
+    ) -> None:
+        self._announcements = announcements
+        self._accounts = accounts
+        self._fetch_user = fetch_user
+        self._language_of = language_of
+
+    async def announce(self) -> int:
+        return await self._announcements.announce(self._tell)
+
+    async def _tell(self, notice: LinkNotice) -> bool:
+        """True once there is nothing more to do: sent, or the DM is shut."""
+        try:
+            user = await self._fetch_user(notice.person.platform_user_id)
+            language = await self._language_of(notice.person)
+            body = text(
+                "linked",
+                language,
+                email=discord.utils.escape_markdown(notice.email_hint),
+                url=self._accounts.user_area_url,
+            )
+            await user.send(
+                body,
+                view=UnlinkView(self._accounts, self._language_of, language),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except (discord.Forbidden, discord.NotFound):
+            log.info("accounts.link_notice_undeliverable", person=str(notice.person))
+            return True
+        except discord.HTTPException:
+            log.warning("accounts.link_notice_failed", person=str(notice.person))
+            return False
+        return True
 
 
 class ConsentView(RequesterOnlyView):

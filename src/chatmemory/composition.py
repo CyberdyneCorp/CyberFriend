@@ -137,7 +137,11 @@ from chatmemory.adapters.web.limits import CallBudget
 from chatmemory.adapters.web.query import ARG_QUERY, web_arguments
 from chatmemory.adapters.web.registration import WebToolsConfig, build_web_tools
 from chatmemory.adapters.web.results import source_system_for
-from chatmemory.app.accounts import AccountRecordsRetention, AccountService
+from chatmemory.app.accounts import (
+    AccountRecordsRetention,
+    AccountService,
+    LinkAnnouncements,
+)
 from chatmemory.app.alert_requests import AlertRequests
 from chatmemory.app.alerts import AlertRunner, AlertService
 from chatmemory.app.ask import AskService
@@ -1136,6 +1140,11 @@ def build_accounts(
         link_base_url=url,
         clock=clock,
     )
+
+
+def build_link_announcements(engine: AsyncEngine, clock: Clock = utc_now) -> LinkAnnouncements:
+    """Links made on the web that the bot has yet to announce, with [Unlink]."""
+    return LinkAnnouncements(PostgresAccountStore(engine), clock=clock)
 
 
 def build_account_retention(engine: AsyncEngine) -> AccountRecordsRetention:

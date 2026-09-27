@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import Row
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from chatmemory.adapters.store import accounts_sql as sql
@@ -15,8 +18,12 @@ from chatmemory.domain.identity import PersonRef
 from chatmemory.ports.accounts import (
     AccountCleanup,
     AccountStore,
+    DiscordProfile,
     LinkCodeIssue,
     LinkCodeVerdict,
+    LinkNotice,
+    LinkOutcome,
+    NewLink,
     ProvisioningLimits,
     RedeemedCode,
     Reservation,
@@ -127,6 +134,97 @@ class PostgresAccountStore:
             )
             codes = await conn.execute(sql.DELETE_OLD_CODES, {"before": now - CODE_DAY})
         return AccountCleanup(requests=requests.rowcount, codes=codes.rowcount)
+
+    async def link(self, new: NewLink, now: datetime) -> LinkOutcome:
+        try:
+            async with self._engine.begin() as conn:
+                return await _link(conn, new, now)
+        except IntegrityError:
+            # The same subject linked by somebody else in between: the unique
+            # `sub` refused the second, and nothing of this one was written.
+            return LinkOutcome.SUBJECT_TAKEN
+
+    async def linked_person(self, sub: str) -> PersonRef | None:
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(sql.LINKED_PERSON, {"sub": sub})).first()
+        return None if row is None else PersonRef(str(row.platform), int(row.platform_user_id))
+
+    async def code_holder(self, code_sha256: bytes, now: datetime) -> DiscordProfile | None:
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(sql.CODE_HOLDER, {"code_sha256": code_sha256, "now": now})
+            ).first()
+        return None if row is None else _profile(row)
+
+    async def linked_profile(self, sub: str) -> DiscordProfile | None:
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(sql.LINKED_PROFILE, {"sub": sub})).first()
+        return None if row is None else _profile(row)
+
+    async def unlink(self, person: PersonRef) -> bool:
+        async with self._engine.begin() as conn:
+            person_id = await _known_person(conn, person)
+            if person_id is None:
+                return False
+            sub = await conn.scalar(sql.DELETE_LINK, {"person_id": person_id})
+            if sub is None:
+                return False
+            await conn.execute(sql.END_USER_SESSIONS, {"sub": sub})
+            return True
+
+    async def unannounced_links(self, limit: int) -> Sequence[LinkNotice]:
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(sql.UNANNOUNCED_LINKS, {"limit": limit})
+            return [
+                LinkNotice(
+                    person=PersonRef(str(row.platform), int(row.platform_user_id)),
+                    sub=str(row.sub),
+                    email_hint=str(row.email_hint or ""),
+                )
+                for row in rows
+            ]
+
+    async def mark_announced(self, notice: LinkNotice, now: datetime) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(sql.MARK_ANNOUNCED, {"sub": notice.sub, "now": now})
+
+
+async def _link(conn: AsyncConnection, new: NewLink, now: datetime) -> LinkOutcome:
+    code = (
+        await conn.execute(
+            sql.LOCK_LIVE_CODE, {"code_sha256": new.code_sha256, "now": now}
+        )
+    ).first()
+    if code is None:
+        return LinkOutcome.BAD_CODE
+    if not hmac.compare_digest(bytes(code.email_hmac), new.email_hmac):
+        return LinkOutcome.OTHER_EMAIL
+    person_id = int(code.person_id)
+    owner = await conn.scalar(sql.SUBJECT_OWNER, {"sub": new.sub})
+    if owner is not None and int(owner) != person_id:
+        return LinkOutcome.SUBJECT_TAKEN
+    previous = await conn.scalar(sql.LINKED_SUBJECT, {"person_id": person_id})
+    await conn.execute(
+        sql.UPSERT_LINK,
+        {
+            "person_id": person_id,
+            "issuer": new.issuer,
+            "sub": new.sub,
+            "email_hint": new.email_hint,
+            "now": now,
+        },
+    )
+    if previous is not None and previous != new.sub:
+        await conn.execute(sql.END_USER_SESSIONS, {"sub": previous})
+    await conn.execute(sql.USE_CODE, {"code_sha256": new.code_sha256, "now": now})
+    return LinkOutcome.LINKED
+
+
+def _profile(row: Row[Any]) -> DiscordProfile:
+    return DiscordProfile(
+        person=PersonRef(str(row.platform), int(row.platform_user_id)),
+        display_name=str(row.display_name),
+    )
 
 
 async def _locked_person(conn: AsyncConnection, person: PersonRef) -> int:

@@ -30,6 +30,8 @@ class SourceKind(StrEnum):
     COMMAND = "command"
     DM = "dm"
     CHANNEL = "channel"
+    WEB = "web"
+    """Typed in the web user area (0036)."""
 
 
 class RequestStatus(StrEnum):

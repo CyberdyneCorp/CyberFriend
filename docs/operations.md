@@ -1270,20 +1270,33 @@ Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
   email)`** (`account_consent`, `account_provisioning_request`,
   `account_link_code`; migration 0035). A plain hash could be reversed by
   trying likely addresses. The key is at least 32 characters, never logged;
-  changing it orphans every stored consent and link code. The admin process
-  will need the same key to match a signed-in email when the web link flow
-  arrives.
+  changing it orphans every stored consent and link code. The admin service
+  holds the same key to match a signed-in email at `/link`.
 - **Link codes**: 32 random bytes in `ADMIN_PUBLIC_URL/link?code=...`
   (`ADMIN_PUBLIC_URL` must be https with no query or fragment, as the console
   requires; the bot refuses to start otherwise), stored
   only as sha256, single use, valid 15 minutes; a new code ends the earlier
-  ones, and at most 5 are issued per person per day. Redeeming them (the
-  `/link` route) is not built yet.
+  ones, and at most 5 are issued per person per day.
+- **Redeeming a code** (`/link`, on the admin service): the page first names
+  the Discord account the code belongs to and starts a sign-in only from its
+  own same-origin form; the person then signs in
+  to CyberdyneAuth in the browser that opened the link, with `prompt=login`.
+  The link is made only if CyberdyneAuth reports the email verified and its
+  HMAC equals the consented one, and `userinfo.sub` equals the token subject
+  (`person_account_link`). The bot then DMs "Linked to a***@domain, not you?
+  [Unlink]" (checked every 30 seconds; `notified_at`, migration 0036), and
+  [Unlink] ends the link and every web session of that account; **Unlink**
+  in the user area does the same from the CyberdyneAuth side. The person's
+  web user area is `ADMIN_PUBLIC_URL/#/me` (see `docs/admin-console.md`, "The
+  user area"). The admin service needs `ACCOUNT_PROVISIONING_ENABLED` and
+  `PROVISIONING_EMAIL_KEY` too, and states the same retention as `/privacy`
+  from `TRACING_ENABLED`, `TRACE_RETENTION_DAYS`, `MEMORY_RETENTION_DAYS` and
+  `BACKUP_RETENTION_DAYS`.
 - **Retention**: ingest deletes requests older than 30 days and link codes
   older than a day, hourly. Consent rows stay until opt-out or erasure.
   `purge_person_derived` deletes every account row (consent, requests, codes,
-  links), so opt-out and Delete everything reach them, and deleting the person
-  cascades.
+  links, and the linked account's web sessions), so opt-out and Delete
+  everything reach them, and deleting the person cascades.
 
 ## Position alerts
 

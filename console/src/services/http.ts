@@ -182,3 +182,25 @@ export async function logout(): Promise<SignedOut> {
   const url = body?.end_session_url;
   return { end_session_url: typeof url === "string" && url !== "" ? url : null };
 }
+
+/**
+ * `<name>` beside the page, for the user area's own paths: `me/privacy`,
+ * `auth/user/login`. Resolved like `apiRoot`, so the user area follows the
+ * console wherever it is mounted.
+ */
+export function pagePath(name: string, baseURI: string | undefined = globalThis.document?.baseURI): string {
+  return new URL(name, new URL(".", baseURI ?? "http://localhost/")).pathname;
+}
+
+/**
+ * A user-area request: the browser's `__Host-cf_user` cookie and nothing else.
+ *
+ * Never the console's break-glass token, and a 401 here never signs the
+ * console out: the two sessions are separate on the server, and so they are
+ * here. The caller decides what a 401 means for the user area.
+ */
+export async function userRequest<T>(method: Method, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(path, requestInit(method, body));
+  if (!response.ok) throw new ApiError(response.status, await failureMessage(response));
+  return parsed<T>(response);
+}
