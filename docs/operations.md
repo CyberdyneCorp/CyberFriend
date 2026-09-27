@@ -830,7 +830,8 @@ and the rest of CyberWealth works as before.
 - **In a channel.** A message containing `cwk_` is never archived (ingest drops
   it, like a stated email; an edit that adds one retracts the stored message),
   never answered, and its author gets a DM saying to delete it, revoke the key
-  and send a new one in a DM. `/ask`, `/suggest` and `/schedule create` given
+  and send a new one in a DM. The bot sends the same DM when a channel message
+  is edited into carrying a key. `/ask`, `/suggest` and `/schedule create` given
   a key never ask or store the text: in a DM they take the key as `/connect`
   does, in the server they refuse it, privately either way.
 

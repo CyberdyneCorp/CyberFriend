@@ -9,7 +9,7 @@
 
 - [x] 2.1 `find_key` (CyberWealth's shape, exactly one) and `mentions_key` (`cwk_` anywhere); `PersonalKeys.connect` only from a DM
 - [x] 2.2 DM message carrying a key: stored, answered by the last four characters, never reaches the answer path; `/connect` registered in DMs only
-- [x] 2.3 Channel message carrying `cwk_`: not stored, not answered, author warned by DM; ingest withholds it (live, edit, backfill)
+- [x] 2.3 Channel message carrying `cwk_`: not stored, not answered, author warned by DM (sent or edited in); ingest withholds it (live, edit, backfill)
 - [x] 2.4 `/ask`, `/suggest`, `/schedule create` with a key: never asked or stored
 - [x] 2.5 Tests: shapes, replies never repeat the key, DM and channel handling, commands, archive withholding
 

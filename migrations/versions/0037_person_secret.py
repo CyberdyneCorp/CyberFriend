@@ -11,6 +11,11 @@ opt-out and "Delete everything" both remove it in the same transaction as the
 rest; a key saved by an opted-out person is dropped before it is stored, as
 0030 does for suggestions; and deleting the person cascades.
 
+Re-chaining: PURGES_0032 is the purge as of this revision's parent. If another
+revision that rewrites `purge_person_derived` lands first, this one must move
+after it and restate that revision's body plus the person_secret DELETE, or the
+later CREATE OR REPLACE drops one side's DELETE lines.
+
 Revision ID: 0037
 Revises: 0033
 """

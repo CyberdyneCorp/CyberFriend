@@ -1671,22 +1671,44 @@ class CyberFriendClient(discord.Client):
         does not archive it either), and the author is warned by DM, since a
         warning in the channel would point everyone at the key.
         """
-        language = await self._message_language(message.author, message.content)
         if message.guild is not None:
-            name = getattr(message.channel, "name", None)
-            try:
-                await message.author.send(
-                    channel_warning(f"#{name}" if name else "a channel", language)
-                )
-            except discord.HTTPException:
-                log.info("personal_keys.warning_undelivered", user_id=message.author.id)
+            await self._warn_key_in_channel(message)
             return
+        language = await self._message_language(message.author, message.content)
         outcome = (
             await self._keys.connect(_person(message.author), message.content, direct=True)
             if self._keys is not None
             else None
         )
         await message.reply(connect_reply(outcome, language), mention_author=False)
+
+    async def _warn_key_in_channel(self, message: discord.Message) -> None:
+        """DM the author of a channel message carrying a key to revoke it."""
+        language = await self._message_language(message.author, message.content)
+        name = getattr(message.channel, "name", None)
+        try:
+            await message.author.send(
+                channel_warning(f"#{name}" if name else "a channel", language)
+            )
+        except discord.HTTPException:
+            log.info("personal_keys.warning_undelivered", user_id=message.author.id)
+
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        """A channel message edited into carrying a key: its author is warned.
+
+        The ingest process retracts it from the archive; the key still stands
+        in the channel, so it needs revoking as much as a pasted one. Raw, so
+        an edit to a message older than the cache is seen too; a message that
+        already carried a key (by the cached copy) was warned about when sent.
+        Edits are never answered, so a DM edit is left alone.
+        """
+        after = payload.message
+        if after.author.bot or after.guild is None or not mentions_key(after.content):
+            return
+        before = payload.cached_message
+        if before is not None and mentions_key(before.content):
+            return
+        await self._warn_key_in_channel(after)
 
     async def _message_language(
         self, user: discord.User | discord.Member, text: str

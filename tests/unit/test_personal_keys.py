@@ -20,8 +20,10 @@ from chatmemory.adapters.discord.personal_keys import channel_warning, connect_r
 from chatmemory.adapters.discord.source import is_ingestable, to_message
 from chatmemory.adapters.store.personal_keys_postgres import (
     UnusableSecretsKey,
+    _context,
     secrets_cipher,
 )
+from chatmemory.admin.oidc.crypto import UnreadableCiphertext
 from chatmemory.app.language import Language
 from chatmemory.app.personal_keys import (
     CYBERWEALTH,
@@ -199,6 +201,17 @@ def test_the_secrets_key_is_32_bytes_of_base64() -> None:
     sealed = cipher.seal(KEY, context="person_secret:1:cyberwealth")
     assert KEY.encode() not in sealed
     assert cipher.open(sealed, context="person_secret:1:cyberwealth") == KEY
+
+
+def test_a_key_sealed_under_one_kind_does_not_open_under_another() -> None:
+    """The kind is bound as associated data, like the person id."""
+    cipher = secrets_cipher("A" * 43 + "=")
+    sealed = cipher.seal(KEY, context=_context(7, CYBERWEALTH))
+    assert cipher.open(sealed, context=_context(7, CYBERWEALTH)) == KEY
+    with pytest.raises(UnreadableCiphertext):
+        cipher.open(sealed, context=_context(7, "another-service"))
+    with pytest.raises(UnreadableCiphertext):
+        cipher.open(sealed, context=_context(8, CYBERWEALTH))
 
 
 @pytest.mark.parametrize("raw", ["", "not base64!!", "QUJD"])
