@@ -1,6 +1,6 @@
 ## 1. Storage
 
-- [x] 1.1 Migration 0037: `person_secret` (ciphertext, last4, one row per person and kind), opt-out insert trigger, `purge_person_derived` restated with its DELETE, downgrade restores 0032's body
+- [x] 1.1 Migration 0037: `person_secret` (ciphertext, last4, one row per person and kind), opt-out insert trigger, `purge_person_derived` restated with its DELETE, downgrade restores 0036's body (re-chained after 0036)
 - [x] 1.2 `PERSONAL_SECRETS_KEY` setting (32 bytes base64, bot only, compose declaration); unusable key logs an error and turns the feature off
 - [x] 1.3 `PostgresPersonalKeyStore`: AES-GCM with `person_secret:<person id>:<kind>` as associated data; unreadable row reads as no key
 - [x] 1.4 Tests (Postgres): sealed at rest, owner-only read, copied ciphertext does not open, rotated key reads nothing, forget, opt-out purge and refusal, `purge_person_derived`, downgrade

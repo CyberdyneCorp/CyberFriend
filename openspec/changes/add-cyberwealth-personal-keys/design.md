@@ -46,8 +46,8 @@ alone and declared on its service in compose; Coolify injects every variable
 into every service, so nothing here assumes other processes lack it: only the
 bot builds the cipher.
 
-Opt-out and erasure: `purge_person_derived` (restated in full by 0037,
-downgrade restores 0032's body) deletes the row; a BEFORE INSERT trigger drops
+Opt-out and erasure: `purge_person_derived` (restated in full by 0037 after
+0036, downgrade restores 0036's body) deletes the row; a BEFORE INSERT trigger drops
 a key saved by an opted-out person, as 0030 does for suggestions.
 
 ### Where the key travels
