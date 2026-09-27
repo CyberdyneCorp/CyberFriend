@@ -291,6 +291,22 @@ def test_the_baseline_agrees_with_the_settings_class() -> None:
     assert baseline["ask_min_confidence"].value == settings.ask_min_confidence
 
 
+def test_the_usage_screen_states_the_retention_the_sweep_enforces() -> None:
+    """Same variable, same default as the bot and ingest: the console never
+    states a period of its own."""
+    from chatmemory.config import Settings
+
+    default = Settings.model_fields["trace_retention_days"].default
+
+    assert admin.trace_retention_days({}) == default
+    assert admin.trace_retention_days({"TRACE_RETENTION_DAYS": " 30 "}) == 30
+
+
+@pytest.mark.parametrize("raw", ["banana", "0", "-5", "３０"])
+def test_an_unreadable_retention_states_no_period_and_still_starts(raw: str) -> None:
+    assert admin.trace_retention_days({"TRACE_RETENTION_DAYS": raw}) is None
+
+
 # --- the interface -----------------------------------------------------
 
 

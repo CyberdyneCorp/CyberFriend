@@ -146,6 +146,7 @@ def _summary(found: UsageSummary) -> dict[str, Any]:
         **_bounds(found.window),
         "group": str(found.grouping),
         "label": found.label,
+        "retention_days": found.retention_days,
         "rows": [_line(line) for line in found.lines],
         "totals": {
             "questions": totals.questions,

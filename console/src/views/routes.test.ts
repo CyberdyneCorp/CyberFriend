@@ -24,6 +24,9 @@ const READS: Record<string, string[]> = {
   "/retention": ["/api/settings", "/api/optouts"],
   "/settings": ["/api/settings"],
   "/tokens": ["/api/tokens"],
+  // A person's questions are read on demand, and only offered to an admin
+  // signed in as a person; the screen itself needs the summary alone.
+  "/usage": ["/api/usage/summary"],
   "/audit": ["/api/audit"],
 };
 

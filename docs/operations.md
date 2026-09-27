@@ -343,7 +343,7 @@ project is never touched.
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | The project's API keys |
 | `LANGFUSE_ENVIRONMENT` | The environment traces are exported to, and the only one an opt-out searches (default `production`). Give each deployment sharing a project its own |
 | `TRACING_TIMEOUT_SECONDS` | What one export may cost before it is abandoned |
-| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, and by `bot`, which states it in `/privacy`, the one-time tracing notice and the capabilities reply |
+| `TRACE_RETENTION_DAYS` | Days an exported trace is kept (default 90, must be positive). Read by `ingest`, which deletes, by `bot`, which states it in `/privacy`, the one-time tracing notice and the capabilities reply, and by `admin`, which states it on the console's usage screen |
 
 Turning it on with a host but no keys is refused at startup rather than
 silently disabled. A deployment that believes it is recording and is not finds

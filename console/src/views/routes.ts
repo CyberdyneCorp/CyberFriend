@@ -18,6 +18,7 @@ import RetentionScreen from "./screens/RetentionScreen.svelte";
 import SettingsScreen from "./screens/SettingsScreen.svelte";
 import StatusScreen from "./screens/StatusScreen.svelte";
 import TokensScreen from "./screens/TokensScreen.svelte";
+import UsageScreen from "./screens/UsageScreen.svelte";
 
 export type ScreenView = Component<{ app: ConsoleVM }>;
 
@@ -28,5 +29,6 @@ export const ROUTES: readonly Route<ScreenView>[] = [
   { path: "/retention", title: "Retention", view: RetentionScreen, minRole: "operator" },
   { path: "/settings", title: "Settings", view: SettingsScreen, minRole: "operator" },
   { path: "/tokens", title: "Tokens", view: TokensScreen, minRole: "operator" },
+  { path: "/usage", title: "Usage", view: UsageScreen, minRole: "operator" },
   { path: "/audit", title: "Audit", view: AuditScreen, minRole: "operator" },
 ];

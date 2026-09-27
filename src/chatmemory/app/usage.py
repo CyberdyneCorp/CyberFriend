@@ -131,6 +131,9 @@ class UsageSummary:
     grouping: Grouping
     lines: tuple[UsageLine, ...]
     totals: UsageTotals
+    #: How long a trace is kept (`TRACE_RETENTION_DAYS`), for the screen to
+    #: state; None when this process could not read it.
+    retention_days: int | None
     label: str = TOTALS_LABEL
 
 
@@ -175,11 +178,13 @@ class UsageService:
         source: UsageSource,
         directory: UsageDirectory,
         *,
+        retention_days: int | None,
         ttl: float = CACHE_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._source = source
         self._directory = directory
+        self._retention_days = retention_days
         self._cache = _Cache(ttl, monotonic)
 
     async def summary(self, window: UsageWindow, grouping: Grouping) -> UsageSummary:
@@ -189,7 +194,9 @@ class UsageService:
         lines = _group(rows, voice, grouping)
         if grouping is Grouping.PERSON:
             await self._name(lines)
-        return UsageSummary(window, grouping, tuple(lines), _totals(rows, voice))
+        return UsageSummary(
+            window, grouping, tuple(lines), _totals(rows, voice), self._retention_days
+        )
 
     async def person(self, user_id: str) -> ViewedPerson | None:
         return await self._directory.person(user_id)

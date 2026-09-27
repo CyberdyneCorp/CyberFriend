@@ -133,10 +133,11 @@ def test_setting_reaches_every_service_that_reads_it(
         )
 
 
-@pytest.mark.parametrize("service", ["ingest", "bot"])
+@pytest.mark.parametrize("service", ["ingest", "bot", "admin"])
 def test_trace_retention_reaches_the_sweep_and_the_privacy_statement(service: str) -> None:
     """Ingest deletes traces after it; the bot tells people the same period in
-    `/privacy`. Set for one alone, the statement and the sweep disagree."""
+    `/privacy` and the console states it on the usage screen. Set for one
+    alone, the statements and the sweep disagree."""
     assert "TRACE_RETENTION_DAYS=${TRACE_RETENTION_DAYS:-90}" in service_block(service)
 
 
@@ -286,10 +287,12 @@ def admin_service(compose_text: str = COMPOSE) -> dict[str, Any]:
 
 # Values the console reads for its own sake: the database, and Langfuse for
 # the usage view (host, the project-wide key pair used server-side only, and
-# the environment every read is scoped to).
+# the environment every read is scoped to), and the trace retention period the
+# usage screen states.
 CONSOLE_EXTRAS = frozenset(
     {
         "DATABASE_URL",
+        "TRACE_RETENTION_DAYS",
         "LANGFUSE_HOST",
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",

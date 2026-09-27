@@ -74,6 +74,8 @@ class FakeLangfuse:
     """
 
     def __init__(self) -> None:
+        #: Langfuse unreachable: every read answers 502.
+        self.down = False
         self.held = [
             _trace("ana-before", ANA, NOTICE - timedelta(days=1), "before the notice"),
             _trace("ana-after", ANA, NOTICE + timedelta(days=1), "what did I miss?"),
@@ -95,6 +97,8 @@ class FakeLangfuse:
         ]
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            return httpx.Response(502, text="bad gateway")
         if request.url.path == "/api/public/metrics":
             query = json.loads(request.url.params["query"])
             return httpx.Response(200, json={"data": self._metrics(query)})
@@ -168,6 +172,7 @@ def _environ(database_url: str) -> dict[str, str]:
         "LANGFUSE_HOST": f"https://{LANGFUSE}",
         "LANGFUSE_PUBLIC_KEY": "pk-e2e",
         "LANGFUSE_SECRET_KEY": "sk-e2e",
+        "TRACE_RETENTION_DAYS": "45",
     }
 
 
@@ -211,9 +216,12 @@ async def _seed(engine: AsyncEngine) -> None:
 
 
 class Console:
-    def __init__(self, process: admin.ConsoleProcess, fake: FakeOIDC) -> None:
+    def __init__(
+        self, process: admin.ConsoleProcess, fake: FakeOIDC, langfuse: FakeLangfuse
+    ) -> None:
         self.process = process
         self.fake = fake
+        self.langfuse = langfuse
 
     async def signed_in(self, sub: str) -> httpx.AsyncClient:
         browser = httpx.AsyncClient(
@@ -232,11 +240,10 @@ async def console(clean: AsyncEngine, e2e_database_url: str) -> AsyncIterator[Co
     fake = FakeOIDC()
     fake.add("ana-sub", "ana@cyberdyne.test", [fake.role("admin")])
     fake.add("ben-sub", "ben@cyberdyne.test", [fake.role("operator")])
-    process = admin.build(
-        _environ(e2e_database_url), transport=Routed(fake, FakeLangfuse())
-    )
+    langfuse = FakeLangfuse()
+    process = admin.build(_environ(e2e_database_url), transport=Routed(fake, langfuse))
     try:
-        yield Console(process, fake)
+        yield Console(process, fake, langfuse)
     finally:
         assert process.sign_in is not None
         await process.sign_in.provider.aclose()
@@ -260,6 +267,8 @@ async def test_counts_leave_out_opted_out_erased_pending_and_foreign_traces(
     # pending, opted-out, erased or staging ones, nor one stored as "default".
     assert (body["totals"]["input_tokens"], body["totals"]["output_tokens"]) == (1200, 120)
     assert body["totals"]["cost"] == 0.012
+    # The period the screen states is the deployment's, not the console's.
+    assert (body["label"], body["retention_days"]) == ("traced question runs", 45)
     assert refused.status_code == 403
 
 
@@ -291,3 +300,24 @@ async def test_an_admin_reads_only_questions_after_the_notice_and_it_is_recorded
         ("oidc:ana-sub", "ana@cyberdyne.test")
     ] * 2
     assert f"(Ana), platform id {ANA}" in rows[0].after_value
+
+
+async def test_langfuse_down_is_usage_unavailable_and_the_attempt_is_still_recorded(
+    console: Console, clean: AsyncEngine
+) -> None:
+    console.langfuse.down = True
+    ben = await console.signed_in("ben-sub")
+    summary = await ben.get("/api/usage/summary")
+    await ben.aclose()
+    ana = await console.signed_in("ana-sub")
+    questions = await ana.get(f"/api/usage/people/{ANA}/questions")
+    await ana.aclose()
+
+    assert (summary.status_code, summary.json()) == (503, {"error": "usage unavailable"})
+    assert (questions.status_code, questions.json()) == (503, {"error": "usage unavailable"})
+    assert questions.headers["cache-control"] == "no-store"
+    async with clean.connect() as conn:
+        viewed = await conn.scalar(
+            text("SELECT count(*) FROM config_audit WHERE setting = 'usage.questions_viewed'")
+        )
+    assert viewed == 1

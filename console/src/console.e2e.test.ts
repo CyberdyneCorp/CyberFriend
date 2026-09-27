@@ -488,3 +488,77 @@ describe("signing in with CyberdyneAuth", () => {
     for (const request of withToken) expect(request.cookie).toBeNull();
   });
 });
+
+describe("the usage screen", () => {
+  /** Sign in as `cookie`'s person with CyberdyneAuth and open Usage. */
+  async function openUsage(cookie: string): Promise<void> {
+    await reloadWithSignIn(cookie);
+    await screen.findByText("Ingestion");
+    await fireEvent.click(screen.getByRole("link", { name: "Usage" }));
+    await screen.findByText("Ana");
+  }
+
+  const questionReads = () => api.seen.filter((request) => request.path.endsWith("/questions"));
+
+  it("shows an operator counts per person and feature, and no way to read a question", async () => {
+    await openUsage("operator-session");
+    // A person with no name on record is shown by their platform id.
+    expect(within(rowOf("1004")).getByText("$0.0040")).toBeTruthy();
+    expect(screen.getByText("corpus.fixed")).toBeTruthy();
+    expect(screen.getByText("gpt-5.4-mini")).toBeTruthy();
+    expect(screen.getByText("Traced question runs")).toBeTruthy();
+    expect(screen.getByText("$0.0120")).toBeTruthy();
+    expect(screen.getByText(/Traces are kept 90 days, then deleted/)).toBeTruthy();
+    expect(screen.getByText(/Counts only\. A person's questions are shown only to an admin/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Questions" })).toBeNull();
+    expect(questionReads()).toEqual([]);
+    expect(screen.queryByText("what did I miss yesterday?")).toBeNull();
+  });
+
+  it("lets an admin signed in as a person page through one person's questions", async () => {
+    await openUsage("admin-session");
+    await fireEvent.click(within(rowOf("Ana")).getByRole("button", { name: "Questions" }));
+    await screen.findByText("what did I miss yesterday?");
+    expect(screen.getByText(/traced before this person was told their questions are recorded/)).toBeTruthy();
+    expect(screen.getByText(/Your viewing is recorded in the audit/)).toBeTruthy();
+    expect(screen.getByText("Page 1 of 2")).toBeTruthy();
+
+    await fireEvent.click(button("Older"));
+    await screen.findByText("who owns the deploy?");
+    expect(screen.queryByText("what did I miss yesterday?")).toBeNull();
+
+    const [first, second] = questionReads();
+    expect(first?.path).toBe("/api/usage/people/1001/questions");
+    const query = new URLSearchParams(first?.query);
+    expect(query.get("page")).toBe("1");
+    expect(query.get("from")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(new URLSearchParams(second?.query).get("page")).toBe("2");
+
+    await fireEvent.click(button("Close"));
+    await waitFor(() => expect(screen.queryByText("who owns the deploy?")).toBeNull());
+  });
+
+  it("offers no question text to a token, even one that is admin", async () => {
+    await signIn(TOKEN);
+    await screen.findByText("Ingestion");
+    expect(screen.getByText(/^admin\./)).toBeTruthy();
+    await fireEvent.click(screen.getByRole("link", { name: "Usage" }));
+    await screen.findByText("Ana");
+    expect(screen.queryByRole("button", { name: "Questions" })).toBeNull();
+    expect(questionReads()).toEqual([]);
+  });
+
+  it("says usage is unavailable, and shows no figures, when the trace store is down", async () => {
+    api.options.usageDown = true;
+    await reloadWithSignIn("admin-session");
+    await screen.findByText("Ingestion");
+    await fireEvent.click(screen.getByRole("link", { name: "Usage" }));
+    await screen.findByText(/Usage is unavailable: the trace store could not be read/);
+    expect(screen.queryByText("Ana")).toBeNull();
+    expect(screen.queryByText("Traced question runs")).toBeNull();
+
+    api.options.usageDown = false;
+    await fireEvent.click(button("Try again"));
+    await screen.findByText("Ana");
+  });
+});
