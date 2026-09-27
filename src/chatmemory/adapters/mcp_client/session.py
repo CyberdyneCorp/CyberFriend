@@ -50,12 +50,28 @@ class DiscoveredTool:
     input_schema: Mapping[str, object] = field(default_factory=lambda: EMPTY_SCHEMA)
 
 
+PERSONAL_MARKER = "[personal]"
+"""How a server marks a result as one person's own data (CyberWealth's rule)."""
+
+PERSONAL_VISIBILITY = "personal"
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
-    """The text a tool returned, plus whether the server flagged it an error."""
+    """The text a tool returned, whether the server flagged it an error, and
+    whether it is one person's own data (shown only in their DMs)."""
 
     text: str
     is_error: bool = False
+    personal: bool = False
+
+
+def is_personal(text: str, structured: Mapping[str, object] | None) -> bool:
+    """A result is personal if either signal says so. Silence is not public:
+    a result neither marks stays as the tool's other gates leave it."""
+    if text.lstrip().startswith(PERSONAL_MARKER):
+        return True
+    return structured is not None and structured.get("visibility") == PERSONAL_VISIBILITY
 
 
 class ToolSession(Protocol):
@@ -108,7 +124,14 @@ class MCPToolSession:
         # silently rendering it into the prompt would smuggle unfenced bytes
         # into context.
         chunks = [c.text for c in result.content if isinstance(c, TextContent)]
-        return ToolResult(text="\n".join(chunks), is_error=bool(result.is_error))
+        text = "\n".join(chunks)
+        # Structured content is read for one field only: whether the result is
+        # personal. Its values never reach a prompt.
+        return ToolResult(
+            text=text,
+            is_error=bool(result.is_error),
+            personal=is_personal(text, result.structured_content),
+        )
 
 
 @asynccontextmanager

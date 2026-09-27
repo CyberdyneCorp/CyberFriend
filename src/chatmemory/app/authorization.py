@@ -220,6 +220,9 @@ class ToolPermit:
     effect: ToolEffect
     credential: CredentialScope
     mutation_enabled: bool = False
+    #: Returns one person's own data (a `my_` tool). Invocable only for an
+    #: answer delivered to that person's direct messages.
+    personal: bool = False
 
 
 # --- argument identity -------------------------------------------------
@@ -263,6 +266,10 @@ class InvocationRequest:
     #: provider may show more in private (a wallet's counterparties), and the
     #: default is the channel's rule.
     private: bool = False
+    #: Whether the answer goes to the requester's direct messages. Narrower
+    #: than `private`: an ephemeral reply in a channel is private but not
+    #: direct, and personal tools and results are held to direct messages.
+    direct: bool = False
 
     @property
     def digest(self) -> str:
@@ -425,6 +432,7 @@ class Refusal(StrEnum):
     ARGUMENTS_CHANGED = "arguments_changed"
     AMBIENT_CREDENTIAL = "ambient_credential"
     NO_REQUESTER_CREDENTIAL = "no_requester_credential"
+    PERSONAL_OUTSIDE_DIRECT = "personal_outside_direct"
 
 
 _CONFIRMATION_REFUSALS: dict[ConfirmationState, Refusal] = {
@@ -504,6 +512,10 @@ class Authorizer:
 
         if request.qualified_name not in offered:
             return self._refuse(request, Refusal.NOT_OFFERED_THIS_RUN, permit)
+
+        if permit.personal and not request.direct:
+            # One person's own data, asked for where others would read it.
+            return self._refuse(request, Refusal.PERSONAL_OUTSIDE_DIRECT, permit)
 
         if permit.credential is CredentialScope.AMBIENT:
             return self._refuse(request, Refusal.AMBIENT_CREDENTIAL, permit)

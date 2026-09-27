@@ -467,6 +467,7 @@ lists the common ones. The settings worth knowing:
 | `WALLET_TOOLS_ENABLED`, `INFURA_KEY` | Wallet balances and DeFi positions on Ethereum, Base and Arbitrum. Off by default |
 | `POSITIONS_TIMEOUT_SECONDS` | Per-chain bound for liquidity and Aave lookups (default 25) |
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
+| `FEDERATION_AUTH_<NAME>_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_AUDIENCE`, `_SCOPE` | A CyberdyneAuth service credential for one federated server, sent as its bearer and to no other server (see `docs/operations.md`, CyberWealth over MCP) |
 | `MEMORY_RETENTION_DAYS` | How long conversation memory is kept |
 | `ANSWER_TIMEZONE` | The calendar "ontem" and "last week" are read in (IANA name, default `America/Sao_Paulo`) |
 | `ASK_EXTRACTION_ENABLED` | Whether obligations and decisions are extracted |

@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import TracebackType
 
@@ -47,6 +47,7 @@ class Failure(StrEnum):
     TIMEOUT = "timeout"
     UNAVAILABLE = "unavailable"
     TOOL_ERROR = "tool_error"
+    PERSONAL_WITHHELD = "personal_withheld"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,8 @@ class FederatedResult:
     text: str = ""
     truncated: bool = False
     failure: Failure | None = None
+    #: The server marked this result as one person's own data.
+    personal: bool = False
 
     @property
     def attribution(self) -> str:
@@ -80,6 +83,12 @@ class FederatedResult:
             truncated=self.truncated,
         )
 
+    def withheld(self) -> FederatedResult:
+        """This call with its personal text dropped: nothing of it reaches the run."""
+        return replace(
+            self, ok=False, text="", truncated=False, failure=Failure.PERSONAL_WITHHELD
+        )
+
     def notice(self) -> str | None:
         """What the answer must say about this call, if anything."""
         if self.failure is Failure.TIMEOUT:
@@ -88,6 +97,8 @@ class FederatedResult:
             return f"{self.server} was unavailable; its data is missing from this answer."
         if self.failure is Failure.TOOL_ERROR:
             return f"{self.server} reported an error for {self.tool}."
+        if self.failure is Failure.PERSONAL_WITHHELD:
+            return f"{self.server} returned personal data, which is only shown in a DM."
         if self.truncated:
             return f"The result from {self.server} was truncated to fit."
         return None
@@ -198,6 +209,7 @@ class Federation:
             ok=True,
             text=text,
             truncated=truncated,
+            personal=result.personal,
         )
 
     def _failed(self, permit: ToolPermit, failure: Failure) -> FederatedResult:

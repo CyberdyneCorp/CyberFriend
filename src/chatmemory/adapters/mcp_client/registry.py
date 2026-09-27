@@ -200,6 +200,8 @@ def _register_one(entry: AllowedTool, advertised: DiscoveredTool) -> RegisteredT
             effect=_effect_for(entry, advertised),
             credential=entry.credential,
             mutation_enabled=entry.mutation_enabled,
+            # From the allowlisted name, never from the server's description.
+            personal=entry.personal,
         ),
         # The description is used only for routing. It is text an external
         # server controls, so it never reaches a decision about permissions.

@@ -26,6 +26,13 @@ Excluded from both name patterns below, so a qualified name parses back into
 exactly one (server, tool) pair and a server called `a:b` cannot be forged.
 """
 
+PERSONAL_TOOL_PREFIX = "my_"
+"""A tool named this way returns one person's own data (CyberWealth's `my_*`).
+
+Decided from the name the operator allowlisted, not from anything the server
+says, and answered only in that person's direct messages.
+"""
+
 _SERVER_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
@@ -112,6 +119,10 @@ class AllowedTool:
     @property
     def qualified_name(self) -> str:
         return qualify(self.server, self.tool)
+
+    @property
+    def personal(self) -> bool:
+        return self.tool.startswith(PERSONAL_TOOL_PREFIX)
 
 
 @dataclass(frozen=True, slots=True)

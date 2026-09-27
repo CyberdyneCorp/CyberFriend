@@ -47,6 +47,11 @@ class Audience:
     def is_private(self) -> bool:
         return self.mode in (DeliveryMode.DIRECT_MESSAGE, DeliveryMode.EPHEMERAL)
 
+    @property
+    def is_direct(self) -> bool:
+        """Delivered to the asker's direct messages -- not an ephemeral reply."""
+        return self.mode is DeliveryMode.DIRECT_MESSAGE
+
 
 def private_audience(person: PersonRef, visible: frozenset[ChannelRef]) -> Audience:
     """An audience of one. Used for direct messages and ephemeral replies."""

@@ -82,6 +82,7 @@ class InvocationOutcome:
 
 
 _FAILURE_OUTCOMES = {
+    Failure.PERSONAL_WITHHELD: AuditOutcome.REFUSED,
     Failure.TIMEOUT: AuditOutcome.TIMED_OUT,
     Failure.UNAVAILABLE: AuditOutcome.FAILED,
     Failure.TOOL_ERROR: AuditOutcome.FAILED,
@@ -185,6 +186,11 @@ class GuardedInvoker:
 
         with authorized(clearance):
             result = await self._federation.call(permit, arguments)
+        if result.personal and not request.direct:
+            # Marked personal by the server, whatever the tool is called. The
+            # text is dropped here, before anything upstream can read it.
+            log.info("federation.personal_result_withheld", tool=request.qualified_name)
+            result = result.withheld()
 
         # Consumed whatever the outcome. An approval authorises one attempt,
         # not one success: leaving it granted after a timeout or a transport
