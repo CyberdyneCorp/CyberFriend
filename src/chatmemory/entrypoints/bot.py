@@ -163,6 +163,7 @@ from chatmemory.composition import (
     AnswerStack,
     Edges,
     ask_policy,
+    build_account_provisioner,
     build_accounts,
     build_alert_requests,
     build_alert_runner,
@@ -808,8 +809,13 @@ async def assemble(settings: Settings, edges: Edges) -> Process:
         capabilities=stack.capabilities,
     )
     # `/account`, offered only when ACCOUNT_PROVISIONING_ENABLED and a
-    # provisioner is at the edge. Nothing reaches CyberdyneAuth otherwise.
-    accounts = build_accounts(settings, stack.engine, edges.account_provisioner, edges.clock)
+    # provisioner is at the edge: the harness's fake, or the CyberdyneAuth
+    # adapter over the edges' transport when its client is configured.
+    # Nothing reaches CyberdyneAuth otherwise.
+    provisioner = edges.account_provisioner or build_account_provisioner(
+        settings, edges.http_transport
+    )
+    accounts = build_accounts(settings, stack.engine, provisioner, edges.clock)
     link_announcer = None
     if accounts is not None:
         graph.client.attach_accounts(accounts)

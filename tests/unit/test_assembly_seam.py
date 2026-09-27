@@ -12,16 +12,21 @@ users in `test_transport_and_clock_seam`.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
+import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from chatmemory import composition
 from chatmemory.adapters.llm.chat import OpenAICompatibleChat
 from chatmemory.adapters.llm.embeddings import OpenAICompatibleEmbeddings
+from chatmemory.app.accounts import ConsentDraft, ProvisioningOutcome
 from chatmemory.app.clock import utc_now
+from chatmemory.app.language import Language
 from chatmemory.app.reasoning.errors import ConfigurationError
 from chatmemory.app.reasoning.ports import (
     ChatModel,
@@ -32,8 +37,11 @@ from chatmemory.app.reasoning.ports import (
 )
 from chatmemory.composition import Edges, build_answer_stack
 from chatmemory.config import Settings
+from chatmemory.domain.identity import PersonRef
 from chatmemory.entrypoints.bot import Process, assemble, build_bot
+from tests.unit.test_accounts import MemoryStore
 from tests.unit.test_composition import FakeEmbeddings
+from tests.unit.test_cyberdyneauth_provisioner import ISSUER, FakeCyberdyneAuth
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "chatmemory"
 BOT = SRC / "entrypoints" / "bot.py"
@@ -194,3 +202,51 @@ async def test_assemble_builds_the_whole_process_over_the_edges_it_is_given(
     assert set(process.scope.current()) == {100}
     # The summariser writes with the summary edge, not a handle built inside.
     assert process.conversations.summariser.model is edges.summary_chat
+
+
+# --- /account reaches the real CyberdyneAuth adapter ---------------------
+
+PROVISIONING = {
+    "account_provisioning_enabled": True,
+    "provisioning_email_key": "k" * 32,
+    "admin_public_url": "https://console.example.com",
+    "account_provisioning_issuer": ISSUER,
+    "account_provisioning_client_id": "cf-provision",
+    "account_provisioning_client_secret": "s3cret",
+}
+
+
+async def test_assemble_wires_the_cyberdyneauth_adapter_over_the_edges_transport(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production leaves `Edges.account_provisioner` unset: the configured
+    client alone must put a working `/account` behind the edges' transport."""
+    store, fake = MemoryStore(), FakeCyberdyneAuth()
+    monkeypatch.setattr(composition, "PostgresAccountStore", lambda _engine: store)
+    edges = dataclasses.replace(fake_edges(engine), http_transport=fake.transport())
+    assert edges.account_provisioner is None
+
+    process = await assemble(settings(**PROVISIONING), edges)
+
+    accounts = process.graph.client._accounts
+    assert accounts is not None and process.link_announcer is not None
+    draft = ConsentDraft(name="Leo Araujo", email="leo@example.com", language=Language.ENGLISH)
+    result = await accounts.confirm(PersonRef("discord", 42), draft)
+
+    assert result.outcome is ProvisioningOutcome.REQUESTED
+    (sent,) = fake.provisions
+    assert json.loads(sent.content)["email"] == "leo@example.com"
+
+
+async def test_enabled_without_the_client_offers_no_account_command(
+    engine: AsyncEngine,
+) -> None:
+    unconfigured = {
+        k: v for k, v in PROVISIONING.items() if not k.startswith("account_provisioning_")
+    }
+    process = await assemble(
+        settings(**unconfigured, account_provisioning_enabled=True), fake_edges(engine)
+    )
+
+    assert process.graph.client._accounts is None
+    assert process.link_announcer is None

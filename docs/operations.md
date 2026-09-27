@@ -1238,11 +1238,38 @@ surrounding conversation is stored.
 
 `/account create` asks CyberdyneAuth for an account for the person; `/account
 link` (or [Link my account]) DMs them a single-use sign-in link. Both exist
-only when `ACCOUNT_PROVISIONING_ENABLED=true` **and** a provisioner is wired:
-until the CyberdyneAuth adapter ships, a deployment that turns the switch on
-logs `composition.accounts_without_provisioner` and keeps the command hidden.
+only when `ACCOUNT_PROVISIONING_ENABLED=true` **and** a provisioner is wired,
+which in a deployment means the provisioning client below is configured;
+without it, a deployment that turns the switch on logs
+`composition.accounts_without_provisioner` and keeps the command hidden.
 Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
 (`ports/accounts.py`).
+
+| Bot variable | |
+|---|---|
+| `ACCOUNT_PROVISIONING_ISSUER` | The CyberdyneAuth issuer, https (e.g. `https://auth.backend.coolify.cyberdynecorp.ai`). Its discovery document names the token endpoint; requests go to `{issuer}/api/v1/users/provision` |
+| `ACCOUNT_PROVISIONING_CLIENT_ID` | A `client_credentials` client CyberdyneAuth issues for this bot, scope `users:provision` only. **Not** the console's `ADMIN_OIDC_CLIENT_ID` |
+| `ACCOUNT_PROVISIONING_CLIENT_SECRET` | Its secret. Never logged; the admin service is not given it |
+
+The adapter (`adapters/accounts/cyberdyneauth.py`) exists only while the id
+and secret are both set; one without the other, or either without the
+issuer, or an issuer that is not https, refuses to start. It fetches a
+`client_credentials` token (scope `users:provision`, `client_secret_basic`
+unless the issuer offers only `client_secret_post`), keeps it until 30 seconds
+before `expires_in`, and on a 401 fetches one new token and retries once. It
+sends `{email, name?, locale?}` and reads only the status: **202** is accepted
+(whatever CyberdyneAuth did), **429** (per-client limit) and any other answer
+or no answer say "try again later" and are not counted, and **422** (the name
+was refused) does the same but logs `accounts.provisioning_name_rejected` as a
+warning: the name rule here (below) has drifted from CyberdyneAuth's and must
+be brought back in line. Only statuses are logged, never the email, the name
+or a token. Its HTTP goes through the bot's `Edges.http_transport`.
+
+To turn it on once CyberdyneAuth has deployed the endpoint and issued the
+client: set the three variables on the bot, then
+`ACCOUNT_PROVISIONING_ENABLED=true` with `PROVISIONING_EMAIL_KEY` and
+`ADMIN_PUBLIC_URL`, and redeploy. To turn it off, set
+`ACCOUNT_PROVISIONING_ENABLED=false` (or unset the client).
 
 - **Consent in a DM, to exact values.** Asked in a channel, the reply is
   private and the rest continues in a DM. The DM shows the name (full name,
@@ -1264,8 +1291,8 @@ Nothing reaches CyberdyneAuth except through the `AccountProvisioner` port
   it will receive an invitation...".
 - **Limits per person**: 1 request in 24 hours and 3 in 30 days, decided under
   a lock on the person row before CyberdyneAuth is called. Over the limit
-  nothing is sent and the reply says when to try again. A 429 or any failure
-  from CyberdyneAuth says "try again later" and is not counted.
+  nothing is sent and the reply says when to try again. A 429, a 422 or any
+  other failure from CyberdyneAuth says "try again later" and is not counted.
 - **Emails are stored only as `HMAC-SHA256(PROVISIONING_EMAIL_KEY, lowercased
   email)`** (`account_consent`, `account_provisioning_request`,
   `account_link_code`; migration 0035). A plain hash could be reversed by

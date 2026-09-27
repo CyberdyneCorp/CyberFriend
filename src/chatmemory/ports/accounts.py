@@ -48,13 +48,23 @@ class ProvisioningUnavailable(ProvisioningFailed):
     """Any other answer than 202, or no answer."""
 
 
+class ProvisioningInvalidName(ProvisioningFailed):
+    """The provider refused the name (422).
+
+    `account_name` applies CyberdyneAuth's rule before anything is shown, so
+    this means the two rules have drifted apart: an operator's problem, not
+    the person's, and retrying cannot fix it.
+    """
+
+
 class AccountProvisioner(Protocol):
     async def request_account(self, request: ProvisioningRequest) -> None:
         """Ask the provider to create (or re-invite) an account for the email.
 
         Returns on 202 whatever happened there: created, already existed, or
-        silently throttled. Raises `ProvisioningRateLimited` on 429 and
-        `ProvisioningUnavailable` on anything else.
+        silently throttled. Raises `ProvisioningRateLimited` on 429,
+        `ProvisioningInvalidName` on 422 and `ProvisioningUnavailable` on
+        anything else.
         """
         ...
 

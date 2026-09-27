@@ -65,6 +65,10 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from chatmemory.adapters.accounts.cyberdyneauth import (
+    CyberdyneAuthProvisioner,
+    ProvisioningClient,
+)
 from chatmemory.adapters.chain.alert_targets import ChainTargets
 from chatmemory.adapters.chain.registration import ChainToolsConfig, build_chain_tools
 from chatmemory.adapters.chain.watch import ChainWatcher
@@ -1142,6 +1146,28 @@ def build_accounts(
     )
 
 
+def build_account_provisioner(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> AccountProvisioner | None:
+    """The CyberdyneAuth adapter, or None while its client is not configured.
+
+    Only ACCOUNT_PROVISIONING_CLIENT_ID and _SECRET (with the issuer) wire it:
+    without them nothing in the process can reach the provisioning endpoint.
+    `transport` is the process's `Edges.http_transport`.
+    """
+    secret = settings.account_provisioning_client_secret
+    issuer = settings.account_provisioning_issuer
+    client_id = (settings.account_provisioning_client_id or "").strip()
+    if not client_id or secret is None or issuer is None:
+        return None
+    return CyberdyneAuthProvisioner(
+        ProvisioningClient(
+            issuer=issuer, client_id=client_id, client_secret=secret.get_secret_value()
+        ),
+        transport=transport,
+    )
+
+
 def build_link_announcements(engine: AsyncEngine, clock: Clock = utc_now) -> LinkAnnouncements:
     """Links made on the web that the bot has yet to announce, with [Unlink]."""
     return LinkAnnouncements(PostgresAccountStore(engine), clock=clock)
@@ -1779,8 +1805,9 @@ class Edges:
     engine: AsyncEngine
     http_transport: httpx.AsyncBaseTransport | None = None
     clock: Clock = utc_now
-    #: Where `/account` requests a CyberdyneAuth account. None until the
-    #: CyberdyneAuth adapter ships; the end-to-end harness hands a fake.
+    #: Where `/account` requests a CyberdyneAuth account, in place of the
+    #: CyberdyneAuth adapter `assemble` builds over `http_transport` when the
+    #: provisioning client is configured. The end-to-end harness hands a fake.
     account_provisioner: AccountProvisioner | None = None
 
     @classmethod

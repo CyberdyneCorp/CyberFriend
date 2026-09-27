@@ -31,14 +31,19 @@ purged through `purge_person_derived` (add-privacy-dashboard).
   `client_credentials` client whose only scope is `users:provision`. It is not
   the admin BFF client.
 - Body `{email, name?, locale?}`. Nothing else.
-- Response: always 202 `{"status": "accepted"}`. No `sub`, no "exists" flag.
-  The response is the same whether the account was created, already existed,
-  or was silently throttled.
+- Response to a valid request: 202 `{"status": "accepted"}`. No `sub`, no
+  "exists" flag. The response is the same whether the account was created,
+  already existed, or was silently throttled.
+- 422 when the `name` is refused by CyberdyneAuth's name rules. It judges the
+  name alone, before any lookup, so it is the same for a known and an unknown
+  email.
 - CyberdyneAuth creates an unverified, passwordless account with
   `created_via = client:<client_id>` and sends an invitation email. Accepting
   the invitation sets a password and verifies the email.
 - An existing email gets a neutral notice at most once per 24 hours.
 - Per-client rate limit: 429. Per-email throttle: silent (still 202).
+- Neither 422 nor 429 depends on whether the email has an account, so no
+  answer the contract allows can reveal one.
 
 **The invitation goes to the email's owner, who must accept it.** A Discord
 person who enters someone else's address causes, at most, one invitation (or
@@ -104,10 +109,16 @@ class AccountProvisioner(Protocol):
     async def request_account(self, request: ProvisioningRequest) -> None: ...
 ```
 
-- Returns nothing on 202. Raises `ProvisioningRateLimited` on 429 and
+- Returns nothing on 202. Raises `ProvisioningRateLimited` on 429,
+  `ProvisioningInvalidName` on 422 (our name rule drifted from the provider's:
+  reported as "try again later", uncounted, and logged as a warning) and
   `ProvisioningUnavailable` on anything else.
 - The adapter obtains a `client_credentials` token (scope `users:provision`)
-  and uses `edges.http_transport`.
+  from the token endpoint in `ACCOUNT_PROVISIONING_ISSUER`'s discovery,
+  caches it until shortly before expiry, retries once with a new token on a
+  401, and uses `edges.http_transport`. It exists only when
+  `ACCOUNT_PROVISIONING_CLIENT_ID` and `_SECRET` are both set (bot only; a
+  partial client refuses to start).
 - `ACCOUNT_PROVISIONING_ENABLED` defaults to false, and the command is hidden
   while it is off.
 
