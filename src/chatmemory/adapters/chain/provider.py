@@ -83,6 +83,8 @@ class PricedAsset:
     symbol: str
     usd: Decimal
     as_of: str
+    #: Who quoted it: CoinGecko, or the Chainlink feed when CoinGecko did not.
+    source: str = "CoinGecko"
 
 
 class PriceLookup(Protocol):

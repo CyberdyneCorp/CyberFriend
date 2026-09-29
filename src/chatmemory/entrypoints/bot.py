@@ -421,6 +421,7 @@ def build_bot(
             notifications,
             DiscordTaskMessenger(client.fetch_user, prefix=""),
             transport=alert_transport,
+            clock=clock,
         )
         if notifications is not None
         else None

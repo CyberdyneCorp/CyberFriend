@@ -59,8 +59,9 @@ class Held:
 class ChainWallet:
     chain: Chain
     holdings: tuple[Held, ...] = ()
-    #: Ether was priced by CoinGecko because this chain's oracle did not answer.
-    fallback_priced: bool = False
+    #: Who priced ether because this chain's oracle did not answer (CoinGecko
+    #: or Chainlink), or "" when the oracle priced everything.
+    fallback_source: str = ""
     unreachable: str = ""
 
 

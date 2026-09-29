@@ -25,7 +25,15 @@ from chatmemory.adapters.discord.bot import PLATFORM
 from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.ports.facts import FactKind
 from tests.e2e.conftest import COLLEAGUE_CRYPTO
-from tests.e2e.harness.chain import CBBTC, USDC, WETH, AaveAccount, AaveReserve, FakeChain
+from tests.e2e.harness.chain import (
+    CBBTC,
+    USDC,
+    WETH,
+    AaveAccount,
+    AaveReserve,
+    FakeChain,
+    FakeFeeds,
+)
 from tests.e2e.harness.conversation import E2EBot
 
 BASE_HOST = "base-mainnet.infura.io"
@@ -152,9 +160,12 @@ async def test_in_a_channel_no_full_address_is_posted(bot: E2EBot) -> None:
         assert address[2:].lower() not in turn.text.lower()
 
 
-async def test_ether_is_priced_by_coingecko_when_the_oracle_is_down(bot: E2EBot) -> None:
+async def test_ether_is_priced_by_chainlink_when_the_oracle_is_down(bot: E2EBot) -> None:
     """The production wiring hands the positions provider a price lookup;
-    without it, ether in a portfolio goes unpriced whenever the oracle fails."""
+    without it, ether in a portfolio goes unpriced whenever the oracle fails.
+    With no CoinGecko key that lookup is the Chainlink ETH/USD feed on
+    mainnet, and CoinGecko -- whose keyless endpoint refuses everyone -- is
+    never asked."""
     leo = bot.person("Leo")
     await save_wallet(bot, leo)
     chain = base_chain()
@@ -165,13 +176,12 @@ async def test_ether_is_priced_by_coingecko_when_the_oracle_is_down(bot: E2EBot)
         return chain.handle(request)
 
     bot.web.script(BASE_HOST, oracle_down)
-    bot.web.script(
-        "api.coingecko.com",
-        lambda _: httpx.Response(200, json={"ethereum": {"usd": float(ETH_USD)}}),
-    )
+    feeds = FakeFeeds(prices={"BTC": Decimal("63210"), "ETH": ETH_USD})
+    bot.web.script("mainnet.infura.io", feeds.handle)
 
     turn = await bot.dm(leo).say("what is my portfolio worth?")
 
     assert turn.edge() == "CHAIN" and not turn.searched
-    assert "ETH from CoinGecko" in turn.text
-    assert any(r.url.host == "api.coingecko.com" for r in bot.web.calls)
+    assert "ETH from Chainlink" in turn.text
+    assert feeds.requests, "the ETH/USD feed was never read"
+    assert all(r.url.host != "api.coingecko.com" for r in bot.web.calls)

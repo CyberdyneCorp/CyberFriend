@@ -133,13 +133,14 @@ class PortfolioReader:
             symbol = chain.deployment.chain.native_symbol
             holdings.insert(0, Held(symbol, native, prices.get(NATIVE)))
         return ChainWallet(
-            chain=chain.deployment.chain, holdings=tuple(holdings), fallback_priced=fallback
+            chain=chain.deployment.chain, holdings=tuple(holdings), fallback_source=fallback
         )
 
     async def _prices(
         self, chain: ChainPositions, assets: set[str]
-    ) -> tuple[dict[str, Decimal], bool]:
-        """The chain's Aave oracle, and CoinGecko for ether if it did not answer.
+    ) -> tuple[dict[str, Decimal], str]:
+        """The chain's Aave oracle, and the price lookup for ether if it did not
+        answer, with the name of the source that priced it then.
 
         One source per chain: the same asset priced twice in one answer, a
         tenth of a percent apart, reads as a mistake even when both are right.
@@ -152,11 +153,11 @@ class PortfolioReader:
         ether = {NATIVE, chain.deployment.weth.lower()} & assets
         unpriced = ether - prices.keys()
         if not unpriced or self._fallback is None:
-            return prices, False
+            return prices, ""
         quoted = await self._fallback.usd_price("ETH")
         if quoted is None:
-            return prices, False
-        return {**prices, **dict.fromkeys(unpriced, quoted.usd)}, True
+            return prices, ""
+        return {**prices, **dict.fromkeys(unpriced, quoted.usd)}, quoted.source
 
 
 def _candidates(chain: ChainPositions, reserves: Sequence[TokenInfo]) -> tuple[TokenInfo, ...]:

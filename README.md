@@ -27,7 +27,7 @@ internet said.
 | **Answers in your language** | An answer is written in the language you asked in, and fixed replies come in Portuguese or English to match; a saved preferred language still wins |
 | **Documents** | Attachments and linked documents, parsed in a sandboxed child process |
 | **Web and MCP** | Wikipedia, Google via SerpApi, and any MCP server an operator allowlists |
-| **Market data** | BTC and ETH, the S&P 500, and currency conversion, each stated with how current it is |
+| **Market data** | BTC and ETH (CoinGecko, or Chainlink's on-chain feeds), the S&P 500, and currency conversion, each stated with how current it is |
 | **Wallet balances** | What a `0x` address holds on Ethereum, Base and Arbitrum, with USD values. An address you typed, or the one you saved |
 | **DeFi positions** | Open Uniswap v3/v4 liquidity positions (pair, value, in/out of range, min/max price, uncollected fees) and Aave v3 supplies, borrows and health factor, on the same three chains |
 | **Wallet activity** | *o que essa carteira fez essa semana?*, *what did my wallet do this week?*, *minhas transações de ontem* — swaps, Uniswap liquidity, Aave supplies and borrows, transfers and gas, per chain, newest first, for up to 30 days. Relayed (EIP-7702) actions included; poisoning spam hidden and flagged; counterparties in full in a DM, redacted in a channel |
@@ -476,6 +476,7 @@ lists the common ones. The settings worth knowing:
 | `CHAT_MODEL_CAPABILITIES` | What the endpoint supports; narrowing is deliberate |
 | `WEB_TOOLS_ENABLED`, `SERPAPI_KEY` | Wikipedia and Google. Off by default |
 | `MARKET_TOOLS_ENABLED` | BTC, ETH, S&P 500, currency conversion. Off by default |
+| `COINGECKO_API_KEY` | Optional CoinGecko Demo-plan key for BTC/ETH (price tool, price alerts, ether in wallet answers), sent as `x-cg-demo-api-key` and never logged. Unset, BTC/ETH come from the Chainlink BTC/USD and ETH/USD feeds on Ethereum mainnet through `INFURA_KEY` (CoinGecko's keyless endpoint refuses every caller); set, CoinGecko is asked first and Chainlink answers when it fails |
 | `WALLET_TOOLS_ENABLED`, `INFURA_KEY` | Wallet balances and DeFi positions on Ethereum, Base and Arbitrum. Off by default |
 | `POSITIONS_TIMEOUT_SECONDS` | Per-chain bound for liquidity and Aave lookups (default 25) |
 | `FEDERATION_SERVERS`, `FEDERATION_TOOL_ALLOWLIST` | MCP servers and the tools allowed from them |
