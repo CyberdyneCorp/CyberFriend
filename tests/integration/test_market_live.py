@@ -23,6 +23,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from chatmemory.adapters.market.coingecko import COINGECKO_ENDPOINT
 from chatmemory.adapters.market.frankfurter import FRANKFURTER_ENDPOINT
 from chatmemory.adapters.market.registration import MarketToolsConfig, build_market_tools
 from chatmemory.adapters.mcp_client.client import connect
@@ -57,7 +58,7 @@ async def online() -> AsyncIterator[None]:
     yield
 
 
-#: Statuses CoinGecko's keyless tier answers when it refuses a caller outright
+#: Statuses CoinGecko's keyless tier answers when it refuses a caller outright on the price endpoint (it still answers /ping)
 #: (a CI runner's shared IP, or a burst). Our code cannot be tested against a
 #: provider that will not answer, so the crypto test skips rather than fails.
 PROVIDER_REFUSED = frozenset({403, 429})
@@ -66,7 +67,9 @@ PROVIDER_REFUSED = frozenset({403, 429})
 @pytest_asyncio.fixture
 async def coingecko(online: None) -> AsyncIterator[None]:
     async with httpx.AsyncClient(timeout=5.0) as client:
-        ping = await client.get("https://api.coingecko.com/api/v3/ping")
+        ping = await client.get(
+            COINGECKO_ENDPOINT, params={"ids": "bitcoin", "vs_currencies": "usd"}
+        )
     if ping.status_code in PROVIDER_REFUSED:
         pytest.skip(f"CoinGecko refuses this runner: HTTP {ping.status_code}")
     yield
