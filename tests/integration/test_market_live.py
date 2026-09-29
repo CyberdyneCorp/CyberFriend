@@ -23,6 +23,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from chatmemory.adapters.market.coingecko import COINGECKO_ENDPOINT
 from chatmemory.adapters.market.frankfurter import FRANKFURTER_ENDPOINT
 from chatmemory.adapters.market.registration import MarketToolsConfig, build_market_tools
 from chatmemory.adapters.mcp_client.client import connect
@@ -54,6 +55,24 @@ async def online() -> AsyncIterator[None]:
             await client.get(f"{FRANKFURTER_ENDPOINT}/currencies")
     except httpx.HTTPError as exc:
         pytest.skip(f"no network access: {type(exc).__name__}")
+    yield
+
+
+#: Statuses CoinGecko's keyless tier answers when it refuses a caller outright
+#: on the price endpoint, while /ping still answers 200 (a CI runner's shared
+#: IP, or a burst). Our code cannot be tested against a
+#: provider that will not answer, so the crypto test skips rather than fails.
+PROVIDER_REFUSED = frozenset({403, 429})
+
+
+@pytest_asyncio.fixture
+async def coingecko(online: None) -> AsyncIterator[None]:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        ping = await client.get(
+            COINGECKO_ENDPOINT, params={"ids": "bitcoin", "vs_currencies": "usd"}
+        )
+    if ping.status_code in PROVIDER_REFUSED:
+        pytest.skip(f"CoinGecko refuses this runner: HTTP {ping.status_code}")
     yield
 
 
@@ -106,7 +125,7 @@ async def ask(
         return await run.ask(question, tool, arguments)
 
 
-async def test_live_btc_and_eth_carry_their_quote_time(online: None) -> None:
+async def test_live_btc_and_eth_carry_their_quote_time(coingecko: None) -> None:
     """ETH asked about as "ether" is not refused, and each price is dated.
 
     One federation for both, as in the running bot: CoinGecko's keyless tier
