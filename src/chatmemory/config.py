@@ -234,6 +234,15 @@ class Settings(BaseSettings):
     The S&P 500 reuses SERPAPI_KEY rather than a second key.
     """
 
+    coingecko_api_key: SecretStr | None = None
+    """CoinGecko's free Demo plan key, sent as `x-cg-demo-api-key`.
+
+    Optional. Without it BTC and ETH are read from the Chainlink feeds on
+    Ethereum mainnet through `infura_key`, because CoinGecko's keyless price
+    endpoint refuses every caller. With it CoinGecko is asked first and
+    Chainlink answers whenever CoinGecko fails. Never logged.
+    """
+
     market_max_calls_per_run: int = 3
     """Market lookups one question may cause, across all market providers."""
 

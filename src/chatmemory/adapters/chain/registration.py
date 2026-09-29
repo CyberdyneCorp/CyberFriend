@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, replace
 import httpx
 import structlog
 
+from chatmemory.adapters.chain.chainlink import ChainlinkFeeds
 from chatmemory.adapters.chain.deployments import DEPLOYMENTS
 from chatmemory.adapters.chain.positions_provider import (
     DEFAULT_TIMEOUT as POSITIONS_TIMEOUT,
@@ -54,6 +55,7 @@ from chatmemory.adapters.web.limits import (
     RateLimiter,
 )
 from chatmemory.app.authorization import CredentialScope, ToolEffect
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.currency import UsdRates
 
 log = structlog.get_logger()
@@ -82,6 +84,11 @@ class ChainToolsConfig:
     transport: httpx.AsyncBaseTransport | None = None
     """What every client this package opens sends through. None is httpx's
     own network transport; a test hands a mock here and nothing leaves."""
+    coingecko_api_key: str | None = None
+    """Ether's dollar price asks CoinGecko first only with this key; without
+    it, and whenever CoinGecko fails, the Chainlink ETH/USD feed answers."""
+    clock: Clock = utc_now
+    """What a Chainlink reading's age is measured against."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +159,14 @@ def build_chain_tools(
         client=client,
         timeout_seconds=settings.timeout_seconds,
         transport=settings.transport,
+        api_key=settings.coingecko_api_key or "",
+        # The same node the balances are read from; see `adapters.chain.prices`.
+        chainlink=ChainlinkFeeds(
+            key,
+            timeout_seconds=settings.timeout_seconds,
+            transport=settings.transport,
+            clock=settings.clock,
+        ),
     )
     provider = WalletProvider(
         readers,

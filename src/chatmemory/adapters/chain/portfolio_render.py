@@ -66,7 +66,7 @@ EN = {
         "Uniswap v2 LP tokens); other Aave markets._"
     ),
     "prices": "_Prices: each chain's Aave oracle{fallback}._",
-    "fallback": ", ETH from CoinGecko where the oracle did not answer",
+    "fallback": ", ETH from {source} where the oracle did not answer",
     "details": '_Ask "details of my pools" or "my Aave positions" for each position._',
 }
 
@@ -94,7 +94,7 @@ PT = {
         "de LP da Uniswap v2); outros mercados do Aave._"
     ),
     "prices": "_Preços: oráculo do Aave de cada rede{fallback}._",
-    "fallback": ", ETH pela CoinGecko onde o oráculo não respondeu",
+    "fallback": ", ETH pela {source} onde o oráculo não respondeu",
     "details": (
         '_Pergunte "detalhes das minhas pools" ou "minhas posições no Aave" '
         "para ver cada posição._"
@@ -294,8 +294,9 @@ def _footer(wallets: Sequence[WalletPortfolio], words: _Words) -> list[str]:
     if unpriced:
         lines.append(words("unpriced", items=", ".join(unpriced)))
     lines.append(words("excluded"))
-    fallback = any(c.wallet.fallback_priced for c in chains)
-    lines.append(words("prices", fallback=words("fallback") if fallback else ""))
+    sources = sorted({c.wallet.fallback_source for c in chains} - {""})
+    fallback = words("fallback", source="/".join(sources)) if sources else ""
+    lines.append(words("prices", fallback=fallback))
     if any(c.liquidity.positions or not c.lending.empty for c in chains):
         lines.append(words("details"))
     lines.extend(rate_lines(words.conversion))

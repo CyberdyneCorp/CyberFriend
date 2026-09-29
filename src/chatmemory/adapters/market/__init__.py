@@ -19,7 +19,7 @@ Read in dependency order:
     quotes           a figure and the time it refers to
     cache            short-lived, and never stale
     provider         one source as a governed, degrading tool session
-    coingecko        BTC and ETH, with the quote time
+    coingecko        BTC and ETH, with the quote time (CoinGecko, else Chainlink)
     frankfurter      conversion at the ECB daily reference rate, amount kept local
     google_finance   the S&P 500, present only with a SerpApi key
     registration     servers + allowlist + factory, for `connect()`

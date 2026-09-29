@@ -145,6 +145,11 @@ services:
       # SERPAPI_KEY is set. Off unless enabled; lookups are held to closed
       # vocabularies by the egress guard, never to free text.
       - MARKET_TOOLS_ENABLED=${MARKET_TOOLS_ENABLED}
+      # Optional CoinGecko Demo-plan key for BTC/ETH (sent as a header, never
+      # logged). Blank: prices come from the Chainlink feeds on mainnet through
+      # INFURA_KEY, since CoinGecko's keyless endpoint refuses every caller.
+      # Also used by price alerts and ether in wallet answers.
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
       - MARKET_MAX_CALLS_PER_RUN=${MARKET_MAX_CALLS_PER_RUN}
       - MARKET_TIMEOUT_SECONDS=${MARKET_TIMEOUT_SECONDS}
       - WALLET_TOOLS_ENABLED=${WALLET_TOOLS_ENABLED}

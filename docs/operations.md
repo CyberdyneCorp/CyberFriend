@@ -686,7 +686,8 @@ wallet is named by its last four characters.
 
 **Prices.** Each chain's Aave oracle, for ether (as WETH) and every reserve; a
 dollar stablecoin the oracle does not list is $1; if the oracle does not
-answer, ether is priced from CoinGecko and the answer says so.
+answer, ether is priced the way the market tools price it (below, "BTC and ETH
+prices") and the answer names the source ("ETH from Chainlink").
 
 **Partial answers.** Each section of each chain is tried twice. One still
 unread makes the headline "**At least $X** — not read: Base (Aave)", never a
@@ -1474,8 +1475,8 @@ A **price alert** needs no wallet and reads no chain. The assets are the market
 tools' closed vocabulary, BTC and ETH; the level is read as either notation
 writes it ("100k", "2.500", "2,500", "$3,000", "120 mil"), and a level with no
 direction ("when BTC hits 100k") is taken as the side the price is not on yet.
-The confirmation shows the price now from CoinGecko with its quote time, and
-says so when the price is already past the level.
+The confirmation shows the price now with its source (CoinGecko or Chainlink)
+and quote time, and says so when the price is already past the level.
 
 A **near-edge alert** is a range alert with a distance, 1–50% ("near the edge"
 alone means 5%). The confirmation shows how far each position is from its
@@ -1529,15 +1530,44 @@ so the address is checked once, when the alert is made — the person's saved
 wallet or an address they typed — and stored. That is declared in the
 `position-alerts` spec and is why the feature is off unless switched on.
 
-Price alerts add one more request per sweep, whatever their number: the
-constant CoinGecko request the market tools and the portfolio's ether pricing
-already make (`ids=bitcoin,ethereum`), through `Edges.http_transport`, with the
+Price alerts add one read per sweep, whatever their number, from the same
+sources in the same order as the market tools ("BTC and ETH prices", below):
+the constant CoinGecko request (`ids=bitcoin,ethereum`) when a
+`COINGECKO_API_KEY` is set, and the constant Chainlink feed read on mainnet
+when it is not or CoinGecko fails, through `Edges.http_transport`, with the
 market provider's fresh-only cache and its own rate limiter. It carries nothing
 about anybody — not the asset watched, not the level — so it needs no
 clearance, and it goes out whether or not `MARKET_TOOLS_ENABLED` is on. That is
-declared in the `alert-kinds` change. A sweep with no due price alert sends it
-not at all; one that cannot get a fresh price counts a failed check and says
-nothing.
+declared in the `alert-kinds` and `fix-crypto-price-fallback` changes. A sweep
+with no due price alert sends it not at all; one that cannot get a fresh price
+— every source failing, or only a stale feed reading — counts a failed check
+and says nothing.
+
+### BTC and ETH prices
+
+BTC and ETH (the `crypto_price` market tool, price alerts, and ether in wallet
+and portfolio answers) come from two sources, in this order:
+
+1. **CoinGecko**, only when `COINGECKO_API_KEY` is set (the free Demo plan; the
+   key goes in the `x-cg-demo-api-key` header and is never logged). Since
+   2026-09-29 the keyless `/api/v3/simple/price` answers every caller with a
+   CloudFront 403 HTML page while `/ping` still answers 200, so without a key
+   it is not asked at all.
+2. **Chainlink**, the BTC/USD (`0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c`)
+   and ETH/USD (`0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419`) feeds on Ethereum
+   mainnet, read through `INFURA_KEY`'s node as one constant Multicall3
+   `eth_call` (`decimals()` and `latestRoundData()` of both feeds). Used
+   without a CoinGecko key, and on any CoinGecko failure: an HTTP error, a
+   403/429, a body that is not the expected JSON, a missing price.
+
+A Chainlink price is quoted at its `updatedAt`, rounded to the cent, and cited
+as "Chainlink". The feeds update on a 0.5% move or every hour; a reading older
+than an hour and five minutes says it is stale in its time line, and a price
+alert treats it as no reading. With neither key BTC/ETH are unavailable; when
+every configured source fails the answer says no current figure is available
+and nothing is substituted. Logs: `market.coingecko_failed` (with
+`fallback=Chainlink`) for each fallback, `chainlink.unusable_answer` for a
+round that did not complete.
 
 Creation reads more than a sweep does: a range request runs the full positions
 discovery (two to twenty-five requests per chain, several seconds on Arbitrum

@@ -96,6 +96,7 @@ from chatmemory.adapters.market.registration import (
     MarketToolsConfig,
     build_market_tools,
     build_usd_rates,
+    chainlink_feeds,
 )
 from chatmemory.adapters.market.usd_rates import UsdReferenceRates
 from chatmemory.adapters.mcp_client import (
@@ -838,7 +839,9 @@ def web_tools_config(
 
 
 def chain_tools_config(
-    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings,
+    transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock = utc_now,
 ) -> ChainToolsConfig:
     """Operator settings, translated for the wallet adapter.
 
@@ -854,26 +857,40 @@ def chain_tools_config(
         timeout_seconds=settings.wallet_timeout_seconds,
         positions_timeout_seconds=settings.positions_timeout_seconds,
         transport=transport,
+        coingecko_api_key=_coingecko_key(settings),
+        clock=clock,
     )
 
 
 def market_tools_config(
-    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings,
+    transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock = utc_now,
 ) -> MarketToolsConfig:
     """Operator settings, translated for the market adapter.
 
     The SerpApi key is the web tools' key: the S&P 500 comes from Google
     Finance through the same account, so a second variable would only be a
-    second place for the same secret to be set wrong.
+    second place for the same secret to be set wrong. The Infura key is the
+    wallet tools' key, for the same reason: BTC and ETH fall back to the
+    Chainlink feeds on the node it already reaches.
     """
     return MarketToolsConfig(
         serpapi_key=(
             settings.serpapi_key.get_secret_value() if settings.serpapi_key else None
         ),
+        coingecko_api_key=_coingecko_key(settings),
+        infura_key=_infura_key(settings) or None,
         max_calls_per_run=settings.market_max_calls_per_run,
         timeout_seconds=settings.market_timeout_seconds,
         transport=transport,
+        clock=clock,
     )
+
+
+def _coingecko_key(settings: Settings) -> str | None:
+    key = settings.coingecko_api_key
+    return (key.get_secret_value().strip() or None) if key is not None else None
 
 
 def with_service_auth(
@@ -959,6 +976,7 @@ async def build_federation(
     auth_environ: Mapping[str, str] | None = None,
     mcp_transport: httpx2.AsyncBaseTransport | None = None,
     personal_keys: PersonalKeys | None = None,
+    clock: Clock = utc_now,
 ) -> FederatedTools | None:
     """Connect to the configured servers, or run without any.
 
@@ -971,7 +989,8 @@ async def build_federation(
     MCP requests go through, for tests.
 
     `personal_keys` makes CyberWealth's personal tools callable with each
-    asker's own key (see `with_personal_keys`).
+    asker's own key (see `with_personal_keys`). `clock` is what a Chainlink
+    price's age is judged against -- the process's `Edges.clock`.
 
     Every failure degrades to None. That is a deliberate asymmetry with the
     model and embedding checks above, which refuse the deployment: those
@@ -1033,7 +1052,7 @@ async def build_federation(
     # held to membership in `app.egress.CLOSED_VOCABULARIES` by the invoker's
     # guard, not by anything this function chooses.
     if settings.market_tools_enabled:
-        market = build_market_tools(market_tools_config(settings, transport))
+        market = build_market_tools(market_tools_config(settings, transport, clock))
         rates = market.rates
         config = market.merge_into(config or FederationConfig())
         factory = market.factory(factory)
@@ -1049,7 +1068,7 @@ async def build_federation(
     # reach an address the asker typed themselves.
     if settings.wallet_tools_enabled:
         chain = build_chain_tools(
-            chain_tools_config(settings, transport),
+            chain_tools_config(settings, transport, clock),
             rates=rates or build_usd_rates(market_tools_config(settings, transport)),
         )
         if chain.servers:
@@ -1222,20 +1241,26 @@ def alerts_available(settings: Settings) -> bool:
 
 
 def build_alert_prices(
-    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings,
+    transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock = utc_now,
 ) -> AlertPrices:
-    """BTC and ETH for price alerts: the market tools' CoinGecko provider.
+    """BTC and ETH for price alerts: the market tools' crypto provider.
 
     Its own instance, on its own cache and rate limit, but the same class,
-    endpoint and constant request, so a price alert reaches no host the
+    sources, order and constant request -- CoinGecko with a key, else or on
+    failure the Chainlink feeds -- so a price alert reaches no host the
     portfolio's ether pricing does not already reach, whether or not the
     market tools are switched on. The budget is never spent: `latest` is
     not a tool call.
     """
+    config = market_tools_config(settings, transport, clock)
     provider = CoinGeckoProvider(
         CallBudget(settings.market_max_calls_per_run),
         timeout_seconds=settings.market_timeout_seconds,
         transport=transport,
+        api_key=config.coingecko_api_key or "",
+        chainlink=chainlink_feeds(config),
     )
     return AlertPrices(provider)
 
@@ -1258,7 +1283,7 @@ def build_alert_requests(
     return AlertRequests(
         AlertService(PostgresAlertStore(engine), sweep_seconds=settings.alert_sweep_seconds),
         ChainTargets(_infura_key(settings), transport=transport),
-        prices=build_alert_prices(settings, transport),
+        prices=build_alert_prices(settings, transport, clock),
         sweep_seconds=settings.alert_sweep_seconds,
         clock=clock,
     )
@@ -1427,6 +1452,7 @@ def build_alert_runner(
     engine: AsyncEngine,
     messenger: TaskMessenger,
     transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock = utc_now,
 ) -> AlertRunner | None:
     """The position-alert sweep, or None when the feature is off.
 
@@ -1445,7 +1471,7 @@ def build_alert_runner(
         PostgresAlertStore(engine),
         ChainWatcher(key, transport=transport),
         messenger,
-        prices=build_alert_prices(settings, transport),
+        prices=build_alert_prices(settings, transport, clock),
         sweep_seconds=settings.alert_sweep_seconds,
         # The owner's preferred currency beside the dollar figures, priced by
         # the same FX provider and host the market tools use.
@@ -2021,6 +2047,7 @@ async def build_answer_stack(
         proposer=proposer,
         transport=edges.http_transport,
         personal_keys=personal_keys,
+        clock=edges.clock,
     )
     log.info(
         "composition.answer_stack",

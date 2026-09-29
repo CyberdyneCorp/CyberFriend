@@ -1,7 +1,8 @@
 """Price alerts and near-edge warnings, asked for in words and fired by the sweep.
 
 The assembled process with alerts on. A price request reads one constant
-CoinGecko request through `Edges.http_transport` -- no chain, no wallet -- and
+CoinGecko request through `Edges.http_transport` -- no wallet -- or, when
+CoinGecko refuses, one constant read of the Chainlink feeds on mainnet, and
 the sweep reads it again, once for every price alert, and messages on the
 crossing in the language the alert was asked in. A near-edge request is a
 range alert with a distance: its confirmation shows how far the nearer edge
@@ -17,6 +18,7 @@ from typing import Any, cast
 
 import httpx
 import pytest_asyncio
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -25,13 +27,15 @@ from chatmemory.adapters.discord.bot import PLATFORM
 from chatmemory.app.alerts import AlertRunner
 from chatmemory.domain.identity import PersonRef, Viewer
 from chatmemory.ports.facts import FactKind
-from tests.e2e.harness.chain import FakeChain, V3Position
+from tests.e2e.harness.chain import FakeChain, FakeFeeds, V3Position
 from tests.e2e.harness.conversation import E2EBot, Turn
 from tests.e2e.harness.discord_wire import Sent
 from tests.e2e.harness.process import FakeClock, e2e_settings, start
 from tests.e2e.harness.web import NetworkSeal
 
 COINGECKO = "api.coingecko.com"
+COINGECKO_KEY = SecretStr("e2e-coingecko-key")
+MAINNET = "mainnet.infura.io"
 BASE_HOST = "base-mainnet.infura.io"
 WALLET = "0xdd8a0000000000000000000000000000000063d6"
 POOL = "0xd0b53d9277642d899df5c87a3966a349a798f224"
@@ -44,8 +48,11 @@ QUOTED_AT = 1788264000  # 2026-09-01 12:00 UTC
 async def alerts_bot(
     clean: AsyncEngine, e2e_database_url: str, sealed_network: NetworkSeal
 ) -> AsyncIterator[E2EBot]:
-    """The production process with `ALERTS_ENABLED=true`; market tools stay off."""
-    settings = e2e_settings(e2e_database_url).model_copy(update={"alerts_enabled": True})
+    """The production process with `ALERTS_ENABLED=true` and a CoinGecko key,
+    so prices are asked of CoinGecko first; market tools stay off."""
+    settings = e2e_settings(e2e_database_url).model_copy(
+        update={"alerts_enabled": True, "coingecko_api_key": COINGECKO_KEY}
+    )
     e2e = await start(settings, clean, sealed_network)
     try:
         yield e2e
@@ -161,6 +168,66 @@ async def test_a_price_alert_is_asked_confirmed_and_fires_once_in_portuguese(
 
     listed = await dm.slash("alert list", locale="pt-BR")
     assert f"**{row.id}** - BTC acima de US$ 100.000 - acima do nível" in listed.text
+
+
+def coingecko_refused(request: httpx.Request) -> httpx.Response:
+    """The CloudFront 403 CoinGecko's price endpoint answered on 2026-09-29."""
+    return httpx.Response(
+        403,
+        text="<HTML><TITLE>ERROR: The request could not be satisfied</TITLE>403 ERROR</HTML>",
+        headers={"content-type": "text/html"},
+    )
+
+
+async def test_with_coingecko_refusing_a_price_alert_is_offered_and_fires_from_chainlink(
+    alerts_bot: E2EBot,
+) -> None:
+    bot = alerts_bot
+    refusals: list[httpx.Request] = []
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        refusals.append(request)
+        return coingecko_refused(request)
+
+    feeds = FakeFeeds(prices={"BTC": Decimal("97412.35"), "ETH": Decimal("2480.50")})
+    bot.web.script(COINGECKO, refuse)
+    bot.web.script(MAINNET, feeds.handle)
+    leo = bot.person("Leo")
+    # Known to the store, as anybody who has spoken to the bot is.
+    await bot.process.facts.remember(
+        Viewer(PersonRef(PLATFORM, leo.id), frozenset()), FactKind.ETH_WALLET, WALLET
+    )
+    dm = bot.dm(leo)
+
+    asked = await dm.say("avisa quando o BTC passar de 100k")
+
+    assert asked.hosts == {COINGECKO, MAINNET}, "CoinGecko first, then the feed"
+    assert all(
+        r.headers["x-cg-demo-api-key"] == COINGECKO_KEY.get_secret_value() for r in refusals
+    )
+    offer = prompt(asked)
+    assert "• **BTC** acima de **US$ 100.000** · agora **US$ 97.412,35** (Chainlink," in (
+        offer.content
+    )
+    asked.assert_language("pt")
+    confirmed = await dm.press(offer, "Confirmar")
+    assert confirmed.sent[0].content.startswith("Pronto. Estou acompanhando:")
+    [row] = await rows(bot)
+
+    reads = len(feeds.requests)
+    feeds.prices["BTC"] = Decimal("100412.35")
+    feeds.default_updated_at = QUOTED_AT + 240  # 12:04 UTC, a minute before the sweep
+    crossed = await sweep(bot)
+
+    [message] = crossed.sent
+    assert message.via == "dm"
+    assert message.content.startswith(
+        "🔔 **Alerta** — o BTC **passou de US$ 100.000**: agora US$ 100.412,35 "
+        "(Chainlink, 2026-09-01 12:04 UTC)."
+    )
+    assert f"`/alert delete {row.id}`" in message.content
+    crossed.assert_language("pt")
+    assert crossed.hosts == {COINGECKO, MAINNET} and len(feeds.requests) == reads + 1
 
 
 def base_chain() -> FakeChain:

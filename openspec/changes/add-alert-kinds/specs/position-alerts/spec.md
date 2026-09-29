@@ -13,7 +13,8 @@ direction SHALL be taken as the side the price is not on when the alert is made.
 - WHEN a person writes "avisa quando o BTC passar de 100k" and BTC is at 97,412
 - THEN the reply SHALL offer an alert for BTC above US$ 100.000 with the price
   now and its quote time, in Portuguese, with Confirm and Cancel
-- AND no chain endpoint SHALL be read
+- AND no wallet or position SHALL be read (a price may come from the Chainlink
+  feeds on mainnet, see fix-crypto-price-fallback)
 
 #### Scenario: A price asked, not a watch
 - WHEN a person asks "what is the BTC price?" or "quanto está o ETH?"

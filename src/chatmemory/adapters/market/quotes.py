@@ -45,6 +45,9 @@ class Quote:
     url: str
     timing: Timing
     as_of: datetime | date
+    #: Older than the source says it is ever updated (a price feed's
+    #: heartbeat): still the figure with its own time, said to be out of date.
+    stale: bool = False
 
 
 def figure(value: Decimal) -> str:
@@ -66,6 +69,11 @@ def stated_time(quote: Quote) -> str:
             "not a live or tradeable rate"
         )
     moment = _utc(quote.as_of)
+    if quote.timing is Timing.QUOTE_TIME and quote.stale:
+        return (
+            f"{moment} -- quote time reported by {quote.source}; stale: older than "
+            "the feed's regular update interval, so it may not be the current price"
+        )
     if quote.timing is Timing.QUOTE_TIME:
         return f"{moment} -- quote time reported by {quote.source}"
     return f"{moment} -- retrieval time; {quote.source} reports no quote time"

@@ -29,6 +29,7 @@ from dataclasses import dataclass, field, replace
 import httpx
 import structlog
 
+from chatmemory.adapters.chain.chainlink import ChainlinkFeeds
 from chatmemory.adapters.market.coingecko import (
     COINGECKO_ENDPOINT,
     CoinGeckoProvider,
@@ -66,6 +67,7 @@ from chatmemory.adapters.web.limits import (
     RateLimiter,
 )
 from chatmemory.app.authorization import CredentialScope, ToolEffect
+from chatmemory.app.clock import Clock, utc_now
 from chatmemory.app.egress import (
     MARKET_CRYPTO_PROVIDER,
     MARKET_FX_PROVIDER,
@@ -86,6 +88,12 @@ class MarketToolsConfig:
     """Everything an operator can set about market data."""
 
     serpapi_key: str | None = None
+    coingecko_api_key: str | None = None
+    """CoinGecko's Demo plan key. Without it CoinGecko is not asked when
+    Chainlink can answer: the keyless endpoint refuses every caller."""
+    infura_key: str | None = None
+    """The Ethereum node the Chainlink price feeds are read through. Without
+    it BTC and ETH come from CoinGecko alone."""
     timeout_seconds: float = DEFAULT_TIMEOUT
     max_calls_per_run: int = DEFAULT_CALLS_PER_RUN
     min_interval_seconds: float = DEFAULT_MIN_INTERVAL
@@ -98,6 +106,8 @@ class MarketToolsConfig:
     transport: httpx.AsyncBaseTransport | None = None
     """What every client this package opens sends through. None is httpx's
     own network transport; a test hands a mock here and nothing leaves."""
+    clock: Clock = utc_now
+    """What a Chainlink reading's age is measured against."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,20 +169,21 @@ def build_market_tools(
     budget = CallBudget(settings.max_calls_per_run)
     fx = _frankfurter(settings, budget, client)
     rates = UsdReferenceRates(fx)
+    chainlink = chainlink_feeds(settings)
+    crypto = CoinGeckoProvider(
+        budget,
+        endpoint=settings.coingecko_endpoint,
+        ttl_seconds=settings.crypto_ttl_seconds,
+        limiter=RateLimiter(settings.min_interval_seconds),
+        timeout_seconds=settings.timeout_seconds,
+        client=client,
+        transport=settings.transport,
+        rates=rates,
+        api_key=settings.coingecko_api_key or "",
+        chainlink=chainlink,
+    )
     providers: list[tuple[MarketProvider, str]] = [
-        (
-            CoinGeckoProvider(
-                budget,
-                endpoint=settings.coingecko_endpoint,
-                ttl_seconds=settings.crypto_ttl_seconds,
-                limiter=RateLimiter(settings.min_interval_seconds),
-                timeout_seconds=settings.timeout_seconds,
-                client=client,
-                transport=settings.transport,
-                rates=rates,
-            ),
-            settings.coingecko_endpoint,
-        ),
+        (crypto, crypto_hosts(crypto, chainlink)),
         (fx, settings.frankfurter_endpoint),
     ]
     key = (settings.serpapi_key or "").strip()
@@ -197,6 +208,27 @@ def build_market_tools(
         providers={p.server: p for p, _ in providers},
         rates=rates,
     )
+
+
+def chainlink_feeds(settings: MarketToolsConfig) -> ChainlinkFeeds | None:
+    """The Chainlink feeds over the configured Infura key, or None without one."""
+    key = (settings.infura_key or "").strip()
+    if not key:
+        return None
+    return ChainlinkFeeds(
+        key,
+        timeout_seconds=settings.timeout_seconds,
+        transport=settings.transport,
+        clock=settings.clock,
+    )
+
+
+def crypto_hosts(crypto: CoinGeckoProvider, chainlink: ChainlinkFeeds | None) -> str:
+    """Every host the crypto provider may reach, never with a key in it."""
+    hosts = [crypto.endpoint] if crypto.asks_coingecko else []
+    if chainlink is not None:
+        hosts.append(chainlink.host)
+    return ",".join(hosts)
 
 
 def build_usd_rates(config: MarketToolsConfig | None = None) -> UsdReferenceRates:
@@ -230,8 +262,8 @@ def _entry(server: str, tool: str) -> AllowedTool:
     return AllowedTool(
         server=server,
         tool=tool,
-        # CoinGecko and Frankfurter have no credential; the SerpApi key
-        # returns the same public figure to anyone holding it.
+        # Frankfurter has no credential; the CoinGecko, Infura and SerpApi
+        # keys return the same public figure to anyone holding them.
         credential=CredentialScope.NARROW_READ_ONLY,
         effect=ToolEffect.READ_ONLY,
         mutation_enabled=False,

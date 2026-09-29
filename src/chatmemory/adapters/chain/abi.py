@@ -53,6 +53,10 @@ AAVE_USER_RESERVE = "0x28dd2d01"  # getUserReserveData(address,address)
 AAVE_RESERVE_DATA = "0x35ea6a75"  # getReserveData(address)
 AAVE_ASSET_PRICE = "0xb3596f07"  # getAssetPrice(address)
 
+# Chainlink AggregatorV3Interface
+FEED_DESCRIPTION = "0x7284e416"  # description()
+FEED_LATEST_ROUND = "0xfeaf968c"  # latestRoundData()
+
 
 def selector(signature: str) -> str:
     """The 4-byte selector of a function signature. For tests and one-offs."""

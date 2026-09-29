@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from chatmemory.adapters.chain import abi
+from chatmemory.adapters.chain import abi, chainlink
 from chatmemory.adapters.chain.aave import NO_DEBT_HEALTH
 from chatmemory.adapters.chain.deployments import DEPLOYMENTS, Deployment
 from chatmemory.adapters.chain.node import MULTICALL3
@@ -347,3 +347,51 @@ def encode_aggregate3_result(results: list[bytes | None]) -> bytes:
         offsets.append(offset)
         offset += len(element)
     return _encode(WORD, len(results), *offsets) + b"".join(elements)
+
+
+@dataclass
+class FakeFeeds:
+    """Chainlink's BTC/USD and ETH/USD proxies on mainnet, behind Multicall3.
+
+    Answers `decimals()`, `latestRoundData()` and `description()` for the
+    feeds in `chainlink.FEEDS`, from a price in dollars and an `updatedAt` a
+    scenario can change. Any other call reverts, as it would on chain.
+    """
+
+    prices: dict[str, Decimal] = field(
+        default_factory=lambda: {"BTC": Decimal("63210.12"), "ETH": Decimal("2672.57")}
+    )
+    updated_at: dict[str, int] = field(default_factory=dict)
+    """Unix seconds by ticker; a ticker not listed answers `default_updated_at`."""
+    default_updated_at: int = 1788263940  # 2026-09-01 11:59 UTC
+    decimals: int = 8
+    failing: bool = False
+    requests: list[httpx.Request] = field(default_factory=list)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if self.failing:
+            return httpx.Response(500, text="upstream error")
+        call = json.loads(request.content)
+        params = call["params"][0]
+        if call.get("method") != "eth_call" or params["to"].lower() != MULTICALL3:
+            error = {"code": -32000, "message": "execution reverted"}
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": call["id"], "error": error})
+        results = [self._answer(t, d) for t, d in decode_aggregate3_call(params["data"])]
+        result = "0x" + encode_aggregate3_result(results).hex()
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": call["id"], "result": result})
+
+    def _answer(self, target: str, data: str) -> bytes | None:
+        feed = next((f for f in chainlink.FEEDS.values() if f.address == target), None)
+        if feed is None:
+            return None
+        if data == abi.DECIMALS:
+            return _encode(self.decimals)
+        if data == abi.FEED_DESCRIPTION:
+            text = feed.description.encode()
+            return _encode(WORD, len(text)) + text.ljust(WORD, b"\0")
+        if data == abi.FEED_LATEST_ROUND:
+            answer = int(self.prices[feed.asset].scaleb(self.decimals))
+            updated = self.updated_at.get(feed.asset, self.default_updated_at)
+            return _encode(7, answer % abi.UINT256, updated, updated, 7)
+        return None

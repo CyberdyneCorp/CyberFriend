@@ -124,6 +124,10 @@ async def test_a_wallet_lookup_goes_through_the_edges_transport(
             price_lookups.append(request.url)
             return httpx.Response(200, json={})
         batch = json.loads(request.content)
+        if not isinstance(batch, list):
+            # Chainlink's feeds, read when CoinGecko has no price: none here.
+            price_lookups.append(request.url)
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "error": {}})
         batches.append(batch)
         # One ether on every chain, so the balance is worth pricing in USD.
         return httpx.Response(
@@ -135,7 +139,7 @@ async def test_a_wallet_lookup_goes_through_the_edges_transport(
 
     edges = replace(fake_edges(engine), http_transport=httpx.MockTransport(handle))
     tools = await build_federation(
-        settings(wallet_tools_enabled=True, infura_key="key"),
+        settings(wallet_tools_enabled=True, infura_key="key", coingecko_api_key="cg-key"),
         transport=edges.http_transport,
     )
     assert tools is not None
@@ -157,7 +161,10 @@ async def test_a_wallet_lookup_goes_through_the_edges_transport(
     balances = [c for batch in batches for c in batch if c["method"] == "eth_getBalance"]
     assert balances, "no eth_getBalance was sent"
     assert all(c["params"][0] == ADDRESS.lower() for c in balances)
-    assert price_lookups and {u.host for u in price_lookups} == {"api.coingecko.com"}, (
+    assert price_lookups and {u.host for u in price_lookups} == {
+        "api.coingecko.com",
+        "mainnet.infura.io",
+    }, (
         "the wallet's USD price lookup never reached the edges' transport"
     )
 
@@ -185,6 +192,13 @@ PROVIDER_CALLS = [
         {"asset": "ETH"},
         "api.coingecko.com",
         id="market-coingecko",
+    ),
+    pytest.param(
+        {"market_tools_enabled": True, "infura_key": "key"},
+        "market_crypto:crypto_price",
+        {"asset": "ETH"},
+        "mainnet.infura.io",
+        id="market-chainlink",
     ),
     pytest.param(
         {"market_tools_enabled": True},

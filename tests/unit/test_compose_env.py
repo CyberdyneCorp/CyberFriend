@@ -67,6 +67,10 @@ DEPLOYMENT_SETTINGS = {
     # Market data is merged into the bot's federation; declared here or an
     # operator enabling it in the platform silently keeps it off.
     "MARKET_TOOLS_ENABLED": ("bot",),
+    # BTC/ETH for the price tool, price alerts and ether in wallet answers,
+    # all in the bot. Undeclared, a key set in the platform never arrives and
+    # CoinGecko is silently skipped for Chainlink.
+    "COINGECKO_API_KEY": ("bot",),
     "MARKET_MAX_CALLS_PER_RUN": ("bot",),
     "MARKET_TIMEOUT_SECONDS": ("bot",),
     # Wallet balances are merged into the bot's federation like the market
