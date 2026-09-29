@@ -58,8 +58,9 @@ async def online() -> AsyncIterator[None]:
     yield
 
 
-#: Statuses CoinGecko's keyless tier answers when it refuses a caller outright on the price endpoint (it still answers /ping)
-#: (a CI runner's shared IP, or a burst). Our code cannot be tested against a
+#: Statuses CoinGecko's keyless tier answers when it refuses a caller outright
+#: on the price endpoint, while /ping still answers 200 (a CI runner's shared
+#: IP, or a burst). Our code cannot be tested against a
 #: provider that will not answer, so the crypto test skips rather than fails.
 PROVIDER_REFUSED = frozenset({403, 429})
 
