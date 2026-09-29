@@ -99,6 +99,7 @@ from chatmemory.app.facts import (
     PersonalFactsService,
 )
 from chatmemory.app.limits import LimitDecision, RateLimiter
+from chatmemory.app.personal_keys import CYBERWEALTH, PersonalKeys
 from chatmemory.app.reasoning.contract import NoRunTracer, RunOutcome, RunTracer
 from chatmemory.app.reasoning.tracing import export_run
 from chatmemory.app.routing import FactAction, FactIntent, fact_intent, indexing_request
@@ -126,6 +127,7 @@ from chatmemory.ports.facts import (
     FactKind,
 )
 from chatmemory.ports.memory import ConversationLocation, MemoryPurge, Recollection
+from chatmemory.ports.privacy import HeldKey
 
 log = structlog.get_logger()
 
@@ -158,6 +160,8 @@ from chatmemory.app.fact_replies import (  # noqa: E402
     facts_set_reply,
     facts_shown_reply,
     forget_which_reply,
+    key_forgotten_reply,
+    key_shown_reply,
     rememberable,
     unsupported,
 )
@@ -357,6 +361,15 @@ class AskService:
         # tries to close an ask rather than as a list that quietly never
         # shrinks. `attach_corrections` is how the bot process supplies it.
         self._corrections = corrections
+        # The asker's own CyberWealth key, listed by its last four characters
+        # and forgotten beside their facts. Attached by the bot process where
+        # `PERSONAL_SECRETS_KEY` is set; without it no key is ever held.
+        self._keys: PersonalKeys | None = None
+
+    def attach_personal_keys(self, keys: PersonalKeys) -> None:
+        """Let "what do you know about me?" list the asker's CyberWealth key, and
+        "forget my CyberWealth key" delete it."""
+        self._keys = keys
 
     def attach_corrections(self, corrections: CorrectionService) -> None:
         """Give this service somewhere to write the addressee's own word.
@@ -720,6 +733,8 @@ class AskService:
         refused = _fact_refusal(intent.action, language)
         if refused is not None:
             return refused
+        if intent.action in (FactAction.SHOW_KEY, FactAction.FORGET_KEY):
+            return await self._key_turn(request, intent.action, language)
         if self._facts is None:
             return fact_text("unavailable", language)
         # The viewer is resolved from the authenticated asker, and it is the
@@ -734,7 +749,10 @@ class AskService:
         direct = request.location.direct
         if intent.action is FactAction.SHOW:
             facts = await self._facts.facts_for(viewer, request.location)
-            return facts_shown_reply(facts, direct, language, intent.kind)
+            # Only in a DM is the key even looked up: a channel listing must
+            # not be able to mention one.
+            key = await self._held_key(request.asker) if direct and intent.kind is None else None
+            return facts_shown_reply(facts, direct, language, intent.kind, key)
         if intent.action is FactAction.FORGET:
             return await self._forget_fact(viewer, request, intent, language)
         if intent.action is FactAction.SET_MANY:
@@ -750,6 +768,9 @@ class AskService:
         assert self._facts is not None
         if intent.kind is None:
             await self._facts.forget_all(viewer)
+            # Everything listed as known about them, the key included.
+            if self._keys is not None:
+                await self._keys.forget(request.asker)
             return fact_forgotten_reply(None, language)
         if intent.all_wallets:
             for kind in self.OUTBOUND_KINDS:
@@ -771,6 +792,26 @@ class AskService:
             value = None if chosen is _Pick.ALL else chosen
         await self._facts.forget(viewer, intent.kind, value)
         return fact_forgotten_reply(intent.kind, language, one_value=value is not None)
+
+    async def _key_turn(
+        self, request: AskRequest, action: FactAction, language: Language
+    ) -> str:
+        """Show or forget the asker's own CyberWealth key.
+
+        Shown by its last four characters, read without opening the sealed
+        key; in a channel not even looked up. Forgetting deletes that key
+        alone, never a fact.
+        """
+        direct = request.location.direct
+        if action is FactAction.FORGET_KEY:
+            if self._keys is not None:
+                await self._keys.forget(request.asker, CYBERWEALTH)
+            return key_forgotten_reply(language)
+        held = await self._held_key(request.asker) if direct else None
+        return key_shown_reply(held, direct, language)
+
+    async def _held_key(self, asker: PersonRef) -> HeldKey | None:
+        return await self._keys.held(asker) if self._keys is not None else None
 
     #: Facts whose value may become an outbound argument for their owner.
     #: Only the chain addresses: a name or a language is not something any

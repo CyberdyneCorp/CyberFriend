@@ -105,6 +105,37 @@ person SHALL delete the key.
 - WHEN a person opts out or deletes everything
 - THEN their key SHALL be deleted in the same transaction as the rest of their derived data
 
+### Requirement: A key is shown and forgotten like a personal fact
+
+"What do you know about me?" SHALL list the person's CyberWealth key beside
+their facts, by its last four characters only ("CyberWealth key: …Nd4k" /
+"Chave do CyberWealth: …Nd4k"), in a direct message only; in a server channel
+the listing SHALL NOT mention a key, nor whether one exists. Asking for the
+key by name ("what's my CyberWealth key?" / "qual é a minha chave do
+cyberwealth?") SHALL answer with its last four characters in a DM, say none is
+saved when there is none, and give the same fixed reply as other DM-only facts
+in a channel whether or not one is held. "Forget my CyberWealth key" /
+"esqueça minha chave do cyberwealth" SHALL delete that key and no fact,
+confirmed in the asker's language. Showing a key SHALL read only its stored
+last four characters, never open the sealed key. Sending a new key SHALL
+replace the old one.
+
+#### Scenario: Listed in a DM
+- WHEN a person with a key asks "o que você sabe sobre mim?" in a DM
+- THEN the reply SHALL include "Chave do CyberWealth: `…<last four>`" and no other part of the key
+
+#### Scenario: Not mentioned in a channel
+- WHEN the same person asks "what do you know about me?" in a server channel
+- THEN the reply SHALL NOT mention a CyberWealth key
+
+#### Scenario: Forgotten in words
+- WHEN a person with a key and an email says "esqueça minha chave do cyberwealth"
+- THEN the key SHALL be deleted, the email kept, and the reply SHALL be in Portuguese
+
+#### Scenario: Replaced
+- WHEN a person with a key sends a new key in a DM
+- THEN only the new key SHALL be held, listed by its own last four characters
+
 ### Requirement: A key posted in a channel is never archived
 
 A channel message containing `cwk_` SHALL NOT be archived, whether captured

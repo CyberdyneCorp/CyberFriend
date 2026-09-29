@@ -76,8 +76,14 @@ class PersonalKeyStore(Protocol):
 
     async def key_for(self, person: PersonRef, service: str) -> str | None: ...
 
-    async def forget(self, person: PersonRef) -> int:
-        """Delete every key of the person's. Returns how many were held."""
+    async def held(self, person: PersonRef, service: str) -> HeldKey | None:
+        """Whether the person holds a key for `service`: its last four
+        characters and date, read without opening the ciphertext."""
+        ...
+
+    async def forget(self, person: PersonRef, service: str | None = None) -> int:
+        """Delete the person's key for `service`, or every key of theirs when
+        None. Returns how many were held."""
         ...
 
 
@@ -129,8 +135,16 @@ class PersonalKeys:
             return None
         return await self._store.key_for(person, server)
 
-    async def forget(self, person: PersonRef) -> int:
-        removed = await self._store.forget(person)
+    async def held(self, person: PersonRef) -> HeldKey | None:
+        """The person's CyberWealth key as it may be shown: its last four
+        characters. The key itself is never read for this."""
+        return await self._store.held(person, CYBERWEALTH)
+
+    async def forget(self, person: PersonRef, service: str | None = None) -> int:
+        """Delete the person's key for `service`, or all of them when None."""
+        removed = await self._store.forget(person, service)
         if removed:
-            log.info("personal_keys.forgotten", person=str(person), removed=removed)
+            log.info(
+                "personal_keys.forgotten", person=str(person), service=service, removed=removed
+            )
         return removed

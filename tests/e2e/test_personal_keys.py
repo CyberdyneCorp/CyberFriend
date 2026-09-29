@@ -20,7 +20,9 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from tests.e2e.harness.conversation import E2EBot
+from chatmemory.app.personal_keys import CYBERWEALTH
+from chatmemory.domain.identity import PersonRef
+from tests.e2e.harness.conversation import PLATFORM, E2EBot
 from tests.e2e.harness.process import NOW, e2e_settings, start
 from tests.e2e.harness.web import NetworkSeal
 
@@ -165,3 +167,68 @@ async def test_an_edit_in_a_dm_or_without_a_key_is_left_alone(keyed: E2EBot) -> 
         turn = await keyed.turn(lambda: client.on_raw_message_edit(event))  # noqa: B023
         assert turn.sent == ()
     assert await _ciphertexts(keyed) == []
+
+
+# --- the key as a personal fact --------------------------------------------------------
+
+NEW_SECRET = "Zz9-Yy8_Xx" * 4 + "W7vQ"[:3]
+NEW_KEY = f"cwk_live_MNPQRSTVWX_{NEW_SECRET}"
+
+
+async def test_a_key_is_listed_masked_in_a_dm_and_never_in_a_channel(keyed: E2EBot) -> None:
+    leo = keyed.person("Leo")
+    dm = keyed.dm(leo)
+    await dm.say(f"minha chave do cyberwealth é {KEY}")
+    await dm.say("meu email é leo@example.com")
+
+    listed = await dm.say("o que você sabe sobre mim?")
+
+    assert not listed.searched and listed.schemas == ()
+    assert f"Chave do CyberWealth: `…{KEY[-4:]}`" in listed.text
+    assert "leo@example.com" in listed.text
+    assert SECRET[:-4] not in listed.text
+
+    one = await dm.say("qual é a minha chave do cyberwealth?")
+    assert one.text == f"• Chave do CyberWealth: `…{KEY[-4:]}`"
+
+    here = await keyed.channel("general", leo).say("what do you know about me?")
+    assert not here.searched and here.schemas == ()
+    assert KEY[-4:] not in here.text and "cyberwealth" not in here.text.casefold()
+    asked = await keyed.channel("general", leo).say("what's my cyberwealth key?")
+    assert asked.text == "I only show your CyberWealth key in a direct message. Ask me there."
+    assert await dm.memory_turns() == []
+
+
+async def test_forgetting_the_key_in_words_keeps_the_other_facts(keyed: E2EBot) -> None:
+    leo = keyed.person("Leo")
+    dm = keyed.dm(leo)
+    await dm.say(f"my cyberwealth key is {KEY}")
+    await dm.say("my email is leo@example.com")
+
+    forgot = await dm.say("esqueça minha chave do cyberwealth")
+
+    assert forgot.text == "Pronto. Não tenho mais sua chave do CyberWealth."
+    assert not forgot.searched and forgot.schemas == ()
+    assert await _ciphertexts(keyed) == []
+    listed = await dm.say("what do you know about me?")
+    assert "leo@example.com" in listed.text and "CyberWealth" not in listed.text
+    missing = await dm.say("what's my cyberwealth key?")
+    assert missing.text.startswith("I don't have a CyberWealth key saved for you.")
+
+
+async def test_a_new_key_replaces_the_old_one(keyed: E2EBot) -> None:
+    leo = keyed.person("Leo")
+    dm = keyed.dm(leo)
+    await dm.say(f"minha chave do cyberwealth é {KEY}")
+
+    replaced = await dm.say(f"minha chave do cyberwealth é {NEW_KEY}")
+
+    assert NEW_KEY[-4:] in replaced.text
+    assert len(await _ciphertexts(keyed)) == 1
+    shown = await dm.say("what's my cyberwealth key?")
+    assert shown.text == f"• CyberWealth key: `…{NEW_KEY[-4:]}`"
+    assert keyed.process.stack.personal_keys is not None
+    bearer = await keyed.process.stack.personal_keys.bearer(
+        PersonRef(PLATFORM, leo.id), CYBERWEALTH
+    )
+    assert bearer == NEW_KEY

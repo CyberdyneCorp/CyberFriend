@@ -27,6 +27,14 @@
 - [x] 4.2 `/privacy` lists keys (service, last four, date) in a DM and counts them in a channel; erasure reply counts them
 - [x] 4.3 e2e: DM key sealed, listed, forgotten; channel key not archived, not answered, author warned
 
-## 5. Docs
+## 5. The key as a personal fact
 
-- [x] 5.1 README (feature, `/connect`, `PERSONAL_SECRETS_KEY`), `docs/operations.md` (a person's own key), roadmap
+- [x] 5.1 `PersonalKeyStore.held` (last four and date, never the ciphertext) and `forget(person, service)`; `HELD_KEY_OF_REQUESTER`, `FORGET_KEY` in the SQL audit
+- [x] 5.2 `fact_intent`: `SHOW_KEY` / `FORGET_KEY` in English and Portuguese, before the fact patterns in the same precedence
+- [x] 5.3 Fact listing in a DM carries the key by its last four characters; a channel listing never looks it up; one-key replies and the forget reply in the asker's language; forgetting every fact deletes it too
+- [x] 5.4 Capabilities text names it (EN/PT), its examples route
+- [x] 5.5 Tests: routing, masking, SHOW built without opening the key, store `held`/`forget`, e2e listed in a DM and not in a channel, forgotten in words keeping the facts, replaced
+
+## 6. Docs
+
+- [x] 6.1 README (feature, `/connect`, `PERSONAL_SECRETS_KEY`), `docs/operations.md` (a person's own key), roadmap

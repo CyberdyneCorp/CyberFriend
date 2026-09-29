@@ -112,8 +112,12 @@ class MemoryKeyStore:
     async def key_for(self, person: PersonRef, service: str) -> str | None:
         return self.keys.get((person, service))
 
-    async def forget(self, person: PersonRef) -> int:
-        mine = [k for k in self.keys if k[0] == person]
+    async def held(self, person: PersonRef, service: str) -> HeldKey | None:
+        key = self.keys.get((person, service))
+        return HeldKey(service, last_four(key), NOW) if key is not None else None
+
+    async def forget(self, person: PersonRef, service: str | None = None) -> int:
+        mine = [k for k in self.keys if k[0] == person and service in (None, k[1])]
         for k in mine:
             del self.keys[k]
         return len(mine)
