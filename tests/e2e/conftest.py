@@ -34,10 +34,13 @@ from tests.e2e.harness.web import NetworkSeal
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_URL = "postgresql+asyncpg://chatmemory:chatmemory@localhost:5432/chatmemory"
 PGVECTOR_IMAGE = "pgvector/pgvector:pg17"
-# Raised from 60 s at 100 scenarios, when CI first ran 60.6 s with every test
-# green, and from 90 s at ~150, when CI ran 92.8 s with no scenario over 3 s.
-# The budget exists to catch one slow scenario, not a growing suite.
-BUDGET_SECONDS = 120.0
+# A scenario over this is the regression the budget exists to catch: one slow
+# test, named. The slowest today is under 3 s.
+TEST_BUDGET_SECONDS = 10.0
+# A backstop for the whole suite that grows with it. A fixed total (60 s, then
+# 90 s, then 120 s) failed main each time enough scenarios were added, with
+# every test passing and none of them slow.
+SUITE_SECONDS_PER_TEST = 1.5
 
 COLLEAGUE_CRYPTO = (
     "Our project treasury 0xD5C95aF87F6e1E83507AC96b2eE4484B9AFEbDd5 holds the "
@@ -192,22 +195,36 @@ async def bot(
 
 # --- the time budget ----------------------------------------------------------
 
-_spent = 0.0
+_durations: dict[str, float] = {}
+
+
+def over_budget(durations: dict[str, float]) -> list[str]:
+    """What broke the budget: each slow scenario, then the suite as a whole."""
+    problems = [
+        f"{node} took {spent:.1f}s, over the {TEST_BUDGET_SECONDS:.0f}s per-scenario budget"
+        for node, spent in sorted(durations.items())
+        if spent > TEST_BUDGET_SECONDS
+    ]
+    total, allowed = sum(durations.values()), SUITE_SECONDS_PER_TEST * len(durations)
+    if total > allowed:
+        problems.append(
+            f"end-to-end suite took {total:.1f}s, over its {allowed:.0f}s budget "
+            f"({SUITE_SECONDS_PER_TEST}s x {len(durations)} scenarios)"
+        )
+    return problems
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
-    global _spent
     if report.nodeid.startswith("tests/e2e/"):
-        _spent += report.duration
+        _durations[report.nodeid] = _durations.get(report.nodeid, 0.0) + report.duration
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """The budget is enforced, not hoped for: over it, the run fails."""
-    if _spent > BUDGET_SECONDS:
+    problems = over_budget(_durations)
+    if problems:
         reporter = session.config.pluginmanager.get_plugin("terminalreporter")
         if reporter is not None:
-            reporter.write_line(
-                f"end-to-end suite took {_spent:.1f}s, over its {BUDGET_SECONDS:.0f}s budget",
-                red=True,
-            )
+            for line in problems:
+                reporter.write_line(line, red=True)
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
