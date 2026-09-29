@@ -609,6 +609,14 @@ UNSCOPED: dict[str, str] = {
         "returns one ciphertext, but only the requester's own: keyed on their "
         "platform identity in the WHERE clause, for the bearer of their own call"
     ),
+    "personal_keys_sql.HELD_KEY_OF_REQUESTER": (
+        "the last four characters and date of the requester's own key, keyed on "
+        "their platform identity in the WHERE clause. Never the ciphertext"
+    ),
+    "personal_keys_sql.FORGET_KEY": (
+        "write; \"forget my CyberWealth key\", keyed on the requester's own "
+        "platform identity and the one kind. Returns no row"
+    ),
     "personal_keys_sql.FORGET_ALL_KEYS": (
         "write; /forget and the like, keyed on the requester's own platform "
         "identity. Returns no row"

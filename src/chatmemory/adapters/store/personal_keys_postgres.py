@@ -100,9 +100,28 @@ class PostgresPersonalKeyStore:
             log.error("personal_keys.unreadable", person=str(person), service=service)
             return None
 
-    async def forget(self, person: PersonRef) -> int:
+    async def held(self, person: PersonRef, service: str) -> HeldKey | None:
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    personal_keys_sql.HELD_KEY_OF_REQUESTER,
+                    {**_requester(person), "kind": service},
+                )
+            ).first()
+        if row is None:
+            return None
+        return HeldKey(service, str(row[0]), cast(datetime, row[1]))
+
+    async def forget(self, person: PersonRef, service: str | None = None) -> int:
         async with self._engine.begin() as conn:
-            result = await conn.execute(personal_keys_sql.FORGET_ALL_KEYS, _requester(person))
+            if service is None:
+                result = await conn.execute(
+                    personal_keys_sql.FORGET_ALL_KEYS, _requester(person)
+                )
+            else:
+                result = await conn.execute(
+                    personal_keys_sql.FORGET_KEY, {**_requester(person), "kind": service}
+                )
         return result.rowcount or 0
 
 

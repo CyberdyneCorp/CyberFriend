@@ -29,6 +29,7 @@ from chatmemory.ports.facts import (
     FactRejection,
     PersonalFacts,
 )
+from chatmemory.ports.privacy import HeldKey
 
 EN, PT = Language.ENGLISH, Language.PORTUGUESE
 
@@ -282,6 +283,24 @@ _TEXT: dict[str, dict[Language, str]] = {
     },
 }
 
+_KEY_TEXT: dict[str, dict[Language, str]] = {
+    "label": {EN: "CyberWealth key", PT: "chave do CyberWealth"},
+    "possessive": {EN: "your CyberWealth key", PT: "sua chave do CyberWealth"},
+    "missing": {
+        EN: (
+            "I don't have a CyberWealth key saved for you. Send it to me here "
+            "(`cwk_live_...`) or use `/connect`."
+        ),
+        PT: (
+            "Não tenho uma chave do CyberWealth salva para você. Me mande ela aqui "
+            "(`cwk_live_...`) ou use `/connect`."
+        ),
+    },
+}
+"""The CyberWealth connected-app key, listed and forgotten beside the facts.
+It is not a `FactKind`: it lives sealed in its own store, and is only ever
+named by its last four characters."""
+
 NOT_KEPT_LABELS = {
     AGE: {EN: "Age", PT: "Idade"},
     WHERE_YOURE_FROM: {EN: "Where you're from", PT: "De onde você é"},
@@ -507,11 +526,37 @@ def _not_kept_line(kept: str, born: bool, language: Language) -> str:
     return text(key, language, l=shown)
 
 
+def key_line(held: HeldKey, language: Language = EN) -> str:
+    """"• CyberWealth key: `…Nd4k`": the last four characters, never more."""
+    lang = _lang(language)
+    return f"• {_capital(_KEY_TEXT['label'][lang])}: `…{held.last4}`"
+
+
+def key_shown_reply(held: HeldKey | None, direct: bool, language: Language = EN) -> str:
+    """"What's my CyberWealth key?". In a channel the same words whether or
+    not one is held, like every fact shown only in a direct message."""
+    lang = _lang(language)
+    if not direct:
+        return text("one_direct_only", language, p=_KEY_TEXT["possessive"][lang])
+    if held is None:
+        return _KEY_TEXT["missing"][lang]
+    return key_line(held, language)
+
+
+def key_forgotten_reply(language: Language = EN) -> str:
+    """The same words whether or not a key was held, as for a fact."""
+    lang = _lang(language)
+    return text(
+        "forgot_one", language, l=_KEY_TEXT["label"][lang], p=_KEY_TEXT["possessive"][lang]
+    )
+
+
 def facts_shown_reply(
     facts: PersonalFacts,
     direct: bool,
     language: Language = EN,
     kind: FactKind | None = None,
+    key: HeldKey | None = None,
 ) -> str:
     """The person's own facts, as they may be shown where they asked.
 
@@ -520,10 +565,14 @@ def facts_shown_reply(
     stored": the channel version never says there is nothing.
 
     `kind` answers one question ("what's my phone?") with that fact alone.
+    `key` is the CyberWealth key held, listed by its last four characters in
+    a direct message only: a channel listing never mentions one.
     """
     if kind is not None:
         return _one_fact(facts, direct, language, kind)
     lines = [shown_line(s.fact.kind, s.fact.value, language) for s in facts.facts]
+    if direct and key is not None:
+        lines.append(key_line(key, language))
     if direct:
         if not lines:
             return text("nothing_direct", language) + rememberable(language)

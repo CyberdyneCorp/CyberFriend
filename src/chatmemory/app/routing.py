@@ -1383,6 +1383,11 @@ class FactAction(StrEnum):
     ABOUT_SOMEONE_ELSE = "about_someone_else"
     # "what's João's email?": a request for somebody else's facts.
     OTHERS_FACTS = "others_facts"
+    # "what's my CyberWealth key?": the connected-app key, shown by its last
+    # four characters. Kept apart from SHOW/FORGET, whose `kind` None means
+    # every fact: the key is not a fact kind and lives in its own store.
+    SHOW_KEY = "show_key"
+    FORGET_KEY = "forget_key"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1653,6 +1658,19 @@ _FORGET_WALLETS = re.compile(
 """Every wallet, Ethereum and Bitcoin: "forget my wallets" left the Bitcoin
 ones behind."""
 
+# The CyberWealth connected-app key, named as people name it: "my cyberwealth
+# key", "minha chave do cyberwealth". Its value is never matched here: a
+# message carrying one is taken by the surface before it can be asked.
+_CYBERWEALTH = r"cyber\s*wealth"
+_KEY_WORD = (
+    rf"(?:{_CYBERWEALTH}\s+(?:api\s+|connected[\s-]app\s+)?key|"
+    rf"chave(?:\s+de\s+api)?\s+(?:do|da|de|no)\s+{_CYBERWEALTH}|chave\s+{_CYBERWEALTH})"
+)
+_FORGET_KEY = re.compile(
+    _LEAD + _FORGET_VERB + rf"{_MY}\s+{_KEY_WORD}" + _TRAIL, re.IGNORECASE
+)
+""""Forget my CyberWealth key": that key alone, never the facts."""
+
 _SHOW_PATTERN = re.compile(
     _LEAD
     + r"(?:"
@@ -1698,6 +1716,14 @@ _SHOW_ONE: tuple[tuple[FactKind, re.Pattern[str]], ...] = tuple(
 """One fact asked for by name. "Qual o meu telefone?" and "what's my phone
 number?" went to the corpus, because only email, preferred name and language
 were recognised here."""
+
+_SHOW_KEY = re.compile(
+    _LEAD
+    + rf"(?:{_WHAT_IS_MY}|(?:do|did)\s+you\s+have\s+my|(?:voc[eê]|vc)\s+tem\s+(?:a\s+)?minha)"
+    + rf"\s+{_KEY_WORD}" + _TRAIL,
+    re.IGNORECASE,
+)
+""""What's my CyberWealth key?" / "qual é a minha chave do cyberwealth?"."""
 
 _CAPABILITIES_PATTERN = re.compile(
     _LEAD
@@ -1764,6 +1790,8 @@ def _means_you(who: str) -> bool:
 
 
 def _show_intent(text: str) -> FactIntent | None:
+    if _SHOW_KEY.match(text):
+        return FactIntent(FactAction.SHOW_KEY)
     for kind, pattern in (*_SHOW_ONE, *_SHOW_ONE_QUESTION):
         if pattern.match(text):
             return FactIntent(FactAction.SHOW, kind)
@@ -1902,6 +1930,8 @@ def _cut(kind: FactKind, value: str) -> str:
 
 
 def _forget_intent(text: str) -> FactIntent | None:
+    if _FORGET_KEY.match(text):
+        return FactIntent(FactAction.FORGET_KEY)
     if _FORGET_PATTERN.match(text):
         return FactIntent(FactAction.FORGET)
     if _FORGET_WALLETS.match(text):

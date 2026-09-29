@@ -43,3 +43,17 @@ WHERE s.{_REQUESTER.strip()}
 FORGET_ALL_KEYS = text(f"""
 DELETE FROM person_secret WHERE {_REQUESTER}
 """)
+
+#: What a key may be shown as: its last four characters and date. Never the
+#: ciphertext, so showing a key cannot open one.
+HELD_KEY_OF_REQUESTER = text(f"""
+SELECT s.last4, s.created_at
+FROM person_secret s
+WHERE s.{_REQUESTER.strip()}
+  AND s.kind = :kind
+  AND NOT EXISTS (SELECT 1 FROM person_opt_out o WHERE o.person_id = s.person_id)
+""")
+
+FORGET_KEY = text(f"""
+DELETE FROM person_secret WHERE {_REQUESTER} AND kind = :kind
+""")

@@ -111,6 +111,39 @@ async def test_forget_deletes_only_the_askers_key(clean: AsyncEngine) -> None:
     assert await keys.bearer(BOB, CYBERWEALTH) == OTHER_KEY
 
 
+async def test_held_reads_the_last_four_without_opening_the_key(clean: AsyncEngine) -> None:
+    """Under a secrets key that cannot open it, the key is still shown held:
+    "what do you know about me?" never decrypts to list it."""
+    await store(clean).save(ALICE, CYBERWEALTH, KEY)
+    unopenable = store(clean, ROTATED)
+
+    held = await unopenable.held(ALICE, CYBERWEALTH)
+
+    assert held is not None and (held.service, held.last4) == (CYBERWEALTH, KEY[-4:])
+    assert await unopenable.key_for(ALICE, CYBERWEALTH) is None
+    assert await unopenable.held(BOB, CYBERWEALTH) is None
+
+
+async def test_held_follows_a_replaced_key(clean: AsyncEngine) -> None:
+    keys = store(clean)
+    await keys.save(ALICE, CYBERWEALTH, KEY)
+    await keys.save(ALICE, CYBERWEALTH, OTHER_KEY)
+    held = await keys.held(ALICE, CYBERWEALTH)
+    assert held is not None and held.last4 == OTHER_KEY[-4:]
+
+
+async def test_forgetting_one_service_deletes_only_the_askers_key(clean: AsyncEngine) -> None:
+    keys = store(clean)
+    await keys.save(ALICE, CYBERWEALTH, KEY)
+    await keys.save(BOB, CYBERWEALTH, OTHER_KEY)
+
+    assert await keys.forget(ALICE, CYBERWEALTH) == 1
+    assert await keys.forget(ALICE, CYBERWEALTH) == 0
+
+    assert await keys.held(ALICE, CYBERWEALTH) is None
+    assert await keys.key_for(BOB, CYBERWEALTH) == OTHER_KEY
+
+
 async def test_opting_out_deletes_the_key_and_refuses_a_new_one(clean: AsyncEngine) -> None:
     keys = store(clean)
     await keys.save(ALICE, CYBERWEALTH, KEY)

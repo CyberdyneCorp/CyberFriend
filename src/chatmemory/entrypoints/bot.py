@@ -412,6 +412,9 @@ def build_bot(
         # A CyberWealth key sent in a DM or with `/connect`. Without it a key
         # is refused with a reply, and still never answered or archived.
         client.attach_personal_keys(personal_keys)
+        # "What do you know about me?" lists it by its last four characters,
+        # and "forget my CyberWealth key" deletes it.
+        asks.attach_personal_keys(personal_keys)
     # Position alerts: the chain read through `alert_transport` (the process's
     # edge), the message through the scheduled-task messenger with no heading
     # of its own, since an alert's text carries one in its own language.

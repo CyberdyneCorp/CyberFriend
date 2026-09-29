@@ -844,6 +844,14 @@ and the rest of CyberWealth works as before.
   `cyberwealth` server is registered from its name without the server's
   listing (description from the name, no argument schema). Write tools stay
   behind `:enable-mutation` and `FEDERATION_CREDENTIAL_HOLDERS`.
+- **Beside the facts.** "What do you know about me?" in a DM lists it as
+  `CyberWealth key: …Nd4k` (last four only, read from the `last4` column
+  without opening the ciphertext); in a channel the listing never looks it up.
+  `what's my CyberWealth key?` / `qual é a minha chave do cyberwealth?` answers
+  the same way in a DM and with the fixed DM-only reply in a channel.
+  `forget my CyberWealth key` / `esqueça minha chave do cyberwealth` deletes
+  that row alone; "forget everything you know about me" deletes it with the
+  facts. Sending a new key replaces the row.
 - **Deleted by** `/forget` (everywhere, or in the DM), **Delete everything…**,
   an opt-out and deleting the person: `purge_person_derived` removes the row,
   and a key sent by an opted-out person is dropped before it is stored.

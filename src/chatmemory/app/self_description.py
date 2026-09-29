@@ -247,6 +247,8 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "(several of each), and I'll remember it",
             "Several in one message: `call me Leo, my email is leo@example.com`",
             "`what do you know about me?` shows them; `forget my phone` deletes one",
+            "Your CyberWealth key, sent in a DM, is listed there too, by its last "
+            "four characters: `what's my CyberWealth key?`, `forget my CyberWealth key`",
         ),
         "facts_note": (
             "Your contact details, address, birth date and wallets are only shown "
@@ -317,6 +319,9 @@ _TEXT: dict[Language, dict[str, Any]] = {
             "e BTC (várias de cada), e eu guardo",
             "Várias de uma vez: `pode me chamar de Leo, meu email é leo@exemplo.com`",
             "`o que você sabe sobre mim?` mostra tudo; `esqueça meu telefone` apaga um",
+            "Sua chave do CyberWealth, enviada por DM, também aparece lá, pelos "
+            "quatro últimos caracteres: `qual é a minha chave do CyberWealth?`, "
+            "`esqueça minha chave do CyberWealth`",
         ),
         "facts_note": (
             "Seus contatos, endereço, data de nascimento e carteiras só são "

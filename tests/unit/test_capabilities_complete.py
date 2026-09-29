@@ -277,6 +277,8 @@ FACTS = (
     ("Several in one message", "Várias de uma vez"),
     ("what do you know about me?", "o que você sabe sobre mim?"),
     ("forget my phone", "esqueça meu telefone"),
+    ("what's my CyberWealth key?", "qual é a minha chave do CyberWealth?"),
+    ("forget my CyberWealth key", "esqueça minha chave do CyberWealth"),
     (
         # Every direct-only kind is named in the privacy note.
         "Your contact details, address, birth date and wallets are only shown "
@@ -413,7 +415,7 @@ def test_every_alert_example_makes_an_alert(language: Language) -> None:
 @LANGUAGES
 def test_every_fact_example_is_a_fact_request(language: Language) -> None:
     examples = _quoted("facts", language)
-    assert len(examples) == 3
+    assert len(examples) == 5
     for example in examples:
         assert fact_intent(example) is not None, example
 
